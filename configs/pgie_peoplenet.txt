@@ -1,0 +1,51 @@
+# PeopleNet settings adapted from NVIDIA's DeepStream DS_7.0 sample:
+# https://github.com/NVIDIA-AI-IOT/deepstream_reference_apps/blob/DS_7.0/deepstream_app_tao_configs/nvinfer/config_infer_primary_peoplenet.txt
+# NGC deployable_quantized_onnx_v2.6.2 nvinfer_config.txt supplies normalization
+# and infer-dims. app.py prefers a complete installed NVIDIA sample config.
+#
+# Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+[property]
+gpu-id=0
+onnx-file=../models/peoplenet/resnet34_peoplenet.onnx
+labelfile-path=../models/peoplenet/labels.txt
+net-scale-factor=0.00392156862745098
+offsets=0.0;0.0;0.0
+infer-dims=3;544;960
+model-color-format=0
+maintain-aspect-ratio=0
+output-tensor-meta=0
+batch-size=1
+process-mode=1
+network-type=0
+network-mode=2
+num-detected-classes=3
+cluster-mode=2
+interval=0
+gie-unique-id=1
+output-blob-names=output_bbox/BiasAdd:0;output_cov/Sigmoid:0
+
+[class-attrs-all]
+topk=20
+nms-iou-threshold=0.5
+pre-cluster-threshold=0.2
+
+[class-attrs-0]
+topk=20
+nms-iou-threshold=0.5
+pre-cluster-threshold=0.4

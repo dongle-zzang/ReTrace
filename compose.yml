@@ -1,0 +1,37 @@
+services:
+  retrace:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    security_opt:
+      - seccomp=unconfined
+
+    image: retrace:deepstream7.0
+    container_name: retrace
+    user: '${LOCAL_UID:-1000}:${LOCAL_GID:-1000}'
+
+    working_dir: /workspace/ReTrace
+
+    environment:
+      RTSP_URL: ${RTSP_URL:-}
+      RTSP_URL_2: ${RTSP_URL_2:-}
+
+    volumes:
+      - .:/workspace/ReTrace
+
+    ports:
+      - "8080:8080"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    stdin_open: true
+    tty: true
+
+    command: bash
