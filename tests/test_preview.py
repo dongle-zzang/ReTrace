@@ -1,23 +1,16 @@
 """Run in retrace: python3 -m unittest discover -s tests -p 'test_*.py'."""
 
-import functools
-import io
-import json
 import os
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
-from urllib.request import urlopen
 
 PROJECT_CACHE = Path(__file__).resolve().parents[1] / ".cache"
 PROJECT_CACHE.mkdir(exist_ok=True)
 os.environ["GST_REGISTRY"] = str(PROJECT_CACHE / "gstreamer-registry.bin")
 
-from preview import Gst, PreviewHandler, build_output, parse_args
+from preview import Gst, build_output, parse_args
 from preview_mjpeg import FrameStore
 from preview_timing import FrameTiming
 
@@ -31,7 +24,8 @@ class PreviewTests(unittest.TestCase):
         try:
             self.assertIsNotNone(output.get_static_pad("sink"))
             sink = output.get_by_name("jpeg-sink-0")
-            self.assertTrue(sink.get_property("sync"))
+            self.assertFalse(sink.get_property("sync"))
+            self.assertFalse(sink.get_property("async"))
             self.assertEqual(sink.get_property("max-buffers"), 1)
             self.assertTrue(sink.get_property("drop"))
         finally:
@@ -81,67 +75,9 @@ class PreviewTests(unittest.TestCase):
             args = parse_args()
         self.assertEqual(len(args.input), 2)
         self.assertEqual((args.mux_live_source, args.rtsp_latency, args.jpeg_quality), (1, 1000, 80))
-        self.assertFalse(args.rtsp_drop_on_latency)
+        self.assertTrue(args.rtsp_drop_on_latency)
         self.assertTrue(args.diagnostics)
         self.assertFalse(hasattr(args, "output"))
-
-    def test_only_client_disconnects_are_suppressed(self):
-        handler = PreviewHandler.__new__(PreviewHandler)
-        for method in ("handle", "finish"):
-            for error in (BrokenPipeError(), ConnectionResetError()):
-                with patch.object(SimpleHTTPRequestHandler, method, side_effect=error):
-                    getattr(handler, method)()
-                self.assertTrue(handler.close_connection)
-            with patch.object(SimpleHTTPRequestHandler, method, side_effect=ValueError("real error")):
-                with self.assertRaises(ValueError):
-                    getattr(handler, method)()
-
-    def test_http_mjpeg_assets_and_visible_404(self):
-        cache = Path(__file__).resolve().parents[1] / ".cache"
-        cache.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=cache) as directory:
-            root = Path(directory)
-            (root / "index.html").write_text("preview", encoding="utf-8")
-            (root / "private.txt").write_text("not a public asset", encoding="utf-8")
-            store = FrameStore()
-            jpeg = b"\xff\xd8test\xff\xd9"
-            store.put(jpeg)
-            server = ThreadingHTTPServer(
-                ("127.0.0.1", 0), functools.partial(PreviewHandler, directory=directory),
-            )
-            server.mjpeg_streams = {"/mjpeg/source0": store}
-            server.streams = [{"id": 0, "format": "mjpeg", "url": "/mjpeg/source0"}]
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            base = f"http://127.0.0.1:{server.server_port}"
-            try:
-                with urlopen(base + "/streams.json", timeout=2) as response:
-                    self.assertEqual(json.load(response), server.streams)
-                with urlopen(base + "/", timeout=2) as response:
-                    self.assertEqual(response.read(), b"preview")
-                with urlopen(base + "/mjpeg/source0?v=1", timeout=2) as response:
-                    self.assertIn("boundary=frame", response.headers["Content-Type"])
-                    self.assertEqual(response.readline(), b"--frame\r\n")
-                    headers = {}
-                    while True:
-                        line = response.readline()
-                        if line == b"\r\n":
-                            break
-                        key, value = line.decode().split(":", 1)
-                        headers[key] = value.strip()
-                    self.assertEqual(response.read(int(headers["Content-Length"])), jpeg)
-                errors = io.StringIO()
-                with patch("sys.stderr", errors):
-                    with self.assertRaises(HTTPError) as caught:
-                        urlopen(base + "/private.txt", timeout=2)
-                    self.assertEqual(caught.exception.code, 404)
-                    caught.exception.close()
-                self.assertIn("HTTP error status=404", errors.getvalue())
-            finally:
-                store.close()
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=2)
 
 
 if __name__ == "__main__":

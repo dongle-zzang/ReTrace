@@ -4,6 +4,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import time
 from urllib.parse import urljoin, urlsplit
@@ -80,7 +81,7 @@ def measure_mjpeg(url, seconds):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080/")
+    parser.add_argument("--base-url", default=f"http://127.0.0.1:{os.environ.get('WEB_PORT', '40225')}/")
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--source", action="append", type=int)
     parser.add_argument("--report", type=Path, help="Optional JSON path inside the project")

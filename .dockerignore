@@ -28,6 +28,7 @@ tmp/
 temp/
 build/
 dist/
+frontend/
 output/
 outputs/
 captures/
@@ -71,3 +72,6 @@ models/peoplenet/
 **/*.swp
 **/*.swo
 **/*~
+
+compose.override.yaml
+compose.override.yml

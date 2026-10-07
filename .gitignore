@@ -31,6 +31,7 @@ tmp/
 temp/
 build/
 dist/
+frontend/
 captures/
 debug_outputs/
 *.mp4
@@ -58,3 +59,7 @@ credentials*
 *.swp
 *.swo
 *~
+
+# Private host interface bindings
+compose.override.yaml
+compose.override.yml

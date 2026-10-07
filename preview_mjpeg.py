@@ -15,6 +15,9 @@ class FrameStore:
             if not self.closed:
                 self.jpeg = jpeg
                 self.sequence += 1
+                observer = getattr(self, "startup_observer", None)
+                if observer is not None:
+                    observer("first_mjpeg_available")
                 self.condition.notify_all()
 
     def wait_next(self, sequence, timeout=5):
@@ -24,6 +27,13 @@ class FrameStore:
             )
             return self.sequence, self.jpeg, self.closed
 
+    def clear(self):
+        """Invalidate a stale JPEG without closing an HTTP stream during retry."""
+        with self.condition:
+            self.jpeg = None
+            self.sequence += 1
+            self.condition.notify_all()
+
     def close(self):
         with self.condition:
             self.closed = True
@@ -31,6 +41,9 @@ class FrameStore:
 
 
 def serve_mjpeg(handler, store):
+    observer = getattr(store, "startup_observer", None)
+    if observer is not None:
+        observer("first_http_request")
     handler.send_response(200)
     handler.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
     handler.send_header("Connection", "close")
@@ -43,9 +56,13 @@ def serve_mjpeg(handler, store):
         next_sequence, jpeg, closed = store.wait_next(sequence)
         if closed:
             return
-        if next_sequence == sequence or jpeg is None:
+        if next_sequence == sequence:
             continue
         sequence = next_sequence
+        if jpeg is None:
+            # A clear() is a new sequence too. Advance it so an offline camera
+            # waits for the next JPEG rather than spinning on the cleared frame.
+            continue
         handler.wfile.write(
             f"--frame\r\nContent-Type: image/jpeg\r\n"
             f"Content-Length: {len(jpeg)}\r\nX-Frame-Sequence: {sequence}\r\n\r\n".encode()
@@ -53,3 +70,6 @@ def serve_mjpeg(handler, store):
         handler.wfile.write(jpeg)
         handler.wfile.write(b"\r\n")
         handler.wfile.flush()
+        if observer is not None:
+            observer("first_http_frame_flushed")
+            observer = None

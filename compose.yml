@@ -13,15 +13,18 @@ services:
 
     working_dir: /workspace/ReTrace
 
+    env_file:
+      - .env
+
     environment:
-      RTSP_URL: ${RTSP_URL:-}
-      RTSP_URL_2: ${RTSP_URL_2:-}
+      WEB_PORT: "40225"
+      FRONTEND_DIST_DIR: "${FRONTEND_DIST_DIR:-/workspace/ReTrace/frontend}"
+      PREVIEW_BACKEND_URL: "${PREVIEW_BACKEND_URL:-http://backend:8000}"
 
     volumes:
       - .:/workspace/ReTrace
 
-    ports:
-      - "8080:8080"
+    # Host IP bindings live in ignored compose.override.yaml.
 
     deploy:
       resources:
@@ -31,7 +34,62 @@ services:
               count: all
               capabilities: [gpu]
 
-    stdin_open: true
-    tty: true
+    init: true
+    restart: unless-stopped
+    # Canonical service starts camera-config preview, preserving NVIDIA entrypoint.
+    command: ["python3", "-u", "/workspace/ReTrace/preview.py", "--cameras", "/workspace/ReTrace/configs/cameras.yaml", "--env-file", "/workspace/ReTrace/.env", "--diagnostics"]
 
-    command: bash
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['WEB_PORT'] + '/streams.json', timeout=3).close()"
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-retrace}
+      POSTGRES_USER: ${POSTGRES_USER:-retrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      CAMERAS_PATH: /app/configs/cameras.yaml
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
+    volumes:
+      - ./configs/cameras.yaml:/app/configs/cameras.yaml:ro
+    ports:
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).close()"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-retrace}
+      POSTGRES_USER: ${POSTGRES_USER:-retrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
