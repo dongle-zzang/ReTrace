@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "nuxt dev --host",
     "build": "nuxt build",
+    "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "typecheck": "nuxt typecheck",
