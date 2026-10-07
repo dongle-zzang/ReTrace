@@ -18,7 +18,7 @@ services:
 
     environment:
       WEB_PORT: "40225"
-      FRONTEND_DIST_DIR: "${FRONTEND_DIST_DIR:-/workspace/ReTrace/frontend}"
+      FRONTEND_DIST_DIR: "${FRONTEND_DIST_DIR:-/workspace/ReTrace/frontend-dist}"
       PREVIEW_BACKEND_URL: "${PREVIEW_BACKEND_URL:-http://backend:8000}"
 
     volumes:
