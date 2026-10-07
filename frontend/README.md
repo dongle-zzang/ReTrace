@@ -39,7 +39,7 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 ## 정적 배포
 
 ```powershell
-npx nuxt generate
+npm run generate
 ```
 
 `.output/public/`의 **내용물**을 서버 `frontend/` 바로 아래에 업로드합니다(`frontend/index.html`, `frontend/_nuxt/`). `.output/public` 폴더째 한 단계 중첩하지 않습니다. 배포본은 같은 origin에서 `/api`, `/ws`를 쓰므로 별도 주소 설정이 필요 없습니다. `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`는 generate 시점 값이 들어갑니다.

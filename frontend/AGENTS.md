@@ -24,7 +24,7 @@ npm run typecheck
 npm run build
 ```
 
-정적 배포 산출물은 `npx nuxt generate` 후 `.output/public/`의 내용물이다. 존재하지 않는 lint/format 명령을 만들어내지 않는다. 화면 변경은 가능하면 실제 브라우저(또는 headless Chrome 스크린샷)로 확인하고, 확인하지 못한 항목은 보고한다.
+정적 배포 산출물은 `npm run generate` 후 `.output/public/`의 내용물이다. 존재하지 않는 lint/format 명령을 만들어내지 않는다. 화면 변경은 가능하면 실제 브라우저(또는 headless Chrome 스크린샷)로 확인하고, 확인하지 못한 항목은 보고한다.
 
 ## Git
 
