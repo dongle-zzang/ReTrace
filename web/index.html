@@ -15,18 +15,23 @@
     header { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
     h2 { margin: 0; font-size: 18px; }
     img.mjpeg { display: block; width: 100%; aspect-ratio: 16/9; background: #000; object-fit: contain; }
+    .video-frame { position: relative; aspect-ratio: 16/9; background: #000; }
+    .video-frame video, .video-frame svg { position: absolute; width: 100%; height: 100%; }
+    .video-frame video { object-fit: contain; }
+    .video-frame svg { pointer-events: none; }
     .status { margin: 12px 16px; min-height: 24px; }
     button { padding: 7px 12px; border: 0; border-radius: 6px; cursor: pointer; }
     nav { display: flex; gap: 12px; margin: 16px 0; }
     button:disabled { opacity: .4; cursor: default; }
   </style>
+  <script defer src="/webrtc.js"></script>
   <script defer src="/preview.js"></script>
 </head>
 <body>
   <main>
     <h1>ReTrace CCTV 미리보기</h1>
-    <p id="output-mode" role="status" aria-live="polite">현재 출력: MJPEG</p>
-    <p>각 카메라의 MJPEG 영상에 사람 검출 박스와 Track ID를 표시합니다.</p>
+    <p id="output-mode" role="status" aria-live="polite">영상 연결 중…</p>
+    <p>WebRTC 영상과 WebSocket 탐지 정보를 SVG overlay로 표시합니다. MJPEG는 선택 가능한 진단 모드입니다.</p>
     <p id="page-status">입력 목록을 불러오는 중…</p>
     <nav aria-label="카메라 페이지">
       <button id="previous-page" disabled>이전 카메라</button>

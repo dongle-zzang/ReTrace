@@ -241,11 +241,11 @@ class SharedTests(unittest.TestCase):
         tree = ast.parse((ROOT / 'preview.py').read_text())
         function = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'stream_snapshot')
         namespace = {'args': NS(cameras=list(manager.cameras_by_slot.values())),
-                     'runtime_statuses': manager.runtimes, 'runtime_session': 'a' * 32}
+                     'runtime_statuses': manager.runtimes, 'runtime_session': 'a' * 32, 'mode': 'mjpeg'}
         exec(compile(ast.Module(body=[function], type_ignores=[]), 'preview.py', 'exec'), namespace)
         snapshot = namespace['stream_snapshot']()
         self.assertEqual(set(snapshot[0]), {'id', 'camera_id', 'floor', 'name', 'format', 'status', 'url',
-                                            'runtime', 'runtime_session'})
+                                            'runtime', 'runtime_session', 'signaling_path', 'metadata_path'})
         self.assertEqual([s['url'] for s in snapshot], ['/mjpeg/source0', '/mjpeg/source1'])
         self.assertEqual(set(snapshot[0]['runtime']), {'camera_id', 'state', 'fps', 'last_frame_at',
                          'last_frame_age', 'last_error', 'reconnect_count', 'generation', 'output_frame_age', 'error_reason'})

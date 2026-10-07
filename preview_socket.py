@@ -1,0 +1,284 @@
+"""Same-origin WebSocket metadata, commands and WebRTC signaling.
+
+Streaming callbacks never perform socket I/O. Each connection samples current
+metadata at 10 Hz; obsolete detections are replaced, rather than queued.
+"""
+import json
+import math
+import os
+from queue import Queue, Empty, Full
+import select
+import socket
+import threading
+import time
+from urllib.parse import urlsplit
+
+from wsproto import ConnectionType, WSConnection
+from wsproto.events import AcceptConnection, CloseConnection, Ping, Pong, TextMessage, BytesMessage
+from person_metadata import utc_timestamp
+
+
+def detection_message(frame, runtime_session):
+    width, height = frame["bbox_width"], frame["bbox_height"]
+    persons = []
+    for person in frame["persons"]:
+        box = person["bbox"]
+        if not all(math.isfinite(box[key]) for key in ("x", "y", "width", "height")):
+            continue
+        left = max(0.0, min(1.0, box["x"] / width))
+        top = max(0.0, min(1.0, box["y"] / height))
+        right = max(left, min(1.0, (box["x"] + box["width"]) / width))
+        bottom = max(top, min(1.0, (box["y"] + box["height"]) / height))
+        # NvDCF IDs can exceed JavaScript's safe integer range.
+        persons.append({"trackId": None if person["track_id"] is None else str(person["track_id"]),
+                        "bbox": {"x": left, "y": top, "width": right - left, "height": bottom - top},
+                        "confidence": person["confidence"], "trackerConfidence": person["tracker_confidence"]})
+    return {"version": 1, "type": "detections", "cameraId": frame["camera_id"],
+            "sourceId": frame["source_id"], "runtimeSession": runtime_session,
+            "generation": frame["generation"], "timestamp": frame["timestamp"],
+            "frameNumber": frame["frame_number"], "ptsNs": None if frame["pts_ns"] is None else str(frame["pts_ns"]),
+            "inferenceDone": frame["inference_done"], "persons": persons}
+
+
+class RealtimeHub:
+    def __init__(self, metadata_snapshot, stream_snapshot, stores, shutdown,
+                 peer_factory, registry, max_connections=16):
+        self.metadata_snapshot, self.stream_snapshot = metadata_snapshot, stream_snapshot
+        self.stores, self.shutdown = stores, shutdown
+        self.peer_factory, self.registry = peer_factory, registry
+        self.connections = threading.BoundedSemaphore(max_connections)
+        self.outbox_lock = threading.Lock()
+        self.outboxes = {}
+        self.allowed_origins = {value.strip() for value in os.environ.get(
+            "PREVIEW_WS_ORIGINS", "").split(",") if value.strip()}
+
+    def publish_message(self, camera_id, message_type, data):
+        """Optional producer boundary for Re-ID/parking/events; no socket I/O.
+
+        Delivery is live and bounded, not durable. Slow consumers disconnect.
+        Call with detached JSON data, never with native PyDS objects.
+        """
+        stream = next((item for item in self.stream_snapshot() if item["camera_id"] == camera_id), None)
+        if stream is None or message_type not in ("track_update", "parking_status", "event"):
+            raise ValueError("Unknown camera or event type")
+        message = {"version": 1, "type": message_type, "cameraId": camera_id,
+                   "sourceId": stream["id"], "runtimeSession": stream["runtime_session"],
+                   "generation": stream["runtime"]["generation"], "timestamp": utc_timestamp(), "data": data}
+        # Validate and detach mutable producer data before crossing threads.
+        serialized = json.dumps(message, allow_nan=False)
+        if len(serialized.encode()) > 65536:
+            raise ValueError("Event message too large")
+        message = json.loads(serialized)
+        with self.outbox_lock:
+            for outgoing, overflow, subscription in self.outboxes.values():
+                if subscription[0] is not None and camera_id not in subscription[0]:
+                    continue
+                try:
+                    outgoing.put_nowait(message)
+                except Full:
+                    overflow.set()
+
+    def serve(self, handler):
+        if handler.command != "GET" or handler.headers.get("Upgrade", "").lower() != "websocket":
+            handler.send_error(426)
+            return
+        origin = handler.headers.get("Origin")
+        if origin:
+            parsed = urlsplit(origin)
+            if (parsed.scheme not in ("http", "https") or parsed.netloc != handler.headers.get("Host")) and origin not in self.allowed_origins:
+                handler.send_error(403)
+                return
+        if not self.connections.acquire(blocking=False):
+            handler.send_error(503)
+            return
+        ws = WSConnection(ConnectionType.SERVER)
+        peers = {}
+        outgoing = Queue(maxsize=1024)
+        overflow = threading.Event()
+        subscribed = None  # None = all configured cameras, [] = none.
+        subscription = [None]
+        outbox = (outgoing, overflow, subscription)
+        previous_frames, previous_status = {}, {}
+        fragmented = ""
+        handler.close_connection = True
+        upgraded = False
+        received_since_message = 0
+
+        def send(message):
+            try:
+                outgoing.put_nowait(message)
+            except Full:
+                overflow.set()  # A blocked signaling client must release its peers.
+
+        def wire(event):
+            data = ws.send(event)
+            handler.connection.settimeout(1.0)
+            handler.connection.sendall(data)
+
+        def remove(peer_id):
+            peer = peers.pop(peer_id, None)
+            if peer is not None:
+                try:
+                    peer.close()
+                except Exception:
+                    pass
+                finally:
+                    self.registry.release()
+
+        def command(message):
+            nonlocal subscribed, previous_frames, previous_status
+            if not isinstance(message, dict) or message.get("version", 1) != 1:
+                raise ValueError("Invalid message")
+            kind = message.get("type")
+            cameras = {item["camera_id"]: item for item in self.stream_snapshot()}
+            if kind == "subscribe":
+                ids = message.get("cameraIds")
+                if not isinstance(ids, list) or any(not isinstance(value, str) or value not in cameras for value in ids):
+                    raise ValueError("Invalid subscription")
+                subscribed = set(ids)
+                subscription[0] = subscribed
+                previous_frames, previous_status = {}, {}
+                send({"version": 1, "type": "subscribed", "cameraIds": sorted(subscribed)})
+                return
+            camera_id, peer_id = message.get("cameraId"), message.get("peerId")
+            if camera_id not in cameras or not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 64:
+                raise ValueError("Invalid camera or peer")
+            if kind == "watch":
+                if peer_id in peers or len(peers) >= self.registry.limit:
+                    raise ValueError("Peer limit")
+                stream = cameras[camera_id]
+                if stream["format"] != "webrtc":
+                    raise ValueError("Video uses legacy mode")
+                self.registry.acquire()
+                try:
+                    peers[peer_id] = self.peer_factory(camera_id, peer_id, self.stores[stream["id"]], send,
+                                                       os.environ.get("WEBRTC_STUN_SERVER", ""),
+                                                       os.environ.get("WEBRTC_TURN_SERVER", ""))
+                except Exception:
+                    self.registry.release()
+                    raise
+            else:
+                peer = peers.get(peer_id)
+                if peer is None or peer.camera_id != camera_id:
+                    raise ValueError("Unknown peer")
+                if kind == "unwatch":
+                    remove(peer_id)
+                elif kind == "answer":
+                    sdp = message.get("sdp")
+                    if not isinstance(sdp, str) or len(sdp) > 60000:
+                        raise ValueError("Invalid SDP")
+                    peer.answer(sdp)
+                elif kind == "ice":
+                    candidate, mline = message.get("candidate"), message.get("sdpMLineIndex")
+                    if not isinstance(candidate, str) or len(candidate) > 4096 or type(mline) is not int or not 0 <= mline < 8:
+                        raise ValueError("Invalid ICE")
+                    peer.ice(candidate, mline)
+                else:
+                    raise ValueError("Unsupported command")
+
+        try:
+            ws.initiate_upgrade_connection([(key.encode("ascii"), value.encode("latin1"))
+                                           for key, value in handler.headers.items()], handler.path)
+            list(ws.events())
+            wire(AcceptConnection())
+            upgraded = True
+            with self.outbox_lock:
+                self.outboxes[id(outgoing)] = outbox
+            handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            # No addresses/credentials are reflected in hello or errors.
+            wire(TextMessage(data=json.dumps({"version": 1, "type": "hello", "metadataHz": 10})))
+            last_metadata = last_ping = last_pong = time.monotonic()
+            while not self.shutdown.is_set() and not overflow.is_set():
+                ready, _, _ = select.select([handler.connection], [], [], 0.02)
+                if ready:
+                    data = handler.connection.recv(65536)
+                    if not data:
+                        break
+                    received_since_message += len(data)
+                    if received_since_message > 131072:
+                        wire(CloseConnection(code=1009, reason="Message too large"))
+                        return
+                    ws.receive_data(data)
+                    for event in ws.events():
+                        if isinstance(event, CloseConnection):
+                            wire(event.response())
+                            return
+                        if isinstance(event, Ping):
+                            wire(event.response())
+                        elif isinstance(event, Pong):
+                            last_pong = time.monotonic()
+                        elif isinstance(event, BytesMessage):
+                            wire(CloseConnection(code=1003, reason="JSON text required"))
+                            return
+                        elif isinstance(event, TextMessage):
+                            fragmented += event.data
+                            if len(fragmented) > 65536:
+                                wire(CloseConnection(code=1009, reason="Message too large"))
+                                return
+                            if event.message_finished:
+                                message = None
+                                try:
+                                    message = json.loads(fragmented)
+                                    command(message)
+                                except Exception:
+                                    error = {"version": 1, "type": "error", "code": "command_failed"}
+                                    if isinstance(message, dict):
+                                        for key in ("cameraId", "peerId"):
+                                            value = message.get(key)
+                                            if isinstance(value, str) and len(value) <= 64:
+                                                error[key] = value
+                                    send(error)
+                                fragmented = ""
+                                received_since_message = 0
+                for peer_id, peer in list(peers.items()):
+                    if not peer.pump():
+                        remove(peer_id)
+                now = time.monotonic()
+                if now - last_metadata >= 0.1:
+                    snapshot = self.metadata_snapshot()
+                    current_frames = {}
+                    for frame in snapshot["frames"]:
+                        camera_id = frame["camera_id"]
+                        if subscribed is not None and camera_id not in subscribed:
+                            continue
+                        identity = (snapshot["runtime_session"], frame["generation"], frame["frame_number"])
+                        current_frames[camera_id] = identity
+                        if previous_frames.get(camera_id) != identity:
+                            wire(TextMessage(data=json.dumps(detection_message(frame, snapshot["runtime_session"]), allow_nan=False)))
+                    # Explicitly clear stale overlay when an output is invalidated.
+                    for camera_id in previous_frames.keys() - current_frames.keys():
+                        wire(TextMessage(data=json.dumps({"version": 1, "type": "detections", "cameraId": camera_id,
+                                                         "runtimeSession": snapshot["runtime_session"], "timestamp": utc_timestamp(),
+                                                         "persons": [], "stale": True})))
+                    previous_frames = current_frames
+                    for stream in self.stream_snapshot():
+                        camera_id = stream["camera_id"]
+                        if subscribed is not None and camera_id not in subscribed:
+                            continue
+                        status = {"version": 1, "type": "camera_status", "cameraId": camera_id,
+                                  "sourceId": stream["id"], "runtimeSession": stream["runtime_session"],
+                                  "generation": stream["runtime"]["generation"], "status": stream["runtime"]}
+                        identity = json.dumps(status)
+                        if previous_status.get(camera_id) != identity:
+                            wire(TextMessage(data=json.dumps({**status, "timestamp": utc_timestamp()})))
+                        previous_status[camera_id] = identity
+                    last_metadata = now
+                for _ in range(128):
+                    try:
+                        wire(TextMessage(data=json.dumps(outgoing.get_nowait())))
+                    except Empty:
+                        break
+                if now - last_ping >= 15:
+                    wire(Ping(payload=b"preview"))
+                    last_ping = now
+                if now - last_pong > 45:
+                    break
+        except Exception:
+            if not upgraded:
+                handler.send_error(400)
+        finally:
+            with self.outbox_lock:
+                self.outboxes.pop(id(outgoing), None)
+            for peer_id in list(peers):
+                remove(peer_id)
+            self.connections.release()

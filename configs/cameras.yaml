@@ -51,31 +51,6 @@ cameras:
     rtsp_env: CCTV_1F_OUTDOOR_PARKING_RTSP
     enabled: true
 
-  # 2F
-  - id: 2f_lobby
-    floor: 2
-    name: 2층 로비
-    rtsp_env: CCTV_2F_LOBBY_RTSP
-    enabled: true
-
-  - id: 2f_office_1
-    floor: 2
-    name: 2층 사무실 내부1
-    rtsp_env: CCTV_2F_OFFICE_1_RTSP
-    enabled: true
-
-  - id: 2f_office_2
-    floor: 2
-    name: 2층 사무실 내부2
-    rtsp_env: CCTV_2F_OFFICE_2_RTSP
-    enabled: true
-
-  - id: 2f_office_3
-    floor: 2
-    name: 2층 사무실 내부3
-    rtsp_env: CCTV_2F_OFFICE_3_RTSP
-    enabled: true
-
   # 3F
   - id: 3f_terrace_4k
     floor: 3

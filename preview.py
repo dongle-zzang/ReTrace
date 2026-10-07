@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batched DeepStream person detection/tracking with MJPEG preview."""
+"""Batched DeepStream person tracking with WebRTC video and WebSocket metadata."""
 
 import argparse
 import json
@@ -34,6 +34,8 @@ from startup_timing import StartupTiming, startup_origin, source_observer, bus_o
 from preview_timing import FrameTiming
 from preview_mjpeg import FrameStore, serve_mjpeg
 from preview_web import FrontendFiles, BackendAPIProxy
+from preview_webrtc import EncodedStore, WebRTCPeer, PeerRegistry, build_h264_output
+from preview_socket import RealtimeHub
 from rtsp_diagnostics import classify_bus_error, source_failure_detail
 
 # app.py sets its own debug default at import; retain preview's requested level.
@@ -62,6 +64,12 @@ def parse_args():
     parser.add_argument("--port", type=int, default=os.environ.get("WEB_PORT", "40225"),
                         help="HTTP listen port (default: WEB_PORT environment variable or 40225)")
     parser.add_argument("--jpeg-quality", type=int, default=80)
+    parser.add_argument("--preview-mode", choices=("webrtc", "mjpeg"),
+                        default=os.environ.get("PREVIEW_MODE", "webrtc"))
+    parser.add_argument("--video-width", type=int, default=os.environ.get("PREVIEW_VIDEO_WIDTH", "1280"))
+    parser.add_argument("--video-height", type=int, default=os.environ.get("PREVIEW_VIDEO_HEIGHT", "720"))
+    parser.add_argument("--video-bitrate", type=int, default=os.environ.get("PREVIEW_VIDEO_BITRATE", "2000000"))
+    parser.add_argument("--video-gop", type=int, default=os.environ.get("PREVIEW_VIDEO_GOP", "30"))
     parser.add_argument(
         "--rtsp-latency", type=int, default=1000, metavar="MS",
         help="RTSP jitter-buffer latency in milliseconds (default: 1000)",
@@ -103,12 +111,21 @@ def parse_args():
         parser.error("port")
     if not 1 <= args.jpeg_quality <= 100:
         parser.error("JPEG quality must be between 1 and 100")
+    if args.preview_mode not in ("webrtc", "mjpeg"):
+        parser.error("preview mode")
+    if (not 160 <= args.video_width <= 1920 or not 120 <= args.video_height <= 1080
+            or args.video_width % 2 or args.video_height % 2
+            or not 100000 <= args.video_bitrate <= 20000000 or not 1 <= args.video_gop <= 120):
+        parser.error("video settings")
     if not 0 <= args.rtsp_latency <= (1 << 32) - 1:
         parser.error("RTSP latency must be a non-negative guint in milliseconds")
     return args
 
 
 class PreviewHandler(BaseHTTPRequestHandler):
+    # WebSocket bytes must not be prefetched into the HTTP file buffer.
+    rbufsize = 0
+
     def handle(self):
         try:
             super().handle()
@@ -124,6 +141,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == '/ws':
+            hub = getattr(self.server, 'realtime_hub', None)
+            if hub is None:
+                self.send_error(503)
+            else:
+                hub.serve(self)
+            return
         if path == '/api' or path.startswith('/api/'):
             proxy = getattr(self.server, 'backend_api_proxy', None)
             if proxy is None:
@@ -133,7 +157,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return
         assets = {"/": ("index.html", "text/html; charset=utf-8"),
                   "/index.html": ("index.html", "text/html; charset=utf-8"),
-                  "/preview.js": ("preview.js", "text/javascript; charset=utf-8")}
+                  "/preview.js": ("preview.js", "text/javascript; charset=utf-8"),
+                  "/webrtc.js": ("webrtc.js", "text/javascript; charset=utf-8"),
+                  "/diagnostics": ("index.html", "text/html; charset=utf-8")}
         if path in self.server.mjpeg_streams:
             if getattr(self, 'command', 'GET') == 'HEAD':
                 self.send_response(200)
@@ -164,7 +190,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         frontend = getattr(self.server, 'frontend_files', None)
-        if frontend is not None and frontend.serve(self, path):
+        if path not in ('/preview.js', '/webrtc.js', '/diagnostics') and frontend is not None and frontend.serve(self, path):
             return
         if path in assets:
             filename, content_type = assets[path]
@@ -606,6 +632,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                     camera.source_id, camera.camera_id, int(frame.frame_num), timestamp,
                     None if pts == Gst.CLOCK_TIME_NONE else pts,
                     bool(frame.bInferDone), tuple(records), generation=generation, pipeline_source_id=int(frame.source_id),
+                    bbox_width=1920, bbox_height=1080,
                 )
                 manager.publish(index, pts, lambda: metadata_store.put(detached), generation=generation)
                 with counts_lock:
@@ -634,8 +661,9 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                 if name in (
                     f"source-bin-{index}",
                     f"mjpeg-source-{index}",
+                    f"h264-source-{index}",
                 ):
-                    return str(index), "pipeline_error" if name == f"mjpeg-source-{index}" else "rtsp_error"
+                    return str(index), "rtsp_error" if name == f"source-bin-{index}" else "pipeline_error"
             element = element.get_parent()
         return "all", "pipeline_error"
 
@@ -745,19 +773,25 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
             if source_bin.get_static_pad("src").link(mux_pad) != Gst.PadLinkReturn.OK:
                 raise RuntimeError(f"Could not link source bin directly to mux sink_{index}")
 
-            setup_stage = f"jpeg-branch-{index}"
-            output_bin = build_output(
-                index, args, CameraFrameSink(stores[cameras_by_source[index].source_id], manager, index),
-                lambda reason, i=index: fail("pipeline_error", str(i)),
-            )
-            startup_probe(output_bin.get_by_name(f"jpeg-encoder-{index}").get_static_pad("src"),
-                          "first_jpeg", index)
-            startup_probe(output_bin.get_by_name(f"jpeg-sink-{index}").get_static_pad("sink"),
-                          "first_appsink_buffer", index)
-            add_timing_probe(
-                output_bin.get_by_name(f"jpeg-sink-{index}").get_static_pad("sink"),
-                "encoded-mjpeg", index,
-            )
+            mode = getattr(args, "preview_mode", "mjpeg")
+            setup_stage = f"{mode}-branch-{index}"
+            frame_sink = CameraFrameSink(stores[cameras_by_source[index].source_id], manager, index)
+            if mode == "webrtc":
+                output_bin = build_h264_output(index, args, frame_sink,
+                    lambda reason, i=index: fail("pipeline_error", str(i)), Gst, make_element)
+                startup_probe(output_bin.get_by_name(f"video-sink-{index}").get_static_pad("sink"),
+                              "first_h264_buffer", index)
+                add_timing_probe(output_bin.get_by_name(f"video-sink-{index}").get_static_pad("sink"),
+                                 "encoded-h264", index)
+            else:
+                output_bin = build_output(index, args, frame_sink,
+                    lambda reason, i=index: fail("pipeline_error", str(i)))
+                startup_probe(output_bin.get_by_name(f"jpeg-encoder-{index}").get_static_pad("src"),
+                              "first_jpeg", index)
+                startup_probe(output_bin.get_by_name(f"jpeg-sink-{index}").get_static_pad("sink"),
+                              "first_appsink_buffer", index)
+                add_timing_probe(output_bin.get_by_name(f"jpeg-sink-{index}").get_static_pad("sink"),
+                                 "encoded-mjpeg", index)
             pipeline.add(output_bin)
             # nvstreamdemux src_%u is a request pad, requested while in NULL state.
             demux_pad = demux.request_pad_simple(f"src_{index}")
@@ -769,7 +803,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
             if demux_pad.link(output_bin.get_static_pad("sink")) != Gst.PadLinkReturn.OK:
                 raise RuntimeError("Could not link demux source pad to preview output")
             print(f"source={cameras_by_source[index].source_id} camera_id={cameras_by_source[index].camera_id}: "
-                  f"output=mjpeg url=/mjpeg/source{cameras_by_source[index].source_id}", flush=True)
+                  f"output={mode}", flush=True)
         if startup is not None:
             startup.mark("all_source_branches_built")
         bus = pipeline.get_bus()
@@ -835,12 +869,15 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
 
 
 class CameraFrameSink:
-    """Keep HTTP stores alive; reject JPEG from a previous observation epoch."""
+    """Reject encoded video from a previous observation epoch."""
     def __init__(self, store, manager, slot):
         self.store, self.manager, self.slot = store, manager, slot
 
     def put_frame(self, jpeg, pts):
         self.manager.publish(self.slot, int(pts), lambda: self.store.put(jpeg), output=True)
+
+    def put_access_unit(self, data, pts, keyframe):
+        self.manager.publish(self.slot, int(pts), lambda: self.store.put(data, keyframe), output=True)
 
 
 def run(args, metadata_store=None, runtime_statuses=None):
@@ -865,9 +902,19 @@ def run(args, metadata_store=None, runtime_statuses=None):
     os.environ["GST_REGISTRY"] = str(cache / "gstreamer-registry.bin")
     Gst.init(None)
     Gst.debug_set_active(False)
+    mode = args.preview_mode
+    if mode == "webrtc":
+        try:
+            gi.require_version("GstWebRTC", "1.0")
+            gi.require_version("GstSdp", "1.0")
+            from gi.repository import GstWebRTC, GstSdp
+        except (ImportError, ValueError):
+            print("Preview setup ERROR: missing GstWebRTC/GstSdp GI bindings", flush=True)
+            return 1
     required = ("nvurisrcbin", "uridecodebin", "rtspsrc", "nvv4l2decoder", "nvvideoconvert", "queue",
-                "capsfilter", "nvjpegenc", "appsink", "nvstreammux", "nvinfer", "nvtracker",
-                "nvdsosd", "nvstreamdemux")
+                "capsfilter", "appsink", "nvstreammux", "nvinfer", "nvtracker", "nvstreamdemux")
+    required += (("nvv4l2h264enc", "h264parse", "rtph264pay", "appsrc", "webrtcbin", "nicesrc",
+                  "nicesink", "dtlssrtpenc", "dtlssrtpdec") if mode == "webrtc" else ("nvjpegenc", "nvdsosd"))
     missing = [name for name in required if Gst.ElementFactory.find(name) is None]
     if missing:
         print(f"Preview setup ERROR: missing GStreamer elements: {', '.join(missing)}", flush=True)
@@ -884,14 +931,16 @@ def run(args, metadata_store=None, runtime_statuses=None):
             args.camera_connect_timeout, args.camera_min_fps)
     frontend_files = FrontendFiles(os.environ.get('FRONTEND_DIST_DIR', str(ROOT / 'frontend')))
     backend_api_proxy = BackendAPIProxy(os.environ.get('PREVIEW_BACKEND_URL', 'http://127.0.0.1:8000'))
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), PreviewHandler)
+    server = ThreadingHTTPServer((os.environ.get("WEB_BIND_IP", "0.0.0.0"), args.port), PreviewHandler)
+    server.daemon_threads = True
     server.frontend_files = frontend_files
     server.backend_api_proxy = backend_api_proxy
-    stores = {camera.source_id: FrameStore() for camera in args.cameras}
-    if startup is not None:
+    stores = {camera.source_id: (EncodedStore() if mode == "webrtc" else FrameStore()) for camera in args.cameras}
+    if startup is not None and mode == "mjpeg":
         for slot, camera in enumerate(args.cameras):
             stores[camera.source_id].startup_observer = lambda stage, i=slot: startup.mark(stage, i)
-    server.mjpeg_streams = {f"/mjpeg/source{index}": store for index, store in stores.items()}
+    server.mjpeg_streams = ({f"/mjpeg/source{index}": store for index, store in stores.items()}
+                            if mode == "mjpeg" else {})
 
     runtime_session = uuid.uuid4().hex  # Track identities must not collide after process restart.
 
@@ -899,9 +948,10 @@ def run(args, metadata_store=None, runtime_statuses=None):
         streams = []
         for camera in args.cameras:
             status = runtime_statuses[camera.source_id].snapshot()
-            streams.append({**camera.public_info(), "id": camera.source_id, "format": "mjpeg",
+            streams.append({**camera.public_info(), "id": camera.source_id, "format": mode,
                             "status": "connected" if status.state in ("online", "degraded") else "starting",
-                            "url": f"/mjpeg/source{camera.source_id}", "runtime": status.to_dict(),
+                            "url": "/ws" if mode == "webrtc" else f"/mjpeg/source{camera.source_id}",
+                            "signaling_path": "/ws", "metadata_path": "/ws", "runtime": status.to_dict(),
                             "runtime_session": runtime_session})
         return streams
 
@@ -919,6 +969,8 @@ def run(args, metadata_store=None, runtime_statuses=None):
 
     server.metadata_snapshot = metadata_snapshot
     shutdown = threading.Event()
+    server.realtime_hub = RealtimeHub(metadata_snapshot, stream_snapshot, stores, shutdown,
+                                     WebRTCPeer, PeerRegistry())
     manager = CameraRuntimeManager(args.cameras, runtime_statuses, stores, metadata_store)
     manager.begin()
     result = 1
@@ -932,7 +984,7 @@ def run(args, metadata_store=None, runtime_statuses=None):
         for signum in (signal.SIGINT, signal.SIGTERM):
             old_handlers[signum] = signal.signal(signum, on_signal)
         http_thread.start()
-        print(f"Preview HTTP listening on 0.0.0.0:{args.port}; shared camera pipeline", flush=True)
+        print(f"Preview HTTP port={args.port} mode={mode}; shared camera pipeline", flush=True)
         error = run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                                     pgie_config, person_class_id)
         result = int(error is not None)
