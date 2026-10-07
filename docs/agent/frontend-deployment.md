@@ -32,22 +32,23 @@ Nuxt server routes는 정적 빌드에서 실행되지 않으므로 데이터 AP
 
 ## 서버에 업로드
 
-호스트 `/home/ohjoo/ReTrace/frontend/`에 산출물 내용물을 복사한다.
-`frontend/index.html`과 `frontend/_nuxt/` 또는 해당 프레임워크 asset 폴더가
-바로 위치해야 한다. `frontend/public/index.html`처럼 한 단계 더 중첩하지 않는다.
-이 디렉터리는 Git과 Docker build에서 제외하며 기존 소스 bind mount를 통해 제공한다.
+호스트 `/home/ohjoo/ReTrace/frontend-dist/`에 산출물 내용물을 복사한다.
+`frontend-dist/index.html`과 `frontend-dist/_nuxt/` 또는 해당 프레임워크 asset 폴더가
+바로 위치해야 한다. `frontend-dist/public/index.html`처럼 한 단계 더 중첩하지 않는다.
+이 디렉터리는 Git과 Docker build에서 제외하며 기존 저장소 bind mount(`.:/workspace/ReTrace`)를 통해 제공한다.
+`frontend/`는 Git이 관리하는 제품 프론트 소스이므로 빌드를 그곳에 올리지 않는다.
 
 ```bash
 cd /home/ohjoo/ReTrace
-mkdir -p frontend
+mkdir -p frontend-dist
 # /path/to/frontend-build는 업로드한 실제 정적 산출물 디렉터리로 바꾼다.
-cp -a /path/to/frontend-build/. frontend/
+cp -a /path/to/frontend-build/. frontend-dist/
 ```
 
 기본 환경은 Compose가 다음 값을 주입한다. `.env`를 수정하지 않아도 기본값이 적용된다.
 
 ```dotenv
-FRONTEND_DIST_DIR=/workspace/ReTrace/frontend
+FRONTEND_DIST_DIR=/workspace/ReTrace/frontend-dist
 PREVIEW_BACKEND_URL=http://backend:8000
 ```
 

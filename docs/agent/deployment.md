@@ -8,7 +8,7 @@
 - retrace는 컨테이너 내부 40225, backend는 8000을 사용한다. 40225에서 CSR 빌드, MJPEG, `/ws`(JPEG·metadata)를 제공하고 `/api/*` GET을 내부 Backend로 전달한다. Backend 호스트 공개는 기본 loopback이며 retrace 호스트 binding은 ignored override에서 정한다. 별도 reverse proxy 서비스와 CI/CD workflow는 없다.
 - 별도 개발 PC 접근은 private `.env`의 `BACKEND_BIND_IP`로 기존 제한된 인터페이스 하나를 선택한다. 브라우저 API CORS는 `BACKEND_CORS_ORIGINS`로 opt-in한다. 구체적인 설정/재생성 절차는 [backend README](../../backend/README.md#별도-개발-pc에서-접근)를 따른다. 서버 Compose에는 frontend service가 없다.
 
-- CSR 산출물은 기본 `frontend/`에 업로드하며 `FRONTEND_DIST_DIR`은 컨테이너 내부 경로다. `PREVIEW_BACKEND_URL`은 내부 Backend origin이다. 빌드가 없으면 `/`는 404이고 `web/`의 영상 확인 페이지는 `/diagnostics`에서만 제공한다. 업로드·최초 컨테이너 재생성·HTTP 확인 절차는 [frontend deployment](frontend-deployment.md)를 따른다. retrace healthcheck와 `tools/check_preview.py`는 `/streams.json`을 사용한다.
+- CSR 산출물은 기본 `frontend-dist/`에 업로드하며 `FRONTEND_DIST_DIR`은 컨테이너 내부 경로다. `PREVIEW_BACKEND_URL`은 내부 Backend origin이다. 빌드가 없으면 `/`는 404이고 `web/`의 영상 확인 페이지는 `/diagnostics`에서만 제공한다. 업로드·최초 컨테이너 재생성·HTTP 확인 절차는 [frontend deployment](frontend-deployment.md)를 따른다. retrace healthcheck와 `tools/check_preview.py`는 `/streams.json`을 사용한다.
 
 ## 실행 원문과 변경 판단
 

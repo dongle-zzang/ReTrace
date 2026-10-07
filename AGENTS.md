@@ -33,7 +33,7 @@
 | 작업 | 문서 |
 | --- | --- |
 | 시스템 이해, pipeline/runtime, 여러 layer 변경 | [architecture](docs/agent/architecture.md) |
-| UI/component, 브라우저 영상/상태 표시 | [frontend](docs/agent/frontend.md) |
+| UI/component, 브라우저 영상/상태 표시 | [frontend](docs/agent/frontend.md) (서버 제공 경계). 제품 프론트(`frontend/`) 작업은 [frontend/AGENTS.md](frontend/AGENTS.md)를 따른다 |
 | 서버 로직, API 계약/연동, DB/schema | [backend](docs/agent/backend.md) + 경계를 바꾸면 architecture |
 | 인증/권한 도입 | backend + frontend + deployment; 현재 인증 구현은 없음 |
 | 테스트 작성/수정, 검증 선택 | [testing](docs/agent/testing.md) |

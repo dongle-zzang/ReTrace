@@ -31,7 +31,7 @@ tmp/
 temp/
 build/
 dist/
-frontend/
+frontend-dist/
 captures/
 debug_outputs/
 *.mp4

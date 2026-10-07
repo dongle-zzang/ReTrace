@@ -29,6 +29,7 @@ temp/
 build/
 dist/
 frontend/
+frontend-dist/
 output/
 outputs/
 captures/

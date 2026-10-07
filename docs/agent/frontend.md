@@ -5,7 +5,7 @@
 서버에 Node runtime이나 별도 frontend 서비스는 필요 없다. 업로드·Nuxt 설정·적용 절차의 원문은
 [frontend deployment](frontend-deployment.md)다.
 
-빌드 디렉터리는 `FRONTEND_DIST_DIR`로 지정하며 기본값은 저장소의 `frontend/`다.
+빌드 디렉터리는 `FRONTEND_DIST_DIR`로 지정하며 기본값은 저장소의 `frontend-dist/`다(Git 무시). `frontend/`는 제품 프론트 소스이며 제공하지 않는다.
 `index.html`이 있으면 `/`와 JS/CSS/이미지 등 빌드 파일을 제공한다. 확장자 없는 HTML navigation은
 SPA index로 fallback하며 누락된 asset, 숨김 경로, 상위 경로 및 외부 symlink는 404다.
 정적 제공 범위는 전용 빌드 디렉터리이며 저장소 전체가 아니다.
@@ -17,7 +17,7 @@ SPA index로 fallback하며 누락된 asset, 숨김 경로, 상위 경로 및 �
 `/mjpeg/sourceN`으로는 6대를 넘길 수 없기 때문이다. JPEG에 서버 OSD bbox/track ID가 그려져 있으므로
 별도 overlay는 없다. 카메라마다 decode는 한 장씩만 하고 대기 중 프레임은 최신으로 덮어쓰며, 표시가 바뀐 뒤
 이전 object URL을 해제한다. socket이 닫히면 2초 후 재접속한다. `/diagnostics`는 build가 있어도
-확인 페이지를 제공한다. 제품 build가 여러 카메라를 표시하려면 같은 방식으로 갱신해야 한다.
+확인 페이지를 제공한다.
 연동 API와 동기화 한계는 [실시간 Preview](../preview-realtime.md)를 따른다.
 Backend는 기존 Preview JSON을 polling하며 영상을 relay하지 않는다.
 
@@ -30,3 +30,5 @@ API/metadata 계약은 [backend](backend.md), 제한된 인터페이스 바인�
 backend README를 따른다. 실제 주소/credential은 공유 문서에 기록하지 않는다.
 
 Preview HTTP와 API readiness의 CPU 검증 명령은 [testing](testing.md)에 있다.
+
+제품 Nuxt 구현은 [frontend/README.md](../../frontend/README.md)를 따른다.

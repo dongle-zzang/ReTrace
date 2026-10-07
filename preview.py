@@ -894,7 +894,7 @@ def run(args, metadata_store=None, runtime_statuses=None):
         runtime_statuses[camera.source_id] = CameraRuntime(
             camera.camera_id, args.camera_degraded_after, args.camera_offline_after,
             args.camera_connect_timeout, args.camera_min_fps)
-    frontend_files = FrontendFiles(os.environ.get('FRONTEND_DIST_DIR', str(ROOT / 'frontend')))
+    frontend_files = FrontendFiles(os.environ.get('FRONTEND_DIST_DIR', str(ROOT / 'frontend-dist')))
     backend_api_proxy = BackendAPIProxy(os.environ.get('PREVIEW_BACKEND_URL', 'http://127.0.0.1:8000'))
     server = ThreadingHTTPServer(("0.0.0.0", args.port), PreviewHandler)
     server.daemon_threads = True
