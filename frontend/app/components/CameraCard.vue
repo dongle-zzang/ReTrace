@@ -1,134 +1,204 @@
 <script setup lang="ts">
 import type { Camera } from '~/types/camera'
-import { Badge } from '~/components/ui/badge'
+import type { ConnectionState, RealtimePreviewClient } from '~/composables/realtimePreviewClient'
+import type { RealtimeCameraStatus } from '~/types/realtime'
+import type { CameraOverlayData, OverlaySelection } from '~/types/overlay'
+import { emptyCameraOverlay } from '~/types/overlay'
+import CameraVideo from '~/components/CameraVideo.vue'
+import CameraOverlay from '~/components/CameraOverlay.vue'
+import { Maximize2, Minimize2 } from '@lucide/vue'
 import { Button } from '~/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
+import { Card, CardHeader, CardTitle } from '~/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '~/components/ui/tooltip'
 
 const props = defineProps<{
   camera: Camera
-  previewBaseUrl: string
+  realtimeClient: RealtimePreviewClient | null
+  connection: ConnectionState
+  liveStatus?: RealtimeCameraStatus
+  annotations?: CameraOverlayData
 }>()
 
-const previewElement = ref<HTMLElement | null>(null)
+const stageElement = ref<HTMLElement | null>(null)
 const isVisible = ref(false)
-const imageFailed = ref(false)
-const retryCount = ref(0)
+const isFullscreen = ref(false)
+const stageSize = ref({ width: 0, height: 0 })
+const mediaSize = ref({ width: 1280, height: 720 })
+const selection = ref<OverlaySelection>(null)
+const emptyAnnotations = emptyCameraOverlay()
+const displayAnnotations = computed(() => props.annotations ?? emptyAnnotations)
 let observer: IntersectionObserver | undefined
+let resizeObserver: ResizeObserver | undefined
 
-const previewUrl = computed(() => {
-  const base = props.previewBaseUrl.trim()
-  const path = props.camera.preview_path
-  if (!base || !path.startsWith('/') || path.startsWith('//')) return ''
+const overlayStyle = computed(() => {
+  const { width: stageWidth, height: stageHeight } = stageSize.value
+  const { width: mediaWidth, height: mediaHeight } = mediaSize.value
+  if (!stageWidth || !stageHeight || !mediaWidth || !mediaHeight) {
+    return { inset: '0' }
+  }
 
-  try {
-    const url = new URL(path, `${base.replace(/\/+$/, '')}/`)
-    if (!['http:', 'https:'].includes(url.protocol)) return ''
-    if (retryCount.value) url.searchParams.set('retrace_retry', String(retryCount.value))
-    return url.toString()
-  } catch {
-    return ''
+  const scale = Math.min(stageWidth / mediaWidth, stageHeight / mediaHeight)
+  const width = mediaWidth * scale
+  const height = mediaHeight * scale
+  return {
+    left: (stageWidth - width) / 2 + 'px',
+    top: (stageHeight - height) / 2 + 'px',
+    width: width + 'px',
+    height: height + 'px',
   }
 })
 
-const showPreview = computed(() =>
-  props.camera.enabled && isVisible.value && !!previewUrl.value && !imageFailed.value,
-)
+// Live /ws camera_status takes precedence over the 10-second API snapshot.
+const status = computed(() => {
+  const live = props.liveStatus
+  if (!live) return props.camera.status
+  return {
+    ...props.camera.status,
+    state: String(live.state),
+    fps: Number(live.fps),
+    last_error: live.last_error ?? props.camera.status.last_error,
+    stale: false,
+  }
+})
 
 const statusLabel = computed(() => {
   if (!props.camera.enabled) return '비활성'
-  if (props.camera.status.stale) return '상태 지연'
-  if (props.camera.status.state === 'online') return '온라인'
-  return props.camera.status.state
+  if (status.value.stale) return '상태 지연'
+  if (status.value.state === 'online') return '온라인'
+  return status.value.state
 })
 
-const statusClass = computed(() => {
-  if (!props.camera.enabled) return 'bg-stone-100 text-stone-600 ring-stone-200'
-  if (props.camera.status.stale) return 'bg-amber-50 text-amber-700 ring-amber-200'
-  if (props.camera.status.state === 'online') return 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-  return 'bg-rose-50 text-rose-700 ring-rose-200'
+const statusDotClass = computed(() => {
+  if (!props.camera.enabled) return 'bg-muted-foreground/50'
+  if (status.value.stale) return 'bg-amber-400 shadow-[0_0_8px_var(--color-amber-400)] animate-pulse'
+  if (status.value.state === 'online') return 'bg-emerald-400 shadow-[0_0_8px_var(--color-emerald-400)]'
+  return 'bg-rose-500 shadow-[0_0_8px_var(--color-rose-500)] animate-pulse'
 })
 
 const fpsLabel = computed(() =>
-  Number.isFinite(props.camera.status.fps) ? props.camera.status.fps.toFixed(1) : '—',
+  Number.isFinite(status.value.fps) ? status.value.fps.toFixed(1) : '—',
 )
 
-function retryPreview() {
-  retryCount.value += 1
-  imageFailed.value = false
+function measureStage() {
+  const stage = stageElement.value
+  if (stage) stageSize.value = { width: stage.clientWidth, height: stage.clientHeight }
 }
 
-watch(() => [props.previewBaseUrl, props.camera.preview_path], () => {
-  imageFailed.value = false
-  retryCount.value = 0
+function onFullscreenChange() {
+  isFullscreen.value = document.fullscreenElement === stageElement.value
+  measureStage()
+}
+
+async function toggleFullscreen() {
+  const stage = stageElement.value
+  if (!stage) return
+  try {
+    if (document.fullscreenElement === stage) await document.exitFullscreen()
+    else await stage.requestFullscreen()
+  } catch {
+    // Keep the card usable when the browser does not allow fullscreen.
+  }
+}
+
+watch(() => props.camera.camera_id, () => {
+  selection.value = null
 })
 
 onMounted(() => {
-  if (!previewElement.value) return
-  observer = new IntersectionObserver(([entry]) => {
-    isVisible.value = entry?.isIntersecting ?? false
-  }, { rootMargin: '120px 0px' })
-  observer.observe(previewElement.value)
+  measureStage()
+  if (stageElement.value) {
+    if (typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver(([entry]) => {
+        isVisible.value = entry?.isIntersecting ?? false
+      }, { rootMargin: '120px 0px' })
+      observer.observe(stageElement.value)
+    } else {
+      isVisible.value = true
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(measureStage)
+      resizeObserver.observe(stageElement.value)
+    }
+  }
+  window.addEventListener('resize', measureStage)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
-onUnmounted(() => observer?.disconnect())
+onUnmounted(() => {
+  observer?.disconnect()
+  resizeObserver?.disconnect()
+  window.removeEventListener('resize', measureStage)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+})
 </script>
 
 <template>
-  <Card class="gap-0 overflow-hidden border-0 bg-white py-0 shadow-[0_8px_30px_rgba(31,41,55,0.05)] ring-1 ring-slate-200/80">
-    <div ref="previewElement" class="relative aspect-video overflow-hidden bg-slate-950">
-      <img
-        v-if="showPreview"
-        :key="retryCount"
-        :src="previewUrl"
-        :alt="`${camera.name} 실시간 미리보기`"
-        class="h-full w-full object-contain"
-        @error="imageFailed = true"
-      >
-      <div v-else class="flex h-full flex-col items-center justify-center gap-3 px-5 text-center text-slate-300">
-        <div class="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white/5">
-          <span class="text-xl">◉</span>
-        </div>
-        <template v-if="!camera.enabled">
-          <p class="text-sm">비활성 카메라</p>
-        </template>
-        <template v-else-if="imageFailed">
-          <p class="text-sm">미리보기를 불러오지 못했습니다</p>
-          <Button size="sm" variant="secondary" @click="retryPreview">다시 시도</Button>
-        </template>
-        <template v-else-if="!previewUrl">
-          <p class="text-sm">Preview 주소를 확인하세요</p>
-        </template>
-        <template v-else>
-          <p class="text-sm">미리보기 대기 중</p>
-        </template>
-      </div>
-      <span class="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[11px] font-semibold tracking-[0.18em] text-white backdrop-blur-sm">
-        LIVE · SOURCE {{ camera.source_id }}
-      </span>
+  <Card class="group gap-0 py-0 ring-white/[0.08]">
+    <div
+      ref="stageElement"
+      class="relative aspect-video overflow-hidden bg-black"
+      :style="isFullscreen ? { aspectRatio: 'auto', width: '100vw', height: '100vh' } : undefined"
+    >
+      <CameraVideo
+        :camera="camera"
+        :realtime-client="realtimeClient"
+        :connection="connection"
+        :camera-state="liveStatus ? String(liveStatus.state) : undefined"
+        :active="isVisible || isFullscreen"
+        @dimensions="mediaSize = $event"
+      />
+      <CameraOverlay
+        class="absolute z-10"
+        :style="overlayStyle"
+        :aspect-ratio="mediaSize.width / mediaSize.height"
+        :annotations="displayAnnotations"
+        :selection="selection"
+        :editable="false"
+        @select="selection = $event"
+      />
+      <div class="pointer-events-none absolute inset-x-0 top-0 z-20 h-16 bg-gradient-to-b from-black/50 to-transparent" />
+      <Tooltip>
+        <TooltipTrigger as-child>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            class="absolute top-3 right-3 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
+            :aria-label="isFullscreen ? '전체 화면 종료' : '영상 전체 화면'"
+            @click="toggleFullscreen"
+          >
+            <Minimize2 v-if="isFullscreen" />
+            <Maximize2 v-else />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{{ isFullscreen ? '전체 화면 종료' : '전체 화면' }}</TooltipContent>
+      </Tooltip>
     </div>
 
-    <CardHeader class="gap-3 px-5 pt-5 pb-3">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <p class="mb-1 text-xs font-medium text-slate-500">{{ camera.floor }}층 · {{ camera.camera_id }}</p>
-          <CardTitle class="truncate text-base font-semibold tracking-tight text-slate-900">{{ camera.name }}</CardTitle>
-        </div>
-        <Badge variant="outline" :class="['shrink-0 border-0 px-2.5 py-1 text-xs font-semibold ring-1', statusClass]">
-          <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-current" />
-          {{ statusLabel }}
-        </Badge>
+    <CardHeader class="px-5 py-4">
+      <div class="flex items-center justify-between gap-3">
+        <CardTitle class="min-w-0 truncate text-[15px] font-semibold tracking-tight">{{ camera.name }}</CardTitle>
+        <Tooltip :disabled="!status.last_error">
+          <TooltipTrigger as-child>
+            <div
+              tabindex="0"
+              :aria-label="'상태: ' + statusLabel + (status.last_error ? ', 최근 오류 있음' : '')"
+              class="flex shrink-0 cursor-default items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <span :class="['size-2 rounded-full transition-colors duration-500', statusDotClass]" />
+              <span class="font-mono text-sm font-semibold tabular-nums">
+                {{ fpsLabel }}
+                <span class="font-sans text-xs font-normal text-muted-foreground">FPS</span>
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="end" class="flex-col items-start gap-1">
+            <span class="font-mono break-all">{{ status.last_error }}</span>
+          </TooltipContent>
+        </Tooltip>
       </div>
     </CardHeader>
 
-    <CardContent class="px-5 pb-5">
-      <div class="flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
-        <span>프레임 속도</span>
-        <span class="font-mono text-sm font-semibold text-slate-800">{{ fpsLabel }} <span class="font-sans text-xs font-normal text-slate-500">FPS</span></span>
-      </div>
-      <details v-if="camera.status.last_error" class="group mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
-        <summary class="cursor-pointer select-none">최근 오류 기록</summary>
-        <p class="mt-2 break-all font-mono text-slate-600">{{ camera.status.last_error }}</p>
-      </details>
-    </CardContent>
   </Card>
 </template>
