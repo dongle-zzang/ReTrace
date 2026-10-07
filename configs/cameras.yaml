@@ -1,0 +1,160 @@
+# Public metadata only. RTSP secrets belong in .env.
+
+cameras:
+  # B1
+  - id: b1_lobby
+    floor: B1
+    name: B1층 로비
+    rtsp_env: CCTV_B1_LOBBY_RTSP
+    enabled: true
+
+  - id: b1_parking_entrance
+    floor: B1
+    name: 주차장 진입 차량 시점
+    rtsp_env: CCTV_B1_PARKING_ENTRANCE_RTSP
+    enabled: true
+
+  - id: b1_parking_overview
+    floor: B1
+    name: 주차장 전체
+    rtsp_env: CCTV_B1_PARKING_OVERVIEW_RTSP
+    enabled: true
+
+  - id: b1_parking_gate
+    floor: B1
+    name: 주차장 차량 출입구
+    rtsp_env: CCTV_B1_PARKING_GATE_RTSP
+    enabled: true
+
+  - id: b1_parking_inner
+    floor: B1
+    name: 주차장 안쪽
+    rtsp_env: CCTV_B1_PARKING_INNER_RTSP
+    enabled: true
+
+  - id: b1_parking_tower
+    floor: B1
+    name: 주차타워 안
+    rtsp_env: CCTV_B1_PARKING_TOWER_RTSP
+    enabled: true
+
+  # 1F
+  - id: 1f_lobby
+    floor: 1
+    name: 1층 로비
+    rtsp_env: CCTV_1F_LOBBY_RTSP
+    enabled: true
+
+  - id: 1f_outdoor_parking
+    floor: 1
+    name: 1층 야외주차장
+    rtsp_env: CCTV_1F_OUTDOOR_PARKING_RTSP
+    enabled: true
+
+  # 2F
+  - id: 2f_lobby
+    floor: 2
+    name: 2층 로비
+    rtsp_env: CCTV_2F_LOBBY_RTSP
+    enabled: true
+
+  - id: 2f_office_1
+    floor: 2
+    name: 2층 사무실 내부1
+    rtsp_env: CCTV_2F_OFFICE_1_RTSP
+    enabled: true
+
+  - id: 2f_office_2
+    floor: 2
+    name: 2층 사무실 내부2
+    rtsp_env: CCTV_2F_OFFICE_2_RTSP
+    enabled: true
+
+  - id: 2f_office_3
+    floor: 2
+    name: 2층 사무실 내부3
+    rtsp_env: CCTV_2F_OFFICE_3_RTSP
+    enabled: true
+
+  # 3F
+  - id: 3f_terrace_4k
+    floor: 3
+    name: 3층 테라스(4k)
+    rtsp_env: CCTV_3F_TERRACE_4K_RTSP
+    enabled: true
+
+  - id: 3f_auditorium_entrance
+    floor: 3
+    name: 대강당 입구
+    rtsp_env: CCTV_3F_AUDITORIUM_ENTRANCE_RTSP
+    enabled: true
+
+  - id: 3f_auditorium_inner
+    floor: 3
+    name: 대강당 안쪽
+    rtsp_env: CCTV_3F_AUDITORIUM_INNER_RTSP
+    enabled: true
+
+  - id: 3f_auditorium_door
+    floor: 3
+    name: 대강당 문쪽
+    rtsp_env: CCTV_3F_AUDITORIUM_DOOR_RTSP
+    enabled: true
+
+  # 4F
+  - id: 4f_lobby
+    floor: 4
+    name: 4층 로비
+    rtsp_env: CCTV_4F_LOBBY_RTSP
+    enabled: true
+
+  - id: 4f_lab_inner
+    floor: 4
+    name: 4층 연구소 내부
+    rtsp_env: CCTV_4F_LAB_INNER_RTSP
+    enabled: true
+
+  # 5F
+  - id: 5f_lobby
+    floor: 5
+    name: 5층 로비
+    rtsp_env: CCTV_5F_LOBBY_RTSP
+    enabled: true
+
+  - id: 5f_office_inner
+    floor: 5
+    name: 5층 사무실 내부
+    rtsp_env: CCTV_5F_OFFICE_INNER_RTSP
+    enabled: true
+
+  - id: 5f_server_room
+    floor: 5
+    name: 5층 서버실 내부
+    rtsp_env: CCTV_5F_SERVER_ROOM_RTSP
+    enabled: true
+
+  # 6F
+  - id: 6f_lobby
+    floor: 6
+    name: 6층 로비
+    rtsp_env: CCTV_6F_LOBBY_RTSP
+    enabled: true
+
+  - id: 6f_office_inner
+    floor: 6
+    name: 6층 사무실 내부
+    rtsp_env: CCTV_6F_OFFICE_INNER_RTSP
+    enabled: true
+
+  # 7F
+  - id: 7f_lobby
+    floor: 7
+    name: 7층 로비
+    rtsp_env: CCTV_7F_LOBBY_RTSP
+    enabled: true
+
+  - id: 7f_rooftop
+    floor: 7
+    name: 옥상
+    rtsp_env: CCTV_7F_ROOFTOP_RTSP
+    enabled: true

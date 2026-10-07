@@ -3,7 +3,6 @@
 
 import argparse
 import configparser
-import hashlib
 import os
 import signal
 import sys
@@ -11,6 +10,8 @@ import threading
 import time
 from urllib.parse import urlsplit
 from pathlib import Path
+
+from pgie_cache import configure_pgie, prepare_engine_cache, PRECISIONS
 
 # GStreamer's default diagnostics can include RTSP URIs and credentials.
 # Only the sanitized application messages below should be printed.
@@ -68,15 +69,16 @@ def load_peoplenet_config():
 
 
 def prepare_pgie_config(cache_dir, batch_size):
-    """Reuse PeopleNet settings, keeping FP16 config/engine in the project."""
+    """Reuse PeopleNet settings and native engine artifacts inside the project."""
     sample_config, config = load_peoplenet_config()
     props = config["property"]
     # Relative model paths belong to the original config directory, not .cache.
-    # INT8 calibration is unnecessary: this stage builds an FP16 engine.
-    props.pop("int8-calib-file", None)
+    props.setdefault("network-mode", "2")
+    if props["network-mode"] != "1":
+        props.pop("int8-calib-file", None)
     path_keys = (
         "onnx-file", "tlt-encoded-model", "model-file", "proto-file", "uff-file",
-        "labelfile-path", "custom-lib-path", "mean-file",
+        "labelfile-path", "custom-lib-path", "mean-file", "int8-calib-file",
     )
     for key in path_keys:
         if props.get(key, "").strip():
@@ -101,34 +103,31 @@ def prepare_pgie_config(cache_dir, batch_size):
     if len(person_ids) != 1:
         raise ValueError("Sample detector labels must contain exactly one person class")
     person_id = person_ids[0]
+    # Keep the requested person threshold even when an installed sample is selected.
+    person_section = f"class-attrs-{person_id}"
+    if not config.has_section(person_section):
+        config.add_section(person_section)
+    config[person_section]["pre-cluster-threshold"] = "0.2"
     class_count = props.getint("num-detected-classes")
     if class_count != len(labels):
         raise ValueError("Sample class count does not match labels")
     props.update({
         "gpu-id": "0", "batch-size": str(batch_size), "process-mode": "1",
-        "network-type": "0", "network-mode": "2", "interval": "0",
+        "network-type": "0", "interval": "0",
         "gie-unique-id": str(PGIE_ID),
     })
     other_ids = [str(index) for index in range(class_count) if index != person_id]
     props.pop("filter-out-class-ids", None)
     if other_ids:
         props["filter-out-class-ids"] = ";".join(other_ids)
-    # Separate engines for batch sizes/configs and changed sample model files.
-    props.pop("model-engine-file", None)
-    fingerprint = repr([(section, dict(config[section])) for section in config.sections()])
-    for model_path in model_paths:
-        stat = Path(model_path).stat()
-        fingerprint += f"{stat.st_size}:{stat.st_mtime_ns}"
-    digest = hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
-    pgie_dir = Path(cache_dir) / "pgie"
-    pgie_dir.mkdir(parents=True, exist_ok=True)
-    props["model-engine-file"] = str(pgie_dir / f"peoplenet_b{batch_size}_gpu0_fp16_{digest}.engine")
+    pgie_dir, digest = prepare_engine_cache(props, cache_dir)
     generated = pgie_dir / f"config_peoplenet_b{batch_size}_{digest}.txt"
     with generated.open("w", encoding="utf-8") as target:
         config.write(target, space_around_delimiters=False)
     print(
         f"PGIE detector=PeopleNet sample={sample_config} model={Path(model_paths[0]).name} "
-        f"person-class-id={person_id} batch-size={batch_size} precision=FP16", flush=True,
+        f"person-class-id={person_id} batch-size={batch_size} "
+        f"precision={PRECISIONS[props['network-mode']].upper()}", flush=True,
     )
     return str(generated), person_id
 
@@ -147,7 +146,9 @@ def resolve_inputs(parser, cli_inputs):
         if (value := os.environ.get(name, "").strip())
     ]
     if not inputs:
-        parser.error("Supply --input or set RTSP_URL / RTSP_URL_2")
+        # This fixed message contains no input values; do not hide the cause.
+        parser.exit(2, "Missing RTSP input: supply --input or set RTSP_URL / RTSP_URL_2. "
+                    "Docker Compose reads .env; direct Python execution does not.\n")
     return inputs
 
 
@@ -179,12 +180,12 @@ def make_element(factory, name):
     return element
 
 
-def create_source_bin(index, uri, fail):
+def create_source_bin(index, uri, fail, source_factory="uridecodebin", observer=None):
     """Use test3's dynamic video pad / NVMM ghost-pad source-bin pattern."""
     source_bin = Gst.Bin.new(f"source-bin-{index}")
     if source_bin is None:
         raise RuntimeError(f"source={index}: could not create source bin")
-    decoder = make_element("uridecodebin", f"uri-decode-bin-{index}")
+    decoder = make_element(source_factory, f"uri-decode-bin-{index}")
     decoder.set_property("uri", uri)
     source_bin.add(decoder)
     ghost_pad = Gst.GhostPad.new_no_target("src", Gst.PadDirection.SRC)
@@ -193,6 +194,8 @@ def create_source_bin(index, uri, fail):
 
     def on_pad_added(decodebin, pad):
         caps = pad.get_current_caps() or pad.query_caps(None)
+        if observer is not None:
+            observer("source_pad", pad)
         if caps is None or caps.get_size() == 0:
             fail(f"source={index}: decoder pad has no caps")
             return
@@ -200,6 +203,8 @@ def create_source_bin(index, uri, fail):
             return  # Ignore RTSP audio pads.
         if not caps.get_features(0).contains("memory:NVMM"):
             fail(f"source={index}: video decoder output is not NVIDIA NVMM")
+            return
+        if ghost_pad.get_target() == pad:
             return
         if ghost_pad.get_target() is not None:
             fail(f"source={index}: multiple video tracks are unsupported")
@@ -217,7 +222,10 @@ def create_source_bin(index, uri, fail):
             source.set_property("drop-on-latency", True)
 
     decoder.connect("pad-added", on_pad_added)
-    decoder.connect("source-setup", on_source_setup)
+    decoder.connect("pad-removed", lambda _decoder, pad:
+                    ghost_pad.set_target(None) if ghost_pad.get_target() == pad else None)
+    if source_factory == "uridecodebin":
+        decoder.connect("source-setup", on_source_setup)
     return source_bin
 
 
@@ -380,8 +388,7 @@ def run(inputs):
                 raise RuntimeError(f"source={index}: could not link mux sink pad")
 
         pgie = make_element("nvinfer", "primary-inference")
-        pgie.set_property("config-file-path", pgie_config)
-        pgie.set_property("batch-size", len(inputs))
+        configure_pgie(pgie, pgie_config, len(inputs))
         pipeline.add(pgie)
         sink = make_element("fakesink", "headless-sink")
         sink.set_property("sync", False)
