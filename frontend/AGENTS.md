@@ -24,11 +24,11 @@ npm run typecheck
 npm run build
 ```
 
-정적 배포 산출물은 `npm run generate` 후 `.output/public/`의 내용물이다. 존재하지 않는 lint/format 명령을 만들어내지 않는다. 화면 변경은 가능하면 실제 브라우저(또는 headless Chrome 스크린샷)로 확인하고, 확인하지 못한 항목은 보고한다.
+정적 배포 산출물은 `npm run generate` 후 `.output/public/`의 내용물이며 서버의 `frontend-dist/`에 올린다(`frontend/` 아님). 존재하지 않는 lint/format 명령을 만들어내지 않는다. 화면 변경은 가능하면 실제 브라우저(또는 headless Chrome 스크린샷)로 확인하고, 확인하지 못한 항목은 보고한다.
 
 ## Git
 
-- 루트 `.gitignore`가 `frontend/` 전체를 무시한다. 기존 추적 파일의 수정은 일반 `git add`로 반영되지만 **새 파일은 `git add -f`가 필요하다**. 커밋 전 `git diff --cached --name-status`로 누락을 확인한다.
+- 커밋 전 `git diff --cached --name-status`로 `frontend/` 밖의 경로가 섞이지 않았는지 확인한다.
 - 커밋에는 `frontend/` 경로만 포함한다. `.env`, `.nuxt/`, `.output/`, `dist/`, `node_modules/` 등 로컬 산출물은 넣지 않는다.
 - commit/push는 사용자가 요청할 때만 한다. 원격 main에 서버 커밋이 먼저 올라와 있으면 rebase 후 push한다.
 
