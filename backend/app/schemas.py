@@ -26,6 +26,9 @@ class CameraOut(BaseModel):
     enabled: bool
     source_id: int | None
     preview_path: str | None
+    preview_format: Literal["webrtc", "mjpeg"]
+    metadata_path: str = "/ws"
+    signaling_path: str | None = None
     status: StatusOut
 
 

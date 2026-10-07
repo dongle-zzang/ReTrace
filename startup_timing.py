@@ -79,8 +79,9 @@ class StartupTiming:
                                      for (index, stage), event in self.events.items() if index == slot}
                           for slot, camera_id in self.cameras.items()}
             shared = {stage: event['elapsed_ms'] for (slot, stage), event in self.events.items() if slot is None}
-        first = [stages['first_mjpeg_available'] for stages in per_camera.values()
-                 if 'first_mjpeg_available' in stages]
+        first = [stages.get('first_h264_buffer', stages.get('first_mjpeg_available'))
+                 for stages in per_camera.values()
+                 if 'first_h264_buffer' in stages or 'first_mjpeg_available' in stages]
         online = [stages['online'] for stages in per_camera.values() if 'online' in stages]
         return {'origin': self.origin_name, 'sources': len(self.cameras), 'shared_ms': shared,
                 'gpu_memory': gpu_sample,
@@ -92,7 +93,8 @@ class StartupTiming:
                 'all_configured_online_ms': max(online) if len(online) == len(self.cameras) else None,
                 'last_observed_online_ms': max(online) if online else None,
                 'missing_online': [key for key, stages in per_camera.items() if 'online' not in stages],
-                'missing_frames': [key for key, stages in per_camera.items() if 'first_mjpeg_available' not in stages]}
+                'missing_frames': [key for key, stages in per_camera.items()
+                                   if 'first_mjpeg_available' not in stages and 'first_h264_buffer' not in stages]}
 
 
 def gpu_memory():

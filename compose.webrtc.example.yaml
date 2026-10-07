@@ -1,0 +1,18 @@
+# Explicit LAN/Tailscale deployment option. Do not combine with the private
+# port-publishing override: host networking uses WEB_BIND_IP instead.
+# docker compose -f compose.yml -f compose.webrtc.example.yaml up -d --build
+services:
+  retrace:
+    network_mode: host
+    environment:
+      WEB_BIND_IP: "${WEB_BIND_IP:?Choose an existing private interface address}"
+      PREVIEW_BACKEND_URL: "${PREVIEW_BACKEND_URL:-http://127.0.0.1:8000}"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://' + os.environ['WEB_BIND_IP'] + ':' + os.environ['WEB_PORT'] + '/streams.json', timeout=3).close()"
+  backend:
+    environment:
+      BACKEND_PREVIEW_URL: "${BACKEND_PREVIEW_URL:?Set the chosen private Preview HTTP origin}"

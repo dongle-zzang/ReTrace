@@ -6,12 +6,16 @@
 | --- | --- |
 | `/`, 프론트 경로, JS/CSS/이미지 | 업로드한 CSR 정적 빌드 |
 | `/api/*` | Python HTTP request thread → 내부 Backend GET API |
-| `/mjpeg/sourceN` | 기존 Preview MJPEG |
+| `/ws` | WebSocket metadata/SDP/ICE; 영상은 WebRTC peer |
+| `/diagnostics`, `/webrtc.js` | 진단 페이지와 client helper |
+| `/mjpeg/sourceN` | `PREVIEW_MODE=mjpeg`에서만 사용 |
 | `/streams.json`, `/metadata.json` | 기존 Preview JSON |
 
 이 경로들은 프론트 라우터보다 우선하며, 프론트에서 별도 Backend/Preview 주소를
-지정하지 않는다. `fetch('/api/cameras')`로 카메라 정보를 읽고 응답의 `preview_path`를
-`<img>`의 src로 사용한다. 같은 origin이므로 배포된 프론트에 별도 CORS 설정은 필요 없다.
+지정하지 않는다. `fetch('/api/cameras')`의 `preview_format`을 확인한다. 기본 WebRTC는
+`signaling_path=/ws`로 협상하고 `<video>`와 SVG/Canvas overlay를 사용한다.
+`<img src=preview_path>`는 MJPEG 진단 모드에만 사용한다.
+제품 build도 이 계약에 맞춰 갱신해야 한다. 연동 방법은 [실시간 Preview](../preview-realtime.md)를 따른다. 같은 origin이므로 배포된 프론트에 별도 CORS 설정은 필요 없다.
 개발 PC의 dev server가 직접 Backend에 접근하는 경우에는 기존 CORS 안내를 따른다.
 
 ## 개발 PC에서 빌드

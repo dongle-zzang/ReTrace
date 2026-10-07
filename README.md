@@ -9,11 +9,12 @@ MacBook에서는 코드를 작성하고 GitHub의 `main` 브랜치로 작업을 
 - 여러 RTSP 입력을 하나의 공유 DeepStream pipeline에서 batch 처리
 - NVIDIA TAO PeopleNet으로 사람 검출
 - `preview.py`: NvDCF로 카메라별 사람 추적, Bounding Box와 Track ID 표시
-- source별 MJPEG 브라우저 미리보기 및 프레임/FPS/검출 통계
+- source별 WebRTC 영상 + 하나의 WebSocket metadata/status, 브라우저 SVG overlay
+- 선택적 OSD 포함 MJPEG 진단 모드 및 프레임/FPS/검출 통계
 - 선택적 pipeline 단계별 타이밍 진단
 - `app.py`: 미리보기와 tracker 없이 검출 metadata만 확인하는 실행 경로
 
-카메라 runtime 상태 감지와 자동 재연결을 지원합니다. 카메라 간 동일 인물 매칭(Re-ID), DB 저장은 아직 구현하지 않았습니다.
+카메라 runtime 상태 감지와 자동 재연결을 지원합니다. 카메라 간 동일 인물 매칭(Re-ID)은 아직 구현하지 않았습니다. Backend는 관찰된 track 요약을 DB에 보관합니다.
 Track ID는 camera_id와 재연결 generation을 함께 사용해 해석합니다. 향후 Re-ID와 카메라 간 이동 분석을 추가할 계획입니다.
 
 ## Pipeline
@@ -22,20 +23,24 @@ Track ID는 camera_id와 재연결 generation을 함께 사용해 해석합니�
 N개의 enabled CCTV / RTSP
   → source별 nvurisrcbin / NVIDIA NVMM
   → 공유 nvstreammux(batch=N) → PeopleNet nvinfer(batch=N) → NvDCF nvtracker
-  → PersonMetadata 추출 → nvstreamdemux
-  → source별 queue → nvvideoconvert → nvdsosd → nvvideoconvert → nvjpegenc → appsink
-  → 최신 JPEG 한 장 → HTTP multipart → 브라우저 <img>
+  ├─ PersonMetadata → 최신 snapshot → /ws JSON → 브라우저 SVG/Canvas overlay
+  └─ nvstreamdemux → source별 queue → nvvideoconvert (NVMM NV12)
+     → nvv4l2h264enc → h264parse → appsink (압축 AU만 복사)
+     → 시청자별 appsrc → h264parse → rtph264pay → webrtcbin → 브라우저 <video>
 ```
 
-MJPEG는 source별 최신 프레임만 보관합니다. 느린 클라이언트는 지난 프레임을 건너뜁니다.
-`/streams.json`은 source 번호, 상태, MJPEG 경로를 제공하며 RTSP 입력 주소를 제공하지 않습니다.
-`http://<서버 IP>:40225/`에서 업로드한 CSR 프론트 빌드를 제공합니다. 프론트는 같은 주소의
-`/api/*`로 Backend API를 호출하고 `/mjpeg/sourceN`으로 영상을 표시합니다.
-제품 Frontend는 로컬 PC에서 빌드한 뒤 서버의 `frontend/`에 산출물 내용을 업로드합니다.
-서버에 Node runtime을 추가할 필요는 없습니다. 설정·Nuxt CSR 빌드·업로드·최초 적용 절차는
-[프론트 배포 안내](docs/agent/frontend-deployment.md)를 따릅니다.
-빌드가 없으면 기존 MJPEG 확인 페이지가 사람 검출 박스·Track ID 영상과 runtime 상태/FPS를
-4개씩 표시합니다. 정적 파일은 전용 빌드 디렉터리 또는 허용된 확인 페이지 asset만 제공합니다.
+기본 모드는 WebRTC이며 카메라당 GPU H.264 encoder 하나를 여러 시청자가 공유합니다.
+`/ws` 하나에서 여러 cameraId의 metadata/status와 SDP/ICE signaling을 전달합니다.
+기존 pixel 좌표 `/metadata.json`과 Backend polling은 유지하며 WebSocket bbox는 0~1 좌표입니다.
+`PREVIEW_MODE=mjpeg`에서는 기존 OSD/JPEG branch만 실행합니다.
+구조·schema·Vue/Nuxt 연동·성능 제한·**WebRTC ICE를 위한 네트워크 적용 절차**는
+[실시간 Preview](docs/preview-realtime.md)를 따릅니다. 기존 HTTP port publication만으로 영상 경로가 확보되지는 않습니다.
+
+`http://<서버 IP>:40225/`는 업로드한 CSR 프론트를 제공하며 `/api/*`는 Backend API를 호출합니다.
+제품 Frontend는 로컬 PC에서 빌드한 산출물을 `frontend/`에 업로드합니다. 새 WebRTC 계약에 맞춰
+제품 build도 갱신해야 합니다. 서버에 Node runtime은 필요 없습니다.
+[프론트 배포 안내](docs/agent/frontend-deployment.md)를 따르며 `/diagnostics`에서 기본 확인 페이지를
+항상 사용할 수 있습니다. 빌드가 없으면 `/`도 확인 페이지를 표시합니다.
 기존 HLS 출력물을 사용하거나 새로운 영상 파일을 저장하지 않습니다.
 
 ## 실행 환경
@@ -275,7 +280,7 @@ nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu,utilization.memo
 
 각 단계에서 `sources=N streammux batch-size=N pgie batch-size=N demux branches=N`과
 `state=PLAYING` 로그를 확인하세요. Backend 호스트 포트를 변경했다면 curl 포트도 맞추세요.
-브라우저 `http://<서버 IP>:40225/mjpeg/sourceN`에서 **모든 source**의 MJPEG/bbox/Track ID를 확인하고
+브라우저 `/diagnostics`에서 **모든 source**의 영상/bbox/Track ID를 확인하고 (MJPEG 진단은 `PREVIEW_MODE=mjpeg`)
 `/streams.json`의 runtime online/FPS와 Backend camera status가 일치하는지 확인합니다.
 GPU memory/utilization을 관측하며 첫 engine 생성과 정상 운전을 구분하세요.
 2대 이상 단계에서는 한 카메라만 네트워크를 끊었다 복구해 그 카메라의 degraded/offline/reconnecting/online,
@@ -362,8 +367,8 @@ GStreamer error domain/code와 원문을 메모리에서만 검사하고 고정 
 PyDS 객체를 immutable `PersonMetadata` / `FrameMetadata`로 복사합니다.
 `preview.run(args, metadata_store=MetadataStore())`에 저장소를 전달하면 별도 스레드에서
 `snapshot()`을 읽을 수 있습니다. source별 최신 프레임 한 개만 보관하며 사람이 없는 프레임은
-빈 persons로 갱신합니다. 모든 이벤트를 보존하는 큐는 아닙니다. 현재 DB/API 전송은 없습니다.
-`/streams.json`은 기존 숫자 id/MJPEG 경로에 공개 camera_id/floor/name만 추가합니다.
+빈 persons로 갱신합니다. 모든 이벤트를 보존하는 큐는 아닙니다. Backend snapshot polling과 실시간 WebSocket 전송은 각각 별도로 수행합니다.
+`/streams.json`은 숫자 id/runtime/session과 공개 camera_id/floor/name을 유지하며 mode별 영상 경로를 제공합니다.
 
 `PersonMetadata.to_dict()`는 camera_id, timestamp, track_id, class_id, class=person,
 confidence, bbox, tracker_confidence를 제공합니다. timestamp는 UTC 처리 시각입니다.
@@ -445,6 +450,6 @@ Runtime 구현 참고: [GStreamer bus](https://gstreamer.freedesktop.org/documen
 ## Backend + PostgreSQL
 
 별도 FastAPI `backend` service와 `postgres` service를 추가했습니다.
-기존 `retrace`는 DeepStream/MJPEG(40225)를 담당하며 Backend 장애와 독립적으로
+기존 `retrace`는 DeepStream/WebRTC/WebSocket(HTTP 40225, media는 ICE)를 담당하며 Backend 장애와 독립적으로
 동작합니다. 구성·데이터 저장 정책·API·CPU 테스트·서버 검증 명령은
 [backend/README.md](backend/README.md)를 참고하세요.

@@ -16,6 +16,8 @@
 | canonical container 실행 설정 | `python3 -m unittest discover -s tests -p 'test_canonical_startup.py'` |
 | Preview/CSR 파일·SPA routing·격리, 동일 origin API 프록시, MJPEG/JSON | `python3 -m unittest discover -s tests -p 'test_preview_http.py'` |
 | Preview 웹 플레이어 연결/재생 복구/runtime 상태/페이지 종료 | `node --test tests/preview_web.test.cjs` |
+| WebRTC AU backpressure/normalized schema, 실제 WebSocket 다중 camera/구독/signaling/cleanup | `python3 -m unittest discover -s tests -p 'test_preview_realtime.py'` |
+| WebRTC 브라우저 helper의 다중 peer/ICE buffering/재연결/cleanup | `node --test tests/webrtc_web.test.cjs` |
 | Preview API readiness checker | `python3 -m unittest discover -s tests -p 'test_check_preview.py'` |
 | Backend API/polling/DB/preview 계약/보안 | `python -m pytest -q backend/tests` |
 | DeepStream HTTP/element link 포함 전체 Python 회귀 | `docker compose exec -T retrace python3 -m unittest discover -s tests -p 'test_*.py'` |
@@ -23,6 +25,11 @@
 더 작은 변경은 관련 unittest 모듈이나 pytest 파일/테스트만 선택한다. Backend CPU 환경 준비 방법은 [backend README의 CPU 테스트](../../backend/README.md#cpu-테스트)를 따른다. dependency 설치가 필요한지 먼저 확인한다.
 
 ## 검증 환경과 한계
+
+- WebSocket CPU 테스트에는 루트 requirements의 wsproto가 필요하며 실제 loopback socket을 사용한다.
+  `tools/check_webrtc.py --loopback`은 GPU 서버의 NVENC synthetic source와 native SDP/ICE/H.264 수신을
+  확인한다. `--software-test-source`는 checker 전용 x264 fixture다. 브라우저 렌더링/PeopleNet/NvDCF를
+  증명하지 않는다. 실제 적용과 다중 camera/network/restart 점검은 [실시간 Preview](../preview-realtime.md)를 따른다.
 
 - `tests/test_camera_shared_pipeline.py`는 실제 공유 pipeline 함수의 생성/연결을 fake Gst로 실행해 instance 수, batch 크기, mux/demux request pad, 상태/세대 독립성 및 HTTP schema를 CPU에서 검증한다. 실제 plugin 협상/복구 보장은 아니다.
 - `tests/test_pgie_cache.py`는 CPU 파일 fixture로 config 생성, 빌드 조건/후처리 분리, 별도 프로세스의 경로 안정성, 모델 staging 및 config/GObject 일치를 검증한다. 실제 TensorRT serialization은 GPU 서버에서 최초 생성 후 동일 설정으로 재실행하여 canonical engine의 deserialization 로그와 rebuild 부재를 확인해야 한다. Warm nvinfer state transition의 8–9초 지연은 별도 최적화 과제다.

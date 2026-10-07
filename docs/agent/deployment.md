@@ -5,12 +5,19 @@
 - `compose.yml`은 GPU `retrace`, CPU `backend`, PostgreSQL 서비스와 DB named volume을 정의한다. retrace는 backend/postgres의 기동에 의존하지 않는다.
 - 루트 Dockerfile은 DeepStream 7.0 기반에 PyDS 1.1.11을 설치하고 Compose와 같은 preview 실행 경로를 사용한다. 소스는 Compose bind mount로 제공하며 루트 이미지에 앱 소스를 COPY하는 방식이 아니다.
 - Backend Dockerfile은 Python 3.12 slim에 앱/공통 카메라 로더를 COPY하고 비-root 사용자, Uvicorn worker 하나로 실행한다. YAML은 read-only mount다.
-- retrace는 컨테이너 내부 40225, backend는 8000을 사용한다. 40225에서 CSR 빌드와 MJPEG를 제공하고 `/api/*` GET을 내부 Backend로 전달한다. Backend 호스트 공개는 기본 loopback이며 retrace 호스트 binding은 ignored override에서 정한다. 별도 reverse proxy 서비스와 CI/CD workflow는 없다.
+- retrace는 컨테이너 내부 40225, backend는 8000을 사용한다. 40225에서 CSR 빌드와 metadata/signaling(legacy는 MJPEG)을 제공하고 `/api/*` GET을 내부 Backend로 전달한다. Backend 호스트 공개는 기본 loopback이며 retrace 호스트 binding은 ignored override에서 정한다. 별도 reverse proxy 서비스와 CI/CD workflow는 없다.
 - 별도 개발 PC 접근은 private `.env`의 `BACKEND_BIND_IP`로 기존 제한된 인터페이스 하나를 선택한다. 브라우저 API CORS는 `BACKEND_CORS_ORIGINS`로 opt-in한다. 구체적인 설정/재생성 절차는 [backend README](../../backend/README.md#별도-개발-pc에서-접근)를 따른다. 서버 Compose에는 frontend service가 없다.
 
-- CSR 산출물은 기본 `frontend/`에 업로드하며 `FRONTEND_DIST_DIR`은 컨테이너 내부 경로다. `PREVIEW_BACKEND_URL`은 내부 Backend origin이다. 빌드가 없으면 기존 `web/`의 MJPEG 확인 페이지를 제공한다. 업로드·최초 컨테이너 재생성·HTTP 확인 절차는 [frontend deployment](frontend-deployment.md)를 따른다. retrace healthcheck와 `tools/check_preview.py`는 `/streams.json`을 사용한다.
+- CSR 산출물은 기본 `frontend/`에 업로드하며 `FRONTEND_DIST_DIR`은 컨테이너 내부 경로다. `PREVIEW_BACKEND_URL`은 내부 Backend origin이다. 빌드가 없으면 `web/`의 mode별 영상 확인 페이지를 제공한다. 업로드·최초 컨테이너 재생성·HTTP 확인 절차는 [frontend deployment](frontend-deployment.md)를 따른다. retrace healthcheck와 `tools/check_preview.py`는 `/streams.json`을 사용한다.
 
 ## 실행 원문과 변경 판단
+
+기본 Preview 영상은 WebRTC이며 `/ws`에서 metadata/signaling을 처리한다. Dockerfile에 nice/DTLS/GI
+구성요소를 추가하고 NVIDIA driver capability에 `video`를 포함한다. 기존 bridge HTTP port만으로
+media 경로를 보장하지 않는다. `compose.webrtc.example.yaml`은 명시적으로 선택하는 host-network
+옵션이며 기존 ignored binding override를 자동 병합하지 않는다. private `WEB_BIND_IP`,
+`BACKEND_PREVIEW_URL`, `PREVIEW_BACKEND_URL` 설정과 검증은 [실시간 Preview](../preview-realtime.md)를 따른다.
+기본 Compose와 private override 자체의 기존 port/GPU 예약/DB volume은 보존한다.
 
 환경 준비, `.env` 복사, 모델/engine 준비, Compose build/up, 컨테이너 교체·복구 주의사항은 [루트 README](../../README.md)의 실행 섹션을 따른다. Backend/PostgreSQL 실행, DB 확인, 단일 worker를 유지하는 이유는 [backend README](../../backend/README.md)의 “실행” 및 “CPU 테스트”에 있다. 현재 호스트의 실제 배포/영상 수신 상태는 문서 작성에서 검증하지 않았다.
 

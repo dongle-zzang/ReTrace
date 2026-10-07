@@ -54,6 +54,10 @@ class PreviewHttpTests(unittest.TestCase):
                 with urlopen(base + '/_nuxt/app.js?v=1', timeout=2) as response:
                     self.assertIn('javascript', response.headers['Content-Type'])
                     self.assertIn(b'frontend', response.read())
+                for path, filename in (('/diagnostics', 'index.html'), ('/preview.js', 'preview.js'),
+                                       ('/webrtc.js', 'webrtc.js')):
+                    with urlopen(base + path, timeout=2) as response:
+                        self.assertEqual(response.read(), (ROOT / 'web' / filename).read_bytes())
                 with urlopen(Request(base + '/', method='HEAD'), timeout=2) as response:
                     self.assertEqual(response.read(), b'')
                     self.assertGreater(int(response.headers['Content-Length']), 0)
