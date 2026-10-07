@@ -1,7 +1,10 @@
-"""Same-origin WebSocket metadata, commands and WebRTC signaling.
+"""Same-origin WebSocket metadata, status and JPEG video frames.
 
 Streaming callbacks never perform socket I/O. Each connection samples current
 metadata at 10 Hz; obsolete detections are replaced, rather than queued.
+Video is the latest JPEG per camera at a client-chosen rate; a slow client
+skips frames instead of queueing them, so one connection carries every camera
+without the browser's per-origin HTTP connection limit.
 """
 import json
 import math
@@ -9,6 +12,7 @@ import os
 from queue import Queue, Empty, Full
 import select
 import socket
+import struct
 import threading
 import time
 from urllib.parse import urlsplit
@@ -16,6 +20,16 @@ from urllib.parse import urlsplit
 from wsproto import ConnectionType, WSConnection
 from wsproto.events import AcceptConnection, CloseConnection, Ping, Pong, TextMessage, BytesMessage
 from person_metadata import utc_timestamp
+
+VIDEO_FRAME_VERSION = 1
+DEFAULT_VIDEO_FPS = 10
+MAX_VIDEO_FPS = 30
+
+
+def video_frame(camera_id, sequence, jpeg):
+    """Binary message: version u8, cameraId length u8, cameraId UTF-8, sequence u32 BE, JPEG."""
+    name = camera_id.encode()
+    return struct.pack(f">BB{len(name)}sI", VIDEO_FRAME_VERSION, len(name), name, sequence & 0xFFFFFFFF) + jpeg
 
 
 def detection_message(frame, runtime_session):
@@ -41,11 +55,9 @@ def detection_message(frame, runtime_session):
 
 
 class RealtimeHub:
-    def __init__(self, metadata_snapshot, stream_snapshot, stores, shutdown,
-                 peer_factory, registry, max_connections=16):
+    def __init__(self, metadata_snapshot, stream_snapshot, stores, shutdown, max_connections=16):
         self.metadata_snapshot, self.stream_snapshot = metadata_snapshot, stream_snapshot
         self.stores, self.shutdown = stores, shutdown
-        self.peer_factory, self.registry = peer_factory, registry
         self.connections = threading.BoundedSemaphore(max_connections)
         self.outbox_lock = threading.Lock()
         self.outboxes = {}
@@ -92,13 +104,17 @@ class RealtimeHub:
             handler.send_error(503)
             return
         ws = WSConnection(ConnectionType.SERVER)
-        peers = {}
         outgoing = Queue(maxsize=1024)
         overflow = threading.Event()
         subscribed = None  # None = all configured cameras, [] = none.
         subscription = [None]
         outbox = (outgoing, overflow, subscription)
         previous_frames, previous_status = {}, {}
+        video_interval = None  # None = metadata only.
+        sent_video = {}  # camera_id -> (store sequence, monotonic send time)
+        # Cameras are fixed for the process lifetime.
+        video_stores = [(stream["camera_id"], self.stores[stream["id"]]) for stream in self.stream_snapshot()
+                        if stream["id"] in self.stores]
         fragmented = ""
         handler.close_connection = True
         upgraded = False
@@ -108,25 +124,15 @@ class RealtimeHub:
             try:
                 outgoing.put_nowait(message)
             except Full:
-                overflow.set()  # A blocked signaling client must release its peers.
+                overflow.set()  # A blocked client is disconnected, not buffered.
 
-        def wire(event):
+        def wire(event, timeout=1.0):
             data = ws.send(event)
-            handler.connection.settimeout(1.0)
+            handler.connection.settimeout(timeout)
             handler.connection.sendall(data)
 
-        def remove(peer_id):
-            peer = peers.pop(peer_id, None)
-            if peer is not None:
-                try:
-                    peer.close()
-                except Exception:
-                    pass
-                finally:
-                    self.registry.release()
-
         def command(message):
-            nonlocal subscribed, previous_frames, previous_status
+            nonlocal subscribed, previous_frames, previous_status, video_interval, sent_video
             if not isinstance(message, dict) or message.get("version", 1) != 1:
                 raise ValueError("Invalid message")
             kind = message.get("type")
@@ -135,46 +141,19 @@ class RealtimeHub:
                 ids = message.get("cameraIds")
                 if not isinstance(ids, list) or any(not isinstance(value, str) or value not in cameras for value in ids):
                     raise ValueError("Invalid subscription")
+                video, fps = message.get("video", False), message.get("videoFps", DEFAULT_VIDEO_FPS)
+                if (type(video) is not bool or isinstance(fps, bool) or not isinstance(fps, (int, float))
+                        or not 1 <= fps <= MAX_VIDEO_FPS):
+                    raise ValueError("Invalid video request")
                 subscribed = set(ids)
                 subscription[0] = subscribed
                 previous_frames, previous_status = {}, {}
-                send({"version": 1, "type": "subscribed", "cameraIds": sorted(subscribed)})
+                video_interval = 1 / fps if video else None
+                sent_video = {}
+                send({"version": 1, "type": "subscribed", "cameraIds": sorted(subscribed),
+                      "video": video, "videoFps": fps if video else None})
                 return
-            camera_id, peer_id = message.get("cameraId"), message.get("peerId")
-            if camera_id not in cameras or not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 64:
-                raise ValueError("Invalid camera or peer")
-            if kind == "watch":
-                if peer_id in peers or len(peers) >= self.registry.limit:
-                    raise ValueError("Peer limit")
-                stream = cameras[camera_id]
-                if stream["format"] != "webrtc":
-                    raise ValueError("Video uses legacy mode")
-                self.registry.acquire()
-                try:
-                    peers[peer_id] = self.peer_factory(camera_id, peer_id, self.stores[stream["id"]], send,
-                                                       os.environ.get("WEBRTC_STUN_SERVER", ""),
-                                                       os.environ.get("WEBRTC_TURN_SERVER", ""))
-                except Exception:
-                    self.registry.release()
-                    raise
-            else:
-                peer = peers.get(peer_id)
-                if peer is None or peer.camera_id != camera_id:
-                    raise ValueError("Unknown peer")
-                if kind == "unwatch":
-                    remove(peer_id)
-                elif kind == "answer":
-                    sdp = message.get("sdp")
-                    if not isinstance(sdp, str) or len(sdp) > 60000:
-                        raise ValueError("Invalid SDP")
-                    peer.answer(sdp)
-                elif kind == "ice":
-                    candidate, mline = message.get("candidate"), message.get("sdpMLineIndex")
-                    if not isinstance(candidate, str) or len(candidate) > 4096 or type(mline) is not int or not 0 <= mline < 8:
-                        raise ValueError("Invalid ICE")
-                    peer.ice(candidate, mline)
-                else:
-                    raise ValueError("Unsupported command")
+            raise ValueError("Unsupported command")
 
         try:
             ws.initiate_upgrade_connection([(key.encode("ascii"), value.encode("latin1"))
@@ -184,7 +163,8 @@ class RealtimeHub:
             upgraded = True
             with self.outbox_lock:
                 self.outboxes[id(outgoing)] = outbox
-            handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            # Room for a few JPEGs; a client that cannot drain them skips frames.
+            handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
             # No addresses/credentials are reflected in hello or errors.
             wire(TextMessage(data=json.dumps({"version": 1, "type": "hello", "metadataHz": 10})))
             last_metadata = last_ping = last_pong = time.monotonic()
@@ -223,16 +203,12 @@ class RealtimeHub:
                                 except Exception:
                                     error = {"version": 1, "type": "error", "code": "command_failed"}
                                     if isinstance(message, dict):
-                                        for key in ("cameraId", "peerId"):
-                                            value = message.get(key)
-                                            if isinstance(value, str) and len(value) <= 64:
-                                                error[key] = value
+                                        value = message.get("cameraId")
+                                        if isinstance(value, str) and len(value) <= 64:
+                                            error["cameraId"] = value
                                     send(error)
                                 fragmented = ""
                                 received_since_message = 0
-                for peer_id, peer in list(peers.items()):
-                    if not peer.pump():
-                        remove(peer_id)
                 now = time.monotonic()
                 if now - last_metadata >= 0.1:
                     snapshot = self.metadata_snapshot()
@@ -268,6 +244,18 @@ class RealtimeHub:
                         wire(TextMessage(data=json.dumps(outgoing.get_nowait())))
                     except Empty:
                         break
+                if video_interval is not None:
+                    for camera_id, store in video_stores:
+                        if camera_id not in subscribed:
+                            continue
+                        sequence, jpeg = store.latest()
+                        last = sent_video.get(camera_id)
+                        if jpeg is None or (last is not None and (last[0] == sequence or now - last[1] < video_interval)):
+                            continue
+                        # Replies above precede frames; large frames get longer to drain on slow links.
+                        wire(BytesMessage(data=video_frame(camera_id, sequence, jpeg)), timeout=5.0)
+                        sent_video[camera_id] = (sequence, now)
+                    now = time.monotonic()
                 if now - last_ping >= 15:
                     wire(Ping(payload=b"preview"))
                     last_ping = now
@@ -279,6 +267,4 @@ class RealtimeHub:
         finally:
             with self.outbox_lock:
                 self.outboxes.pop(id(outgoing), None)
-            for peer_id in list(peers):
-                remove(peer_id)
             self.connections.release()

@@ -67,12 +67,9 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
         return status_out(session.get(CameraStatus, camera_id), app.state.config.stale_after)
 
     def public_camera(session, camera):
-        mode = app.state.config.preview_mode
         return CameraOut(camera_id=camera.camera_id, floor=camera.floor, name=camera.name,
                          enabled=camera.enabled, source_id=camera.source_id,
-                         preview_path=(("/ws" if mode == "webrtc" else f"/mjpeg/source{camera.source_id}")
-                                       if camera.enabled else None),
-                         preview_format=mode, signaling_path="/ws" if mode == "webrtc" else None,
+                         preview_path=f"/mjpeg/source{camera.source_id}" if camera.enabled else None,
                          status=public_status(session, camera.camera_id))
 
     @app.get("/api/health", response_model=HealthOut)

@@ -27,6 +27,11 @@ class FrameStore:
             )
             return self.sequence, self.jpeg, self.closed
 
+    def latest(self):
+        """Non-blocking read for WebSocket senders that only need the newest JPEG."""
+        with self.condition:
+            return self.sequence, self.jpeg
+
     def clear(self):
         """Invalidate a stale JPEG without closing an HTTP stream during retry."""
         with self.condition:
