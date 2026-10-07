@@ -15,9 +15,8 @@
 
 preview JSON과 backend `/api/*`는 서로 다른 계약이다. preview producer는 `preview.py`, consumer는 `ingest.py`, 외부 응답 schema는 `schemas.py`에 있다. 배포한 Browser는 40225의 `/api/*` GET 프록시로 Backend에 접근한다. `preview_path`도 같은 origin의 상대 경로이며 backend가 영상을 relay하지 않는다.
 
-기본 영상 계약은 WebRTC이며 CameraOut에 `preview_format`, `signaling_path`, `metadata_path`가 있다.
-`PREVIEW_MODE`는 두 서비스에 동일하게 적용한다. `/ws`는 Preview가 소유하고 Backend는 기존
-JSON snapshot을 polling한다. WebRTC용 네트워크 옵션과 browser 계약은 [실시간 Preview](../preview-realtime.md)다.
+CameraOut의 `preview_path`는 `/mjpeg/sourceN`, `metadata_path`는 `/ws`다. `/ws`(여러 카메라 JPEG·metadata)는
+Preview가 소유하고 Backend는 기존 JSON snapshot을 polling한다. browser 계약은 [실시간 Preview](../preview-realtime.md)다.
 
 API/DB 수정 전 backend README의 “저장 정책”을 확인한다. track 식별 범위와 문자열 표현, bbox 보관 위치, polling 관찰의 한계, timestamp 의미를 단순화하지 않는다. 삭제된 YAML 카메라와 기존 track 참조 처리도 “YAML과 DB”의 정책을 따른다. Schema 변경에는 기존 데이터용 migration 계획이 필요하다.
 

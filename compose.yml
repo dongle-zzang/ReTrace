@@ -20,8 +20,6 @@ services:
       WEB_PORT: "40225"
       FRONTEND_DIST_DIR: "${FRONTEND_DIST_DIR:-/workspace/ReTrace/frontend}"
       PREVIEW_BACKEND_URL: "${PREVIEW_BACKEND_URL:-http://backend:8000}"
-      PREVIEW_MODE: "${PREVIEW_MODE:-webrtc}"
-      NVIDIA_DRIVER_CAPABILITIES: "${NVIDIA_DRIVER_CAPABILITIES:-compute,utility,video}"
 
     volumes:
       - .:/workspace/ReTrace
@@ -62,7 +60,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       CAMERAS_PATH: /app/configs/cameras.yaml
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
-      PREVIEW_MODE: "${PREVIEW_MODE:-webrtc}"
       BACKEND_PREVIEW_URL: "${BACKEND_PREVIEW_URL:-http://retrace:40225}"
     volumes:
       - ./configs/cameras.yaml:/app/configs/cameras.yaml:ro

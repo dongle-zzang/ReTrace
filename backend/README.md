@@ -8,11 +8,11 @@ Backend에는 GPU·GI·PyDS 또는 RTSP 비밀값이 필요하지 않다. Nuxt/R
 - 기존 루트: `preview.py`, `camera_config.py`, `camera_runtime.py`,
   `person_metadata.py`, `configs/`, `tests/`, `tools/`.
 - `preview.py`는 HTTP 서버와 하나의 공유 batch pipeline을 실행한다.
-  기본 영상은 WebRTC, metadata/signaling은 `/ws`이며 HTTP 40225 포트를 유지한다.
-  `PREVIEW_MODE=mjpeg`에서만 기존 `/mjpeg/source{source_id}`와 OSD를 사용한다.
+  MJPEG는 `/mjpeg/source{source_id}`, 여러 카메라의 JPEG·metadata·status는 `/ws` 하나이며
+  40225 포트를 유지한다.
 - `/streams.json`은 배열이다. 각 항목은 `camera_id`, `floor`, `name`, `id`
-  (source_id), `format`, `status` (기존 UI 호환), `url` (WebRTC는 `/ws`, legacy는 상대 MJPEG 경로),
-  `runtime`, `runtime_session`을 포함한다. Backend는 runtime의 state를 사용한다.
+  (source_id), `format`, `status` (기존 UI 호환), `url` (상대 MJPEG 경로),
+  `metadata_path` (`/ws`), `runtime`, `runtime_session`을 포함한다. Backend는 runtime의 state를 사용한다.
 - `CameraRuntime`은 카메라별 상태를 메모리에 보관한다. `MetadataStore`는
   source별 최신 immutable FrameMetadata만 보관한다. PersonMetadata는
   camera_id/timestamp/track_id/class_id/class/confidence/tracker_confidence/bbox이다.
@@ -79,11 +79,10 @@ DB statement/lock/connect timeout과 parameter masking을 적용한다.
 
 Pydantic 응답 schema는 `app/schemas.py`, OpenAPI는 `/openapi.json`에 있다.
 Browser 영상 요청은 기존 retrace:40225로 직접 보낸다. Backend의 preview_path는
-preview origin 기준 상대 경로다. `preview_format=webrtc`는 `/ws`에서 signaling하며
-`signaling_path`, `metadata_path`도 함께 제공한다. `<img src>`는 `preview_format=mjpeg`에서만 사용한다.
-Backend는 영상을 relay하지 않는다. WebRTC schema/네트워크는 [실시간 Preview](../docs/preview-realtime.md)를 따른다.
-`PREVIEW_MODE`는 두 서비스에 동일하게 적용하며 host network 옵션의 poller origin은
-`BACKEND_PREVIEW_URL`로 설정한다.
+preview origin 기준 상대 경로다. `metadata_path`(`/ws`)는 여러 카메라 JPEG와 metadata를
+WebSocket 하나로 받는 경로다. Backend는 영상을 relay하지 않는다. binary 형식은
+[실시간 Preview](../docs/preview-realtime.md)를 따른다. Backend poller의 Preview origin은
+`BACKEND_PREVIEW_URL`(기본 `http://retrace:40225`)이다.
 배포한 CSR 프론트는 40225에서 정적 제공하며 API도 같은 origin의 `/api/*`로 호출한다.
 Preview HTTP request thread가 내부 Backend GET으로 전달하므로 브라우저에 8000 주소를
 지정할 필요 없다. 업로드·적용 절차는 [프론트 배포 안내](../docs/agent/frontend-deployment.md)를 따른다.
@@ -135,8 +134,8 @@ Nuxt 서버 측 호출에는 브라우저 CORS가 적용되지 않지만 네트�
 
 설정 후 `docker compose up -d --build --no-deps backend`로 Backend만 재생성한다.
 Frontend service, pipeline, 모델/tracker 또는 DB schema 변경은 필요 없다.
-기본 WebRTC는 Preview origin의 `/ws`를 사용한다. legacy MJPEG에서만 `preview_path`를
-`<img src>`로 표시할 수 있다. Preview에는 CORS 헤더가 없으므로 fetch나
+MJPEG는 Preview origin의 상대 `preview_path`를 기존 40225 주소에 붙여
+`<img src>`로 표시할 수 있다. 6대를 넘게 표시하려면 `/ws`를 사용한다. Preview에는 CORS 헤더가 없으므로 fetch나
 canvas 픽셀 읽기가 필요해지면 별도로 검토한다.
 
 ## CPU 테스트

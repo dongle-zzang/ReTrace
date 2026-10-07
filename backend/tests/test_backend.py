@@ -72,16 +72,9 @@ def test_health_list_detail_status_summary_and_404(service):
     assert len(cameras) == 3
     first = client.get("/api/cameras/first").json()
     assert first["floor"] == "B1"
-    assert first["preview_path"] == "/ws"
-    assert first["preview_format"] == "webrtc"
-    assert first["signaling_path"] == first["metadata_path"] == "/ws"
-    from dataclasses import replace
-    original_config = app.state.config
-    app.state.config = replace(original_config, preview_mode="mjpeg")
-    legacy = client.get("/api/cameras/first").json()
-    assert legacy["preview_path"] == "/mjpeg/source0"
-    assert legacy["preview_format"] == "mjpeg" and legacy["signaling_path"] is None
-    app.state.config = original_config
+    assert first["preview_path"] == "/mjpeg/source0"
+    assert first["metadata_path"] == "/ws"
+    assert "preview_format" not in first and "signaling_path" not in first
     assert first["status"]["state"] == "online"
     assert client.get("/api/cameras/second").json()["source_id"] == 1
     disabled = client.get("/api/cameras/disabled").json()

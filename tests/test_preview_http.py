@@ -54,8 +54,7 @@ class PreviewHttpTests(unittest.TestCase):
                 with urlopen(base + '/_nuxt/app.js?v=1', timeout=2) as response:
                     self.assertIn('javascript', response.headers['Content-Type'])
                     self.assertIn(b'frontend', response.read())
-                for path, filename in (('/diagnostics', 'index.html'), ('/preview.js', 'preview.js'),
-                                       ('/webrtc.js', 'webrtc.js')):
+                for path, filename in (('/diagnostics', 'index.html'), ('/preview.js', 'preview.js')):
                     with urlopen(base + path, timeout=2) as response:
                         self.assertEqual(response.read(), (ROOT / 'web' / filename).read_bytes())
                 with urlopen(Request(base + '/', method='HEAD'), timeout=2) as response:
@@ -120,7 +119,12 @@ class PreviewHttpTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 502)
             self.assertNotIn(b'127.0.0.1', caught.exception.read())
             caught.exception.close()
-            with urlopen(base + '/', timeout=2) as response:
+            for path in ('/', '/index.html'):
+                with self.subTest(path=path), self.assertRaises(HTTPError) as caught:
+                    urlopen(base + path, timeout=2)
+                self.assertEqual(caught.exception.code, 404)
+                caught.exception.close()
+            with urlopen(base + '/diagnostics', timeout=2) as response:
                 self.assertEqual(response.read(), (ROOT / 'web' / 'index.html').read_bytes())
         finally:
             server.shutdown()
@@ -152,8 +156,7 @@ class PreviewHttpTests(unittest.TestCase):
         thread.start()
         base = f"http://127.0.0.1:{server.server_port}"
         try:
-            for path, filename, content_type in (("/", "index.html", "text/html"),
-                                                 ("/index.html", "index.html", "text/html"),
+            for path, filename, content_type in (("/diagnostics", "index.html", "text/html"),
                                                  ("/preview.js?v=1", "preview.js", "text/javascript")):
                 with urlopen(base + path, timeout=2) as response:
                     self.assertEqual(response.read(), (ROOT / "web" / filename).read_bytes())
@@ -182,7 +185,8 @@ class PreviewHttpTests(unittest.TestCase):
             errors = io.StringIO()
             with patch("sys.stderr", errors):
                 for path in ("/style.css", "/private.txt", "/.env", "/preview.py",
-                             "/../README.md", "/web/index.html", "/mjpeg/source99"):
+                             "/../README.md", "/web/index.html", "/mjpeg/source99",
+                             "/", "/index.html", "/webrtc.js"):
                     with self.assertRaises(HTTPError) as caught:
                         urlopen(base + path, timeout=2)
                     self.assertEqual(caught.exception.code, 404)

@@ -15,7 +15,6 @@ class Settings:
     stale_after: float = 10.0
     track_retention_days: int = 7
     cors_origins: tuple[str, ...] = ()
-    preview_mode: str = "webrtc"
 
     @staticmethod
     def cors_origins_from_env():
@@ -31,15 +30,11 @@ class Settings:
         password = os.environ.get("POSTGRES_PASSWORD")
         if not password:
             raise RuntimeError("Backend database credentials are required")
-        mode = os.environ.get("PREVIEW_MODE", "webrtc")
-        if mode not in ("webrtc", "mjpeg"):
-            raise RuntimeError("Invalid PREVIEW_MODE")
         return cls(
             URL.create("postgresql+psycopg", username=os.environ.get("POSTGRES_USER", "retrace"),
                        password=password, host="postgres", port=5432,
                        database=os.environ.get("POSTGRES_DB", "retrace")),
             Path(os.environ.get("CAMERAS_PATH", "/app/configs/cameras.yaml")),
             preview_url=os.environ.get("BACKEND_PREVIEW_URL", "http://retrace:40225"),
-            preview_mode=mode,
             cors_origins=cls.cors_origins_from_env(),
         )

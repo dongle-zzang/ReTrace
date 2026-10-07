@@ -4,18 +4,17 @@
 
 | 경로 | 처리 |
 | --- | --- |
-| `/`, 프론트 경로, JS/CSS/이미지 | 업로드한 CSR 정적 빌드 |
+| `/`, 프론트 경로, JS/CSS/이미지 | 업로드한 CSR 정적 빌드 (빌드가 없으면 404) |
 | `/api/*` | Python HTTP request thread → 내부 Backend GET API |
-| `/ws` | WebSocket metadata/SDP/ICE; 영상은 WebRTC peer |
-| `/diagnostics`, `/webrtc.js` | 진단 페이지와 client helper |
-| `/mjpeg/sourceN` | `PREVIEW_MODE=mjpeg`에서만 사용 |
+| `/ws` | WebSocket 하나로 여러 카메라의 JPEG(binary)·metadata·status |
+| `/diagnostics`, `/preview.js` | 진단 페이지 |
+| `/mjpeg/sourceN` | 카메라별 MJPEG (화면당 6대 이하) |
 | `/streams.json`, `/metadata.json` | 기존 Preview JSON |
 
 이 경로들은 프론트 라우터보다 우선하며, 프론트에서 별도 Backend/Preview 주소를
-지정하지 않는다. `fetch('/api/cameras')`의 `preview_format`을 확인한다. 기본 WebRTC는
-`signaling_path=/ws`로 협상하고 `<video>`와 SVG/Canvas overlay를 사용한다.
-`<img src=preview_path>`는 MJPEG 진단 모드에만 사용한다.
-제품 build도 이 계약에 맞춰 갱신해야 한다. 연동 방법은 [실시간 Preview](../preview-realtime.md)를 따른다. 같은 origin이므로 배포된 프론트에 별도 CORS 설정은 필요 없다.
+지정하지 않는다. 카메라 한두 대는 `<img src=preview_path>`로 표시할 수 있다. 브라우저는 같은 origin에
+HTTP 연결을 6개까지만 열므로, 여러 카메라 화면은 `metadata_path`(`/ws`)에서 `subscribe(video: true)`로
+JPEG를 받아 표시한다. 여러 카메라를 쓰는 제품 build는 이 방식으로 갱신해야 한다. 연동 방법은 [실시간 Preview](../preview-realtime.md)를 따른다. 같은 origin이므로 배포된 프론트에 별도 CORS 설정은 필요 없다.
 개발 PC의 dev server가 직접 Backend에 접근하는 경우에는 기존 CORS 안내를 따른다.
 
 ## 개발 PC에서 빌드
@@ -73,7 +72,7 @@ docker compose up -d --no-deps --force-recreate retrace
 이후 프론트 파일을 갱신할 때는 동일 폴더의 산출물을 교체하고 브라우저를 새로고침한다.
 빌드 파일은 매 요청에서 읽으므로 파일 교체만으로 retrace를 재시작할 필요는 없다.
 최초 JS/asset 교체가 끝난 뒤 index.html을 교체하면 업로드 중 잘못된 asset 참조를 줄일 수 있다.
-프론트 빌드가 없으면 기존 영상 확인 페이지가 보인다. 이것은 제품 프론트 배포 완료를 뜻하지 않는다.
+프론트 빌드가 없으면 `/`는 404다. 영상 확인 페이지는 빌드 유무와 관계없이 `/diagnostics`에서만 제공한다.
 
 ## 확인
 

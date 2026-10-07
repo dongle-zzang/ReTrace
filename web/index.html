@@ -10,33 +10,21 @@
     h1 { margin: 0 0 8px; font-size: 26px; }
     p { color: #bcc9d8; }
     #output-mode { display: inline-block; margin: 8px 0; padding: 8px 14px; border-radius: 8px; background: #254367; color: #fff; font-weight: 700; }
-    #streams { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 20px; }
+    #streams { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
     article { background: #1a2534; border-radius: 12px; overflow: hidden; }
-    header { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
-    h2 { margin: 0; font-size: 18px; }
+    header { padding: 12px 16px; }
+    h2 { margin: 0; font-size: 16px; }
     img.mjpeg { display: block; width: 100%; aspect-ratio: 16/9; background: #000; object-fit: contain; }
-    .video-frame { position: relative; aspect-ratio: 16/9; background: #000; }
-    .video-frame video, .video-frame svg { position: absolute; width: 100%; height: 100%; }
-    .video-frame video { object-fit: contain; }
-    .video-frame svg { pointer-events: none; }
-    .status { margin: 12px 16px; min-height: 24px; }
-    button { padding: 7px 12px; border: 0; border-radius: 6px; cursor: pointer; }
-    nav { display: flex; gap: 12px; margin: 16px 0; }
-    button:disabled { opacity: .4; cursor: default; }
+    .status { margin: 10px 16px; min-height: 24px; font-size: 14px; }
   </style>
-  <script defer src="/webrtc.js"></script>
   <script defer src="/preview.js"></script>
 </head>
 <body>
   <main>
     <h1>ReTrace CCTV 미리보기</h1>
-    <p id="output-mode" role="status" aria-live="polite">영상 연결 중…</p>
-    <p>WebRTC 영상과 WebSocket 탐지 정보를 SVG overlay로 표시합니다. MJPEG는 선택 가능한 진단 모드입니다.</p>
-    <p id="page-status">입력 목록을 불러오는 중…</p>
-    <nav aria-label="카메라 페이지">
-      <button id="previous-page" disabled>이전 카메라</button>
-      <button id="next-page" disabled>다음 카메라</button>
-    </nav>
+    <p id="output-mode">현재 출력: MJPEG · WebSocket 1개</p>
+    <p>모든 카메라의 JPEG(서버 OSD 바운딩박스 포함)와 상태를 WebSocket 하나로 받아 표시합니다.</p>
+    <p id="page-status" role="status" aria-live="polite">입력 목록을 불러오는 중…</p>
     <section id="streams" aria-label="CCTV 영상"></section>
   </main>
 </body>
