@@ -4,6 +4,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* The repo root .gitignore ignores .ts files (MPEG-TS recordings), which hides the .ts
+   sources under app/ (shadcn variant classes) from Tailwind's automatic source detection. */
+@source "../../";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -81,6 +85,12 @@
 }
 
 :root {
+  /* Height of the sticky AppNav (pt-3 + h-14); sticky page bars sit below it. */
+  --app-nav-height: 4.25rem;
+  /* Liquid Ether palette; the accent colors below are derived from it. */
+  --ether-teal: #5bb7b1;
+  --ether-blue: #587fa3;
+  --ether-violet: #857bb0;
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -122,8 +132,8 @@
   --card-foreground: oklch(0.97 0.004 264);
   --popover: oklch(0.21 0.015 264);
   --popover-foreground: oklch(0.97 0.004 264);
-  --primary: oklch(0.86 0.13 200);
-  --primary-foreground: oklch(0.2 0.03 230);
+  --primary: oklch(0.8 0.085 185);
+  --primary-foreground: oklch(0.2 0.03 220);
   --secondary: oklch(0.26 0.016 264);
   --secondary-foreground: oklch(0.97 0.004 264);
   --muted: oklch(0.25 0.014 264);
@@ -133,7 +143,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 9%);
   --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.78 0.12 200);
+  --ring: oklch(0.72 0.08 190);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -146,7 +156,7 @@
   --sidebar-accent: oklch(0.27 0.018 264);
   --sidebar-accent-foreground: oklch(0.97 0.004 264);
   --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.78 0.12 200);
+  --sidebar-ring: oklch(0.72 0.08 190);
 }
 
 @layer base {
@@ -157,6 +167,10 @@
     color-scheme: dark;
     /* Reserve the scrollbar's width so the layout doesn't jump when the page becomes scrollable. */
     scrollbar-gutter: stable;
+  }
+  /* The reserved gutter would otherwise leave an empty strip beside a fullscreen video. */
+  html:has(:fullscreen) {
+    scrollbar-gutter: auto;
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
@@ -183,4 +197,29 @@
 .glass-text-online {
   background-image: linear-gradient(175deg, rgb(240 253 255 / 0.95) 0%, rgb(165 243 252 / 0.6) 45%, rgb(56 189 248 / 0.22) 100%);
   filter: drop-shadow(0 10px 40px rgb(103 232 249 / 0.18));
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Neutral glassmorphism: no tint, just frost, a light edge and a soft shadow. */
+@utility glass-panel {
+  background-color: rgb(255 255 255 / 0.045);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 12px 32px -16px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+@utility glass-active {
+  background-color: rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 6px 18px -8px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
 }

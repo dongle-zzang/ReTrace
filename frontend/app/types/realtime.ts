@@ -26,6 +26,15 @@ export type RealtimeMessage =
       stale: true
     }
   | {
+      // Producer extensions; delivered only for subscribed cameras. See lib/parking.ts for parking data.
+      version: 1
+      type: 'parking_status' | 'event' | 'track_update'
+      cameraId: string
+      timestamp: string
+      data: unknown
+      [key: string]: unknown
+    }
+  | {
       version: 1
       type: 'camera_status'
       cameraId: string

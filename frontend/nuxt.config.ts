@@ -68,6 +68,8 @@ export default defineNuxtConfig({
     public: {
       // Per-camera JPEG rate requested over /ws (1-30). Override with NUXT_PUBLIC_PREVIEW_VIDEO_FPS.
       previewVideoFps: 10,
+      // Parking data source: 'http' (server /api/parking/spaces, /zones, /status) or 'mock' (browser-local). NUXT_PUBLIC_PARKING_API.
+      parkingApi: 'http',
     },
   },
   nitro: {

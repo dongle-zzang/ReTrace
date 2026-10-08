@@ -19,7 +19,7 @@ export function useCameras() {
       cameras.value = response
       error.value = null
     } catch {
-      error.value = '카메라 목록을 불러오지 못했습니다. Backend 연결을 확인하세요.'
+      error.value = "Couldn't load the camera list. Check the backend connection."
     } finally {
       refreshing.value = false
       loading.value = false

@@ -29,5 +29,15 @@
 
 ## 빌드는 서버 `frontend-dist/`, 소스는 `frontend/`
 
-- 이유: 예전에는 서버의 `frontend/`가 Git 소스 폴더이면서 빌드 업로드 폴더(`FRONTEND_DIST_DIR`)였다. 빌드를 올리면 소스가 `git status`에서 삭제로 보였고(커밋하면 원격 소스가 지워짐), 소스를 복원하면 `/README.md` 같은 소스가 40225에서 열람됐다. 서버 커밋 `2a9254e`(2026-10-07)부터 빌드는 Git에서 무시되는 `frontend-dist/`에서 제공되고, 루트 `.gitignore`는 더 이상 `frontend/`를 무시하지 않는다(새 파일에 `git add -f` 불필요).
+- 이유: 예전에는 서버의 `frontend/`가 Git 소스 폴더이면서 빌드 업로드 폴더(`FRONTEND_DIST_DIR`)였다. 빌드를 올리면 소스가 `git status`에서 삭제로 보였고(커밋하면 원격 소스가 지워짐), 소스를 복원하면 `/README.md` 같은 소스가 40225에서 열람됐다. 서버 커밋 `2a9254e`(2026-10-07)부터 빌드는 Git에서 무시되는 `frontend-dist/`에서 제공되고, 루트 `.gitignore`는 더 이상 `frontend/`를 무시하지 않는다.
 - 변경 시 확인: 배포 안내에 `frontend/`로 업로드하라는 문구가 다시 생기지 않게 한다. 업로드 후 `/`가 200, `/README.md`가 404인지 본다.
+
+## `frontend/.gitignore`의 `!*.ts`를 지우지 않는다
+
+- 이유: 루트 `.gitignore`(서버 소유)가 MPEG-TS 녹화 파일 때문에 `*.ts`를 무시한다. 그래서 `frontend/`에 새로 만든 TypeScript 파일이 `git status`에 나타나지 않고 커밋에서 조용히 빠졌다(기존 `.ts`는 이미 추적 중이라 드러나지 않았음). 2026-10-08 주차면 작업에서 발견해 `frontend/.gitignore`에 `!*.ts`를 두었다.
+- 변경 시 확인: 새 `.ts` 파일을 만든 뒤 `git status --short -uall`에 보이는지, `git check-ignore -v`로 무시 규칙이 걸리지 않는지 본다.
+- 같은 이유로 Tailwind 자동 소스 탐지도 `.ts`를 건너뛴다(중첩 `.gitignore`의 `!*.ts`로는 풀리지 않음). shadcn variant 클래스(`components/ui/*/index.ts`의 `[&_svg...]:size-4`, `size-8` 등)가 CSS에서 빠져 버튼·입력창 아이콘이 24px로 커지고 버튼 모양이 깨졌다. 그래서 `main.css`에 `@source "../../";`를 둔다. 확인: 빌드 CSS에 `svg:not`이 여러 개 있는지.
+
+## 영상 위 편집 overlay에는 컨트롤을 겹치지 않는다
+
+- 이유: 주차면 편집 툴바를 영상 위에 띄웠더니 영상 위쪽 가장자리 클릭이 버튼에 먹혀 꼭짓점이 빠졌다. 편집 화면은 툴바를 영상 위 별도 줄에 두고 그 wrapper를 전체 화면으로 만든다(`useVideoStage`의 `fullscreenElement`).

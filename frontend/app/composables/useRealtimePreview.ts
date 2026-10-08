@@ -22,7 +22,14 @@ export function useRealtimePreview(videoFps: unknown) {
   const connection = ref<ConnectionState>('connecting')
   const statuses = shallowRef<Record<string, RealtimeCameraStatus>>({})
   const pendingStatuses = new Map<string, RealtimeCameraStatus>()
+  const messageListeners = new Set<(message: RealtimeMessage) => void>()
   let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Other features (parking occupancy) read text messages from this same socket. */
+  function onMessage(listener: (message: RealtimeMessage) => void) {
+    messageListeners.add(listener)
+    return () => void messageListeners.delete(listener)
+  }
 
   function flushStatuses() {
     flushTimer = null
@@ -39,6 +46,7 @@ export function useRealtimePreview(videoFps: unknown) {
   }
 
   function handleMessage(message: RealtimeMessage) {
+    for (const listener of messageListeners) listener(message)
     if (message.type !== 'camera_status') return
     if (typeof message.cameraId !== 'string' || !message.status || typeof message.status !== 'object') return
     pendingStatuses.set(message.cameraId, message.status)
@@ -76,5 +84,5 @@ export function useRealtimePreview(videoFps: unknown) {
     close()
   })
 
-  return { client, connection, statuses, videoFps: fps }
+  return { client, connection, statuses, videoFps: fps, onMessage }
 }
