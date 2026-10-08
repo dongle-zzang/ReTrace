@@ -60,6 +60,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       CAMERAS_PATH: /app/configs/cameras.yaml
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-}
+      COLOR_PARKING_INTERVAL: ${COLOR_PARKING_INTERVAL:-1}
+      COLOR_PARKING_STALE_AFTER: ${COLOR_PARKING_STALE_AFTER:-5}
+      PARKING_POLICY: '${PARKING_POLICY:-}'
       BACKEND_PREVIEW_URL: "${BACKEND_PREVIEW_URL:-http://retrace:40225}"
     volumes:
       - ./configs/cameras.yaml:/app/configs/cameras.yaml:ro

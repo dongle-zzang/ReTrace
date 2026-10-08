@@ -28,13 +28,16 @@ from app import PGIE_ID, create_source_bin, prepare_pgie_config
 from pgie_cache import configure_pgie
 from camera_config import CameraConfigError, load_cameras
 from camera_runtime import CameraRuntime, CameraRuntimeManager
-from person_metadata import FrameMetadata, MetadataStore, person_from_object, utc_timestamp
+from person_metadata import FrameMetadata, MetadataStore, person_from_object, vehicle_from_object, utc_timestamp
+from vehicle_detection import (prepare_vehicle_detector, add_vehicle_rois, prepare_vehicle_tracks,
+                               VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS)
 from preview_diagnostics import InferenceDiagnostics, log_safe_traceback, log_settings
 from startup_timing import StartupTiming, startup_origin, source_observer, bus_observer
 from preview_timing import FrameTiming
 from preview_mjpeg import FrameStore, serve_mjpeg
 from preview_web import FrontendFiles, BackendAPIProxy
 from preview_socket import RealtimeHub
+from parking_relay import ParkingRelay
 from rtsp_diagnostics import classify_bus_error, source_failure_detail
 
 # app.py sets its own debug default at import; retain preview's requested level.
@@ -142,6 +145,24 @@ class PreviewHandler(BaseHTTPRequestHandler):
             else:
                 proxy.serve(self)
             return
+        if path.startswith('/snapshots/') and path.endswith('.jpg'):
+            camera_id = path[len('/snapshots/'):-4]
+            stream = next((s for s in self.server.stream_snapshot() if s['camera_id'] == camera_id), None)
+            store = self.server.mjpeg_streams.get(stream['url']) if stream else None
+            sequence, jpeg, age = store.snapshot() if store else (0, None, 0)
+            if jpeg is None or stream['runtime']['state'] not in ('online', 'degraded'):
+                self.send_error(503)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(jpeg)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Frame-Age', str(age))
+            self.send_header('X-Frame-Identity', f"{stream['runtime_session']}:{stream['runtime']['generation']}:{sequence}")
+            self.end_headers()
+            if getattr(self, 'command', 'GET') != 'HEAD':
+                self.wfile.write(jpeg)
+            return
         # Without an uploaded build, "/" stays 404; the check page is only at /diagnostics.
         assets = {"/preview.js": ("preview.js", "text/javascript; charset=utf-8"),
                   "/diagnostics": ("index.html", "text/html; charset=utf-8")}
@@ -195,6 +216,16 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         self.do_GET()
+
+    def do_POST(self):
+        proxy = getattr(self.server, 'backend_api_proxy', None)
+        if proxy is None:
+            self.send_error(503)
+        else:
+            proxy.serve(self)
+
+    do_PATCH = do_POST
+    do_DELETE = do_POST
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
@@ -363,6 +394,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         pgie_config, person_class_id):
     """One mux/PGIE/tracker/demux; source bins own native RTSP reconnection."""
     startup = getattr(args, "startup_timing", None)
+    vehicle_detector = getattr(args, "vehicle_detector", None)
     if startup is not None:
         startup.start_gpu_sampling()
     cameras_by_source = manager.cameras_by_slot
@@ -387,6 +419,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
     timings = {}
     inference_stats = {index: InferenceDiagnostics() for index in cameras_by_source} if args.diagnostics else {}
     metadata_samples = {}  # At most five people from the latest nonempty frame per report.
+    primary_inference_by_frame = {}
 
     def camera_for_frame(frame):
         return manager.camera_for_frame(int(frame.source_id), int(frame.pad_index))
@@ -579,6 +612,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                     continue
                 timestamp = utc_timestamp()
                 records = []
+                vehicles = []
                 person_count = 0
                 current_ids = set()
                 object_list = frame.obj_meta_list
@@ -609,6 +643,13 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         text.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
                         text.set_bg_clr = 1
                         text.text_bg_clr.set(0.0, 0.0, 0.0, 0.7)
+                    elif (vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras
+                          and obj.unique_component_id == VEHICLE_GIE_ID and obj.class_id == VEHICLE_TRACKER_CLASS):
+                        vehicles.append(vehicle_from_object(camera.camera_id, timestamp, obj, vehicle_detector.car_class_id))
+                        obj.rect_params.border_width = 3
+                        obj.rect_params.border_color.set(1.0, 0.65, 0.0, 1.0)
+                        # OSD shows the class only; track_id stays in metadata for occupancy.
+                        obj.text_params.display_text = "Vehicle"
                     else:
                         pyds.nvds_remove_obj_meta_from_frame(frame, obj)
                     object_list = next_object
@@ -616,8 +657,12 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                 detached = FrameMetadata(
                     camera.source_id, camera.camera_id, int(frame.frame_num), timestamp,
                     None if pts == Gst.CLOCK_TIME_NONE else pts,
-                    bool(frame.bInferDone), tuple(records), generation=generation, pipeline_source_id=int(frame.source_id),
+                    primary_inference_by_frame.pop((index, int(frame.frame_num), pts), bool(frame.bInferDone)),
+                    tuple(records), generation=generation, pipeline_source_id=int(frame.source_id),
                     bbox_width=1920, bbox_height=1080,
+                    vehicles=tuple(vehicles),
+                    vehicle_detection_enabled=vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras,
+                    vehicle_inference_done=vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras and bool(frame.bInferDone),
                 )
                 manager.publish(index, pts, lambda: metadata_store.put(detached), generation=generation)
                 with counts_lock:
@@ -718,6 +763,31 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
         tracker = make_tracker()
         demux = make_element("nvstreamdemux", "stream-demuxer")
         shared = (mux, pgie, tracker, demux)
+        if vehicle_detector is not None:
+            vehicle = make_element("nvinfer", "vehicle-inference")
+            configure_pgie(vehicle, vehicle_detector.config_path, len(vehicle_detector.cameras))
+
+            def vehicle_probe(_pad, info, prepare):
+                try:
+                    buffer = info.get_buffer()
+                    if buffer is not None:
+                        batch = pyds.gst_buffer_get_nvds_batch_meta(hash(buffer))
+                        if batch is None:
+                            raise ValueError("Missing vehicle batch")
+                        original = prepare(batch, vehicle_detector, camera_for_frame, pyds)
+                        if original:
+                            primary_inference_by_frame.update(original)
+                            # Bound bookkeeping even if a native error stops output.
+                            while len(primary_inference_by_frame) > manager.batch_size * 32:
+                                primary_inference_by_frame.pop(next(iter(primary_inference_by_frame)), None)
+                except Exception:
+                    fail("Vehicle metadata preparation failed; details hidden")
+                return Gst.PadProbeReturn.OK
+
+            vehicle.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, vehicle_probe, add_vehicle_rois)
+            vehicle.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, vehicle_probe, prepare_vehicle_tracks)
+            add_timing_probe(vehicle.get_static_pad("src"), "vehicle-batch", "all")
+            shared = (mux, pgie, vehicle, tracker, demux)
         for element in shared:
             pipeline.add(element)
         for left, right in zip(shared, shared[1:]):
@@ -888,6 +958,16 @@ def run(args, metadata_store=None, runtime_statuses=None):
     if startup is not None:
         startup.mark("pgie_config_start")
     pgie_config, person_class_id = prepare_pgie_config(str(cache), len(args.cameras))
+    try:
+        args.vehicle_detector = prepare_vehicle_detector(args.cameras, cache)
+        if args.vehicle_detector is not None:
+            # Preserve class-specific NvDCF matching without changing its tuning.
+            import re
+            if not re.search(r"checkClassMatch:\s*1\b", TRACKER_CONFIG.read_text()):
+                raise ValueError("Vehicle tracking requires NvDCF checkClassMatch=1")
+    except Exception:
+        args.vehicle_detector = None
+        print("Vehicle detector unavailable; configuration/model details hidden; parking remains unknown", flush=True)
     if startup is not None:
         startup.mark("pgie_config_ready")
     for camera in args.cameras:
@@ -934,6 +1014,8 @@ def run(args, metadata_store=None, runtime_statuses=None):
     server.metadata_snapshot = metadata_snapshot
     shutdown = threading.Event()
     server.realtime_hub = RealtimeHub(metadata_snapshot, stream_snapshot, stores, shutdown)
+    parking_relay = ParkingRelay(os.environ.get('PREVIEW_BACKEND_URL', 'http://127.0.0.1:8000'),
+                                 server.realtime_hub, shutdown)
     manager = CameraRuntimeManager(args.cameras, runtime_statuses, stores, metadata_store)
     manager.begin()
     result = 1
@@ -947,12 +1029,15 @@ def run(args, metadata_store=None, runtime_statuses=None):
         for signum in (signal.SIGINT, signal.SIGTERM):
             old_handlers[signum] = signal.signal(signum, on_signal)
         http_thread.start()
+        parking_relay.thread.start()
         print(f"Preview HTTP listening on 0.0.0.0:{args.port}; shared camera pipeline", flush=True)
         error = run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                                     pgie_config, person_class_id)
         result = int(error is not None)
     finally:
         shutdown.set()
+        if parking_relay.thread.is_alive():
+            parking_relay.thread.join(timeout=4)
         for store in stores.values():
             store.close()
         if http_thread.is_alive():

@@ -5,8 +5,8 @@
 - `compose.yml`은 GPU `retrace`, CPU `backend`, PostgreSQL 서비스와 DB named volume을 정의한다. retrace는 backend/postgres의 기동에 의존하지 않는다.
 - 루트 Dockerfile은 DeepStream 7.0 기반에 PyDS 1.1.11을 설치하고 Compose와 같은 preview 실행 경로를 사용한다. 소스는 Compose bind mount로 제공하며 루트 이미지에 앱 소스를 COPY하는 방식이 아니다.
 - Backend Dockerfile은 Python 3.12 slim에 앱/공통 카메라 로더를 COPY하고 비-root 사용자, Uvicorn worker 하나로 실행한다. YAML은 read-only mount다.
-- retrace는 컨테이너 내부 40225, backend는 8000을 사용한다. 40225에서 CSR 빌드, MJPEG, `/ws`(JPEG·metadata)를 제공하고 `/api/*` GET을 내부 Backend로 전달한다. Backend 호스트 공개는 기본 loopback이며 retrace 호스트 binding은 ignored override에서 정한다. 별도 reverse proxy 서비스와 CI/CD workflow는 없다.
-- 별도 개발 PC 접근은 private `.env`의 `BACKEND_BIND_IP`로 기존 제한된 인터페이스 하나를 선택한다. 브라우저 API CORS는 `BACKEND_CORS_ORIGINS`로 opt-in한다. 구체적인 설정/재생성 절차는 [backend README](../../backend/README.md#별도-개발-pc에서-접근)를 따른다. 서버 Compose에는 frontend service가 없다.
+- retrace는 컨테이너 내부 40225, backend는 8000을 사용한다. 40225에서 CSR 빌드, MJPEG, `/ws`(JPEG·metadata), `/api/*` 프록시를 제공한다. GET/HEAD와 기본 차단의 주차 CRUD 접근 제어는 [Backend README](../../backend/README.md#preview-주차-crud-프록시)를 따른다. Backend 호스트 공개는 기본 loopback이며 retrace 호스트 binding은 ignored override에서 정한다. 별도 reverse proxy 서비스와 CI/CD workflow는 없다.
+- 별도 개발 PC 접근은 기존 loopback 바인딩을 유지하는 SSH 터널 + Mac Nuxt 개발 프록시를 우선한다. `/api`는 터널의 Backend로 전달하고 Preview `/ws`는 기존 연결을 유지한다. 사설 인터페이스 직접 접근 및 `BACKEND_CORS_ORIGINS`는 별도 선택 사항이다. 환경 변수/접근 절차는 [backend README](../../backend/README.md#별도-개발-pc에서-접근)를 따른다. 서버 Compose에는 frontend service가 없다.
 
 - CSR 산출물은 기본 `frontend-dist/`에 업로드하며 `FRONTEND_DIST_DIR`은 컨테이너 내부 경로다. `PREVIEW_BACKEND_URL`은 내부 Backend origin이다. 빌드가 없으면 `/`는 404이고 `web/`의 영상 확인 페이지는 `/diagnostics`에서만 제공한다. 업로드·최초 컨테이너 재생성·HTTP 확인 절차는 [frontend deployment](frontend-deployment.md)를 따른다. retrace healthcheck와 `tools/check_preview.py`는 `/streams.json`을 사용한다.
 

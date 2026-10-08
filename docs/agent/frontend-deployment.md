@@ -5,7 +5,7 @@
 | 경로 | 처리 |
 | --- | --- |
 | `/`, 프론트 경로, JS/CSS/이미지 | 업로드한 CSR 정적 빌드 (빌드가 없으면 404) |
-| `/api/*` | Python HTTP request thread → 내부 Backend GET API |
+| `/api/*` | Python HTTP request thread → 내부 Backend; GET/HEAD 및 접근 제어를 설정한 주차 CRUD |
 | `/ws` | WebSocket 하나로 여러 카메라의 JPEG(binary)·metadata·status |
 | `/diagnostics`, `/preview.js` | 진단 페이지 |
 | `/mjpeg/sourceN` | 카메라별 MJPEG (화면당 6대 이하) |
@@ -92,5 +92,6 @@ PY
 
 Backend health는 DB/Preview 준비 상태에 따라 기존 API의 503을 반환할 수 있다.
 502는 Backend 연결 실패/timeout 또는 허용되지 않은 redirect/과대 응답이며 원문 예외를 공개하지 않는다.
-현재 Backend는 GET 조회 API만 있으므로 이 프록시도 GET/HEAD만 지원한다.
-POST 등 추가 시 Backend API와 프록시를 함께 변경한다.
+주차 CRUD 경로만 POST/PATCH/DELETE를 전달한다(별도 IP/Origin 허용 목록 없음).
+쓰기 경로·body 제한 및 retrace 적용 절차는
+[Backend README](../../backend/README.md#preview-주차-crud-프록시)를 따른다.

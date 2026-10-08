@@ -14,7 +14,7 @@ SPA index로 fallback하며 누락된 asset, 숨김 경로, 상위 경로 및 �
 
 확인 페이지(`web/preview.js`)는 `/streams.json`으로 목록을 받고 WebSocket 하나로 **모든 카메라**의 JPEG와
 `camera_status`를 받아 `<img>`에 표시한다. 브라우저 origin당 HTTP 연결 6개 제한이 있어 카메라별
-`/mjpeg/sourceN`으로는 6대를 넘길 수 없기 때문이다. JPEG에 서버 OSD bbox/track ID가 그려져 있으므로
+`/mjpeg/sourceN`으로는 6대를 넘길 수 없기 때문이다. JPEG에 서버 OSD bbox(사람은 track ID, 차량은 `Vehicle` 라벨만)가 그려져 있으므로
 별도 overlay는 없다. 카메라마다 decode는 한 장씩만 하고 대기 중 프레임은 최신으로 덮어쓰며, 표시가 바뀐 뒤
 이전 object URL을 해제한다. socket이 닫히면 2초 후 재접속한다. `/diagnostics`는 build가 있어도
 확인 페이지를 제공한다.
@@ -22,7 +22,10 @@ SPA index로 fallback하며 누락된 asset, 숨김 경로, 상위 경로 및 �
 Backend는 기존 Preview JSON을 polling하며 영상을 relay하지 않는다.
 
 배포한 Frontend는 `/api/*`를 같은 40225 origin으로 호출한다. HTTP request thread에서
-`PREVIEW_BACKEND_URL`의 Backend로 GET을 전달하며 현재 API 계약·query·status를 유지한다.
+`PREVIEW_BACKEND_URL`의 Backend로 GET/HEAD를 전달한다. 쓰기는 주차면 CRUD 경로의
+POST/PATCH/DELETE만 허용하며, 40225에 접근 가능한 클라이언트면 별도 IP/Origin 허용 목록 없이 사용한다.
+method/query/JSON body/status를 유지한다. CORS/preflight는 제공하지 않으므로 같은 origin 또는 Nuxt 개발 프록시를 쓴다.
+설정·제한·적용은 [Backend README](../../backend/README.md#preview-주차-crud-프록시)를 따른다.
 Backend 장애/timeout은 502이며 frontend 정적 파일 및 MJPEG 제공과 별도로 처리한다.
 Backend API의 `preview_path`(`/mjpeg/sourceN`)는 단일 카메라 img용이고, 여러 카메라는 `metadata_path`(`/ws`)를 같은 origin에서 사용한다.
 API/metadata 계약은 [backend](backend.md), 제한된 인터페이스 바인딩과
@@ -32,3 +35,5 @@ backend README를 따른다. 실제 주소/credential은 공유 문서에 기록
 Preview HTTP와 API readiness의 CPU 검증 명령은 [testing](testing.md)에 있다.
 
 제품 Nuxt 구현은 [frontend/README.md](../../frontend/README.md)를 따른다.
+
+색상 기반 주차의 logical space/zone API와 `parking.status_updated` 통합 상태는 [색상 주차 프론트 연결](../color-parking.md#프론트엔드-연결)을 따른다. 기존 차량 주차 계약과 다르며 초기/재접속 시 REST status로 최신 점수를 조회한다.

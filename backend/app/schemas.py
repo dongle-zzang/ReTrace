@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -56,6 +56,10 @@ class PersonIn(BaseModel):
     bbox: BBox
 
 
+class VehicleIn(PersonIn):
+    class_id: int = Field(ge=0)
+
+
 class FrameIn(BaseModel):
     camera_id: str
     source_id: int = Field(ge=0)
@@ -65,6 +69,9 @@ class FrameIn(BaseModel):
     bbox_width: int = Field(gt=0)
     bbox_height: int = Field(gt=0)
     persons: list[PersonIn] = Field(max_length=1000)
+    vehicles: list[VehicleIn] = Field(default_factory=list, max_length=1000)
+    vehicle_detection_enabled: bool = False
+    vehicle_inference_done: bool = False
 
     @field_validator("timestamp")
     @classmethod
@@ -103,3 +110,98 @@ class TracksOut(BaseModel):
     bbox_height: int | None
     current: list[LiveTrackOut]
     recent: list[TrackOut]
+
+
+Occupancy = Literal["occupied", "empty", "unknown"]
+
+
+class PolygonPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: float = Field(ge=0, le=1, allow_inf_nan=False, strict=True)
+    y: float = Field(ge=0, le=1, allow_inf_nan=False, strict=True)
+
+
+def validate_polygon(points):
+    """Accept either winding of a simple polygon, including concave polygons."""
+    vertices = [(p.x, p.y) for p in points]
+    if len(set(vertices)) != len(vertices):
+        raise ValueError("Polygon vertices must be distinct; omit the closing vertex")
+
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def on_segment(a, b, p):
+        return (cross(a, b, p) == 0 and min(a[0], b[0]) <= p[0] <= max(a[0], b[0])
+                and min(a[1], b[1]) <= p[1] <= max(a[1], b[1]))
+
+    def intersects(a, b, c, d):
+        ca, cb, cc, cd = cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b)
+        return ((ca * cb < 0 and cc * cd < 0) or on_segment(a, b, c)
+                or on_segment(a, b, d) or on_segment(c, d, a) or on_segment(c, d, b))
+
+    n = len(vertices)
+    area = sum(vertices[i][0] * vertices[(i + 1) % n][1]
+               - vertices[(i + 1) % n][0] * vertices[i][1] for i in range(n))
+    if abs(area) <= 1e-12:
+        raise ValueError("Polygon must have positive area")
+    for i in range(n):
+        a, b = vertices[i], vertices[(i + 1) % n]
+        c = vertices[(i + 2) % n]
+        if on_segment(a, b, c) or on_segment(b, c, a):
+            raise ValueError("Polygon edges must not backtrack")
+        for j in range(i + 1, n):
+            if j == i + 1 or (i == 0 and j == n - 1):
+                continue
+            if intersects(a, b, vertices[j], vertices[(j + 1) % n]):
+                raise ValueError("Polygon must not self-intersect")
+    return points
+
+
+class ParkingSpaceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=128)
+    polygon: list[PolygonPoint] = Field(min_length=3, max_length=64)
+
+    @field_validator("polygon")
+    @classmethod
+    def simple_polygon(cls, value):
+        return validate_polygon(value)
+
+
+class ParkingSpaceUpdate(ParkingSpaceCreate):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    polygon: list[PolygonPoint] | None = Field(default=None, min_length=3, max_length=64)
+
+    @field_validator("name", "polygon", mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value):
+        if value is None:
+            raise ValueError("Null is not an update value")
+        return value
+
+
+class ParkingSpaceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    space_id: str
+    camera_id: str
+    name: str
+    polygon: list[PolygonPoint]
+    occupancy: Occupancy
+    revision: int
+    occupancy_observed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("created_at", "updated_at", "occupancy_observed_at")
+    @classmethod
+    def utc_dates(cls, value):
+        # Match PostgreSQL UTC output when CPU tests use SQLite naive timestamps.
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+class ParkingSummary(BaseModel):
+    camera_id: str
+    total: int
+    occupied: int
+    empty: int
+    unknown: int

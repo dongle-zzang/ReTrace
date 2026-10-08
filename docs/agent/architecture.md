@@ -17,11 +17,13 @@ RTSP → retrace (preview.py, 공유 DeepStream batch pipeline)
 - `pgie_cache.py`: 명시적 TensorRT build identity, `.cache/pgie` 모델 staging 및 config/GObject engine 경로 일치를 담당한다. 캐시 정책과 최초 rebuild/legacy 처리 범위는 [README의 모델 준비](../../README.md)를 따른다.
 - `camera_config.py`: 공통 YAML 검증, 공개 설정 추출, private RTSP resolve. backend는 `load_public_cameras()`만 사용한다.
 - `camera_runtime.py`: CameraRuntimeManager/CameraRuntime의 슬롯 매핑, 프레임 기반 상태, 관측 재연결 세대와 PTS 세대 라우팅. GPU lifecycle은 소유하지 않는다. 상태 설정과 실제 연결 대상인 YAML `enabled`는 역할이 다르다.
-- `person_metadata.py`: PyDS 값의 immutable 복사와 최신 frame 저장.
+- `person_metadata.py`: person/vehicle PyDS 값의 immutable 복사와 최신 frame 저장.
+- `vehicle_detection.py`: opt-in 카메라의 full-frame ROI → 별도 secondary detector → class 분리 후 기존 NvDCF. 모델/config 준비는 기존 engine cache를 별도 namespace로 재사용한다.
+- `parking_relay.py`: Backend 현재 점유/이벤트 API를 GPU callback 밖에서 읽어 기존 Preview `/ws` hub로 전달한다. 구조·정책·모델/검증 한계는 [차량/점유](../parking-occupancy.md)를 따른다.
 - `preview_socket.py`: 같은 HTTP listener의 `/ws`. 다중 camera 구독, normalized bbox와 상태/event, 요청 시 카메라별 최신 JPEG binary 전송. 네트워크는 GPU callback 밖에서 수행한다.
 - `preview_mjpeg.py`: 카메라별 최신 JPEG 저장(FrameStore)과 `/mjpeg/sourceN` multipart 전송.
 - `backend/app/`: GPU를 import하지 않는 API·poller·DB 계층. 서버/API/DB 수정은 [backend](backend.md)를 읽는다.
-- `preview_web.py`: 전용 디렉터리의 CSR 정적 빌드 제공과 같은 40225 origin의 `/api/*` GET 프록시. API 요청은 HTTP request thread에서 처리하며 공유 GPU callback과 연결하지 않는다. Backend polling 계약은 유지한다.
+- `preview_web.py`: 전용 디렉터리의 CSR 정적 빌드 제공과 같은 40225 origin의 `/api/*` 프록시. GET/HEAD를 유지하고 쓰기는 주차 CRUD 경로로만 제한하고 body 크기/framing/timeout을 검사한다(별도 IP/Origin allowlist·CORS 없음). API 요청은 HTTP request thread에서 처리하며 공유 GPU callback과 연결하지 않는다. Backend polling 계약은 유지한다.
 
 ## 경계를 변경할 때
 
@@ -36,3 +38,5 @@ app.py 직접 실행은 tracker/video를 포함하지 않는다. native PyDS 대
 1·2·4·8 source 서버 비교 실험은 [startup timing](startup-timing.md)을 참조한다.
 
 새 장비는 Git 문서만으로 모델/secret/GPU 환경까지 복구할 수 없다. 실행 환경 준비는 [deployment](deployment.md)를 따른다.
+
+색상 주차 worker는 기존 FrameStore의 `/snapshots/{cameraId}.jpg`를 CPU Backend에서 주기적으로 조회·decode한다. RTSP/source/GPU pipeline은 추가하지 않는다. `parking_relay.py`가 새 통합 상태를 기존 `/ws`에 `parking.status_updated`로 전달한다. 상세 경계/좌표/TTL은 [색상 주차](../color-parking.md)를 따른다.

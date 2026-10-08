@@ -1,6 +1,7 @@
 """Latest-JPEG storage and HTTP delivery, adapted from hy_test/rtsp_web.py."""
 
 import threading
+import time
 
 
 class FrameStore:
@@ -8,12 +9,14 @@ class FrameStore:
         self.condition = threading.Condition()
         self.jpeg = None
         self.sequence = 0
+        self.updated = None
         self.closed = False
 
     def put(self, jpeg):
         with self.condition:
             if not self.closed:
                 self.jpeg = jpeg
+                self.updated = time.monotonic()
                 self.sequence += 1
                 observer = getattr(self, "startup_observer", None)
                 if observer is not None:
@@ -31,6 +34,11 @@ class FrameStore:
         """Non-blocking read for WebSocket senders that only need the newest JPEG."""
         with self.condition:
             return self.sequence, self.jpeg
+
+    def snapshot(self):
+        with self.condition:
+            age = time.monotonic() - self.updated if self.updated is not None else float("inf")
+            return self.sequence, self.jpeg if not self.closed else None, age
 
     def clear(self):
         """Invalidate a stale JPEG without closing an HTTP stream during retry."""

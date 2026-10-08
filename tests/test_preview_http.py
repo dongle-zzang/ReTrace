@@ -88,7 +88,9 @@ class PreviewHttpTests(unittest.TestCase):
                 if status == 302:
                     self.send_header('Location', 'http://private.example/')
                 self.end_headers()
-                self.wfile.write(body)
+                if self.command != 'HEAD':
+                    self.wfile.write(body)
+            do_HEAD = do_GET
             def log_message(self, *_args):
                 pass
         backend = ThreadingHTTPServer(('127.0.0.1', 0), BackendHandler)

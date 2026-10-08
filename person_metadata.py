@@ -33,6 +33,18 @@ class PersonMetadata:
 
 
 @dataclass(frozen=True)
+class VehicleMetadata(PersonMetadata):
+    def to_dict(self):
+        return {**asdict(self), "class": "vehicle"}
+
+
+def vehicle_from_object(camera_id, timestamp, obj, class_id):
+    person = person_from_object(camera_id, timestamp, obj)
+    return VehicleMetadata(camera_id, timestamp, person.track_id, class_id, person.confidence,
+                           person.bbox, person.tracker_confidence)
+
+
+@dataclass(frozen=True)
 class FrameMetadata:
     source_id: int
     camera_id: str
@@ -45,10 +57,14 @@ class FrameMetadata:
     pipeline_source_id: int = 0
     bbox_width: int = 1920
     bbox_height: int = 1080
+    vehicles: tuple[VehicleMetadata, ...] = ()
+    vehicle_detection_enabled: bool = False
+    vehicle_inference_done: bool = False
 
     def to_dict(self):
         result = asdict(self)
         result["persons"] = [person.to_dict() for person in self.persons]
+        result["vehicles"] = [vehicle.to_dict() for vehicle in self.vehicles]
         return result
 
 
