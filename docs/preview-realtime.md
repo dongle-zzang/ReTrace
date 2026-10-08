@@ -14,7 +14,7 @@ RTSP → nvurisrcbin(NVMM) → nvstreammux → PeopleNet → NvDCF
           └─ /ws            : 구독한 모든 카메라 JPEG를 binary message로, 연결 1개
 ```
 
-JPEG에는 서버 OSD(bbox, track ID)가 그려져 있다. 같은 정보가 `/ws` detections로도 오므로
+JPEG에는 서버 OSD(bbox, 사람 `Person <track ID>`, 차량 `Vehicle` 라벨만)가 그려져 있다. 차량 track ID는 metadata에만 있다. 같은 정보가 `/ws` detections로도 오므로
 제품 화면은 JPEG만 표시하거나 별도 overlay를 그릴 수 있다.
 
 브라우저는 HTTP/1.1에서 origin당 동시 연결을 6개로 제한한다. `/mjpeg/sourceN`은 응답을 계속 열어 두므로
@@ -97,20 +97,24 @@ JPEG의 서버 OSD를 사용한다.
 
 | type | payload/역할 |
 | --- | --- |
-| `detections` | persons; 빈 배열은 overlay 삭제. 무효화 시 `stale:true` clear도 전송 |
+| `detections` | persons 및 vehicles, vehicleDetectionEnabled/vehicleInferenceDone; 무효화 시 두 배열을 비우는 `stale:true` clear |
 | `camera_status` | `status`에 기존 runtime 필드 포함 |
 | `track_update` | 확장 producer의 `data` (예: personId/Re-ID 결과) |
 | `parking_status` | 확장 producer의 `data` (예: spaces 배열) |
 | `event` | 확장 producer의 `data` (예: kind=line_crossing/zone, eventId) |
 | `hello` / `subscribed` / `error` | connection/control 응답. error는 안전한 code만 제공 |
 
-Re-ID/parking/line/zone 계산은 구현하지 않았다. 향후 producer는
+차량/주차 점유는 Backend poller와 `ParkingRelay`로 연결한다. `parking_status`는 현재 compact
+상태이고 `event.data.kind=parking_occupancy_changed`는 DB transition이다. 초기 연결/재구독은
+cached 현재 상태를 받고, socket 누락 event는 Backend cursor API로 복구한다.
+[차량/점유](parking-occupancy.md)에 payload·설정·정확도/성능 한계가 있다.
+Re-ID/line/zone 계산은 구현하지 않았다. 다른 producer는
 `server.realtime_hub.publish_message(camera_id, type, detached_json_data)`로 확장 메시지를
 발행할 수 있다. 구독별 bounded outbox로 전달하며 네트워크 I/O는 WebSocket thread가 맡는다.
 모든 이벤트를 영구 보관하거나 재생하는 전달 보장은 없다. outbox가 넘치거나 metadata write가
-1초 이상 막히면 connection을 종료한다. durable event 저장은 별도 Backend 정책이 필요하다.
+1초 이상 막히면 connection을 종료한다. 주차 transition만 Backend DB에 기본 7일 저장하며 다른 event의 durable 저장은 별도 정책이 필요하다.
 
-`/metadata.json`의 pixel bbox/snake_case schema와 Backend polling/DB 저장 정책은 그대로다.
+`/metadata.json`의 pixel bbox/snake_case 및 person 계약은 유지하며 차량 필드를 추가했다.
 `/streams.json` 항목은 `format=mjpeg`, `url=/mjpeg/sourceN`, `metadata_path=/ws`를 제공한다.
 Backend `/api/cameras`의 `preview_path`는 `/mjpeg/sourceN`, `metadata_path`는 `/ws`다.
 
@@ -141,3 +145,5 @@ JPEG 1장은 해상도/장면에 따라 수십~수백 KB다. 카메라 수 × vi
 CPU 회귀와 실제 loopback WebSocket(영상 binary 포함)은 `tests/test_preview_realtime.py`,
 진단 페이지 동작은 `tests/preview_web.test.cjs`로 확인한다. 실제 브라우저 렌더링, 21대 동시 표시 대역폭,
 RTSP 장애/복귀와 컨테이너 재시작 후 영상 복귀는 GPU 서버에서 확인해야 한다.
+
+색상 기반 주차는 같은 envelope에 `type:"parking.status_updated"`, `data:{spaces:[...]}`를 추가한다. 카메라 구독과 재연결 cache를 유지하며 기존 차량 기반 `parking_status`와 별개다. score/updatedAt만의 변화는 이벤트가 아니므로 최신 수치는 REST status로 조회한다. 전체 계약은 [색상 주차](color-parking.md#프론트엔드-연결)를 따른다.

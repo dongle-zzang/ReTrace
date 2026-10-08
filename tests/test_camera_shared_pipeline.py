@@ -267,11 +267,14 @@ class SharedTests(unittest.TestCase):
             with self.subTest(count=count):
                 self.construct(count)
 
+    def test_vehicle_option_adds_one_camera_selected_detector_before_same_tracker(self):
+        self.construct(4, vehicle_enabled=True)
+
     def test_diagnostics_installs_mux_and_gpu_stage_probes_without_source_state_waits(self):
         with patch('startup_timing.gpu_memory', return_value=None):
             self.construct(2, diagnostics=True)
 
-    def construct(self, count, diagnostics=False):
+    def construct(self, count, diagnostics=False, vehicle_enabled=False):
         manager = self.manager(count)
         elements, released, links, probes = [], [], [], []
 
@@ -328,6 +331,8 @@ class SharedTests(unittest.TestCase):
                          bus_observer=lambda *args: lambda *args: None,
                          InferenceDiagnostics=lambda: NS(), TRACKER_CONFIG='unused',
                          log_settings=lambda *args: None)
+        from vehicle_detection import add_vehicle_rois, prepare_vehicle_tracks
+        namespace.update(add_vehicle_rois=add_vehicle_rois, prepare_vehicle_tracks=prepare_vehicle_tracks)
         namespace = load_preview({'run_shared_pipeline', 'CameraFrameSink'}, namespace)
         shutdown = threading.Event()
         shutdown.set()
@@ -342,6 +347,8 @@ class SharedTests(unittest.TestCase):
             config = Path(directory) / 'config.txt'
             engine = str(Path(directory) / 'cached.engine')
             config.write_text(f'[property]\nmodel-engine-file={engine}\n')
+            if vehicle_enabled:
+                args.vehicle_detector = NS(cameras=frozenset({'camera_0'}), config_path=str(config), car_class_id=0)
             error = namespace['run_shared_pipeline'](args, manager.metadata_store, manager.stores, manager,
                                                      shutdown, str(config), 0)
         self.assertIsNone(error)
@@ -357,12 +364,18 @@ class SharedTests(unittest.TestCase):
                 self.assertIn(('stream-muxer', f'sink_{index}'), probes)
                 self.assertIn(('stream-demuxer', f'src_{index}'), probes)
         for factory in ('pipeline', 'nvstreammux', 'nvinfer', 'nvtracker', 'nvstreamdemux'):
-            self.assertEqual(sum(e.factory == factory for e in elements), 1)
+            expected = 2 if vehicle_enabled and factory == 'nvinfer' else 1
+            self.assertEqual(sum(e.factory == factory for e in elements), expected)
         mux = next(e for e in elements if e.factory == 'nvstreammux')
         pgie = next(e for e in elements if e.factory == 'nvinfer')
         self.assertEqual(pgie.props['model-engine-file'], engine)
         demux = next(e for e in elements if e.factory == 'nvstreamdemux')
         self.assertEqual((mux.props['batch-size'], pgie.props['batch-size']), (count, count))
+        if vehicle_enabled:
+            vehicle = next(e for e in elements if e.name == 'vehicle-inference')
+            self.assertEqual(vehicle.props['batch-size'], 1)
+            self.assertIn(('vehicle-inference', 'sink'), probes)
+            self.assertIn(('vehicle-inference', 'src'), probes)
         self.assertEqual(mux.props['batched-push-timeout'], 40000)
         self.assertFalse(mux.props['sync-inputs'])
         self.assertEqual(mux.requests, [f'sink_{i}' for i in range(count)])

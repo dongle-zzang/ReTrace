@@ -1,5 +1,6 @@
 """Bounded snapshot polling. No imports of preview.py, GI, PyDS, or GPU code."""
 from datetime import datetime, timedelta, timezone
+import copy
 import math
 import re
 import threading
@@ -10,7 +11,9 @@ from pydantic import ValidationError
 from sqlalchemy import delete, select
 
 from camera_config import load_public_cameras
-from .db import Base, Camera, CameraStatus, PersonTrack
+from .db import Base, Camera, CameraStatus, ParkingSpace, ParkingEvent, PersonTrack
+from .occupancy import OccupancyEvaluator
+from .parking import set_decision
 from .schemas import FrameIn, StatusOut
 
 STATES = {"connecting", "online", "degraded", "offline", "reconnecting"}
@@ -128,11 +131,14 @@ class Poller:
         self.last_success = None
         self.preview_state = "unknown"
         self.last_cleanup = 0.0
+        self.occupancy = OccupancyEvaluator(settings.parking_policy)
 
     def initialize(self):
         Base.metadata.create_all(self.engine)
         with self.sessions.begin() as session:
             sync_cameras(session, self.settings.cameras_path)
+            for space in session.scalars(select(ParkingSpace).with_for_update()):
+                set_decision(session, space, "unknown", "backend_restart", utcnow())
         self.ready = True
 
     def fetch(self, path):
@@ -179,6 +185,7 @@ class Poller:
             except (httpx.HTTPError, ValueError, ValidationError):
                 frames = []
         live_frames = {}
+        trial = copy.deepcopy(self.occupancy)
         try:
             with self.sessions.begin() as session:
                 cameras = list(session.scalars(select(Camera)))
@@ -226,10 +233,35 @@ class Poller:
                             record.last_seen_at = frame.timestamp
                             if person.confidence is not None:
                                 record.max_confidence = max(record.max_confidence or 0.0, person.confidence)
+                spaces = list(session.scalars(select(ParkingSpace).with_for_update()))
+                present_ids = {space.space_id for space in spaces}
+                trial.memory = {key: value for key, value in trial.memory.items() if key in present_ids}
+                by_space_camera = {}
+                for space in spaces:
+                    by_space_camera.setdefault(space.camera_id, []).append(space)
+                for camera_id, camera_spaces in by_space_camera.items():
+                    item = live_frames.get(camera_id)
+                    if item is None:
+                        trial.forget_camera(camera_id, camera_spaces)
+                        for space in camera_spaces:
+                            set_decision(session, space, "unknown", "camera_or_metadata_unavailable", now)
+                        continue
+                    identity, frame = item
+                    lookup = {space.space_id: space for space in camera_spaces}
+                    for decision in trial.observe(frame, identity, camera_spaces):
+                        evidence = {key: value for key, value in decision.evidence.items() if key != "candidates"}
+                        evidence.update(runtime_session=identity, generation=frame.generation,
+                                        frame_number=frame.frame_number)
+                        set_decision(session, lookup[decision.space_id], decision.occupancy,
+                                     decision.reason, decision.timestamp, evidence)
                 if time.monotonic() - self.last_cleanup >= 60:
                     session.execute(delete(PersonTrack).where(PersonTrack.last_seen_at <
                                     now - timedelta(days=self.settings.track_retention_days)))
                     self.last_cleanup = time.monotonic()
+                    session.execute(delete(ParkingEvent).where(ParkingEvent.observed_at <
+                                    now - timedelta(days=self.settings.track_retention_days)))
+            # Publish evaluator state only after the DB transaction commits.
+            self.occupancy = trial
         finally:
             # DB failures cannot keep old bbox visible. Never log exception strings.
             self.live.replace(live_frames)

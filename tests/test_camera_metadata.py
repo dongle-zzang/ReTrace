@@ -172,6 +172,7 @@ class ProbeIntegrationTests(unittest.TestCase):
             'counts_lock': threading.Lock(), 'metadata_samples': {}, 'args': NS(diagnostics=True),
             'server': NS(streams=[{}, {}]), 'stopping': False,
             'pipeline_stop': threading.Event(), 'manager': manager,
+            'vehicle_detector': None, 'primary_inference_by_frame': {},
             'fail': lambda *args: failures.append(args),
         }
         exec(compile(ast.Module(body=functions, type_ignores=[]), 'preview.py', 'exec'), namespace)
@@ -183,6 +184,26 @@ class ProbeIntegrationTests(unittest.TestCase):
         self.assertEqual(store.snapshot()[7].persons, ())
         self.assertEqual(obj.text_params.display_text, 'Person 17')
         self.assertEqual(store.snapshot()[8].generation, 3)
+        from person_metadata import vehicle_from_object
+        from vehicle_detection import VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
+        car = MetadataTests().object()
+        car.unique_component_id, car.class_id = VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
+        car.rect_params.border_color = color
+        car.text_params = NS()
+        frames[1].obj_meta_list.next = NS(data=car, next=None)
+        namespace.update(vehicle_detector=NS(cameras={'camera_1'}, car_class_id=0),
+                         vehicle_from_object=vehicle_from_object, VEHICLE_GIE_ID=VEHICLE_GIE_ID,
+                         VEHICLE_TRACKER_CLASS=VEHICLE_TRACKER_CLASS)
+        namespace['primary_inference_by_frame'][(1, 10, 100)] = True
+        namespace['on_batch'](None, NS(get_buffer=lambda: 100))
+        self.assertEqual(failures, [])
+        self.assertEqual(len(store.snapshot()[8].persons), 1)
+        self.assertEqual(len(store.snapshot()[8].vehicles), 1)
+        self.assertEqual(store.snapshot()[8].vehicles[0].class_id, 0)
+        self.assertEqual(car.text_params.display_text, 'Vehicle')
+        self.assertIsNotNone(store.snapshot()[8].vehicles[0].track_id)
+        self.assertTrue(store.snapshot()[8].vehicle_inference_done)
+        self.assertFalse(store.snapshot()[7].vehicle_detection_enabled)
         frames[1].pad_index = 0
         with self.assertRaises(RuntimeError):
             namespace['camera_for_frame'](frames[1])

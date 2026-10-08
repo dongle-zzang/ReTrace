@@ -32,6 +32,22 @@ def video_frame(camera_id, sequence, jpeg):
     return struct.pack(f">BB{len(name)}sI", VIDEO_FRAME_VERSION, len(name), name, sequence & 0xFFFFFFFF) + jpeg
 
 
+def normalized_objects(objects, width, height):
+    result = []
+    for person in objects:
+        box = person["bbox"]
+        if not all(math.isfinite(box[key]) for key in ("x", "y", "width", "height")):
+            continue
+        left = max(0.0, min(1.0, box["x"] / width))
+        top = max(0.0, min(1.0, box["y"] / height))
+        right = max(left, min(1.0, (box["x"] + box["width"]) / width))
+        bottom = max(top, min(1.0, (box["y"] + box["height"]) / height))
+        result.append({"trackId": None if person["track_id"] is None else str(person["track_id"]),
+                       "bbox": {"x": left, "y": top, "width": right - left, "height": bottom - top},
+                       "confidence": person["confidence"], "trackerConfidence": person["tracker_confidence"]})
+    return result
+
+
 def detection_message(frame, runtime_session):
     width, height = frame["bbox_width"], frame["bbox_height"]
     persons = []
@@ -51,7 +67,10 @@ def detection_message(frame, runtime_session):
             "sourceId": frame["source_id"], "runtimeSession": runtime_session,
             "generation": frame["generation"], "timestamp": frame["timestamp"],
             "frameNumber": frame["frame_number"], "ptsNs": None if frame["pts_ns"] is None else str(frame["pts_ns"]),
-            "inferenceDone": frame["inference_done"], "persons": persons}
+            "inferenceDone": frame["inference_done"], "persons": persons,
+            "vehicles": normalized_objects(frame.get("vehicles", []), width, height),
+            "vehicleDetectionEnabled": frame.get("vehicle_detection_enabled", False),
+            "vehicleInferenceDone": frame.get("vehicle_inference_done", False)}
 
 
 class RealtimeHub:
@@ -61,6 +80,8 @@ class RealtimeHub:
         self.connections = threading.BoundedSemaphore(max_connections)
         self.outbox_lock = threading.Lock()
         self.outboxes = {}
+        self.parking_current = {}
+        self.color_parking_current = {}
         self.allowed_origins = {value.strip() for value in os.environ.get(
             "PREVIEW_WS_ORIGINS", "").split(",") if value.strip()}
 
@@ -70,25 +91,38 @@ class RealtimeHub:
         Delivery is live and bounded, not durable. Slow consumers disconnect.
         Call with detached JSON data, never with native PyDS objects.
         """
-        stream = next((item for item in self.stream_snapshot() if item["camera_id"] == camera_id), None)
-        if stream is None or message_type not in ("track_update", "parking_status", "event"):
-            raise ValueError("Unknown camera or event type")
-        message = {"version": 1, "type": message_type, "cameraId": camera_id,
-                   "sourceId": stream["id"], "runtimeSession": stream["runtime_session"],
-                   "generation": stream["runtime"]["generation"], "timestamp": utc_timestamp(), "data": data}
-        # Validate and detach mutable producer data before crossing threads.
-        serialized = json.dumps(message, allow_nan=False)
-        if len(serialized.encode()) > 65536:
-            raise ValueError("Event message too large")
-        message = json.loads(serialized)
+        self.publish_messages([(camera_id, message_type, data)])
+
+    def publish_messages(self, items):
+        """Publish ordered events and their final snapshots as one cache/queue update."""
+        streams = {item["camera_id"]: item for item in self.stream_snapshot()}
+        messages = []
+        for camera_id, message_type, data in items:
+            stream = streams.get(camera_id)
+            if stream is None or message_type not in ("track_update", "parking_status", "parking.status_updated", "event"):
+                raise ValueError("Unknown camera or event type")
+            message = {"version": 1, "type": message_type, "cameraId": camera_id,
+                       "sourceId": stream["id"], "runtimeSession": stream["runtime_session"],
+                       "generation": stream["runtime"]["generation"], "timestamp": utc_timestamp(), "data": data}
+            # Validate the entire batch before changing caches or any outbox.
+            serialized = json.dumps(message, allow_nan=False)
+            if len(serialized.encode()) > 65536:
+                raise ValueError("Event message too large")
+            messages.append(json.loads(serialized))
         with self.outbox_lock:
-            for outgoing, overflow, subscription in self.outboxes.values():
-                if subscription[0] is not None and camera_id not in subscription[0]:
-                    continue
-                try:
-                    outgoing.put_nowait(message)
-                except Full:
-                    overflow.set()
+            for message in messages:
+                if message["type"] == "parking_status":
+                    self.parking_current[message["cameraId"]] = message
+                elif message["type"] == "parking.status_updated":
+                    self.color_parking_current[message["cameraId"]] = message
+            for message in messages:
+                for outgoing, overflow, subscription in self.outboxes.values():
+                    if subscription[0] is not None and message["cameraId"] not in subscription[0]:
+                        continue
+                    try:
+                        outgoing.put_nowait(message)
+                    except Full:
+                        overflow.set()
 
     def serve(self, handler):
         if handler.command != "GET" or handler.headers.get("Upgrade", "").lower() != "websocket":
@@ -152,6 +186,10 @@ class RealtimeHub:
                 sent_video = {}
                 send({"version": 1, "type": "subscribed", "cameraIds": sorted(subscribed),
                       "video": video, "videoFps": fps if video else None})
+                with self.outbox_lock:
+                    for current in list(self.parking_current.values()) + list(self.color_parking_current.values()):
+                        if current["cameraId"] in subscribed:
+                            send(current)
                 return
             raise ValueError("Unsupported command")
 
@@ -163,6 +201,8 @@ class RealtimeHub:
             upgraded = True
             with self.outbox_lock:
                 self.outboxes[id(outgoing)] = outbox
+                for current in list(self.parking_current.values()) + list(self.color_parking_current.values()):
+                    send(current)
             # Room for a few JPEGs; a client that cannot drain them skips frames.
             handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
             # No addresses/credentials are reflected in hello or errors.
@@ -225,7 +265,8 @@ class RealtimeHub:
                     for camera_id in previous_frames.keys() - current_frames.keys():
                         wire(TextMessage(data=json.dumps({"version": 1, "type": "detections", "cameraId": camera_id,
                                                          "runtimeSession": snapshot["runtime_session"], "timestamp": utc_timestamp(),
-                                                         "persons": [], "stale": True})))
+                                                         "persons": [], "vehicles": [], "vehicleInferenceDone": False,
+                                                         "stale": True})))
                     previous_frames = current_frames
                     for stream in self.stream_snapshot():
                         camera_id = stream["camera_id"]
@@ -241,7 +282,9 @@ class RealtimeHub:
                     last_metadata = now
                 for _ in range(128):
                     try:
-                        wire(TextMessage(data=json.dumps(outgoing.get_nowait())))
+                        message = outgoing.get_nowait()
+                        if subscribed is None or "cameraId" not in message or message["cameraId"] in subscribed:
+                            wire(TextMessage(data=json.dumps(message)))
                     except Empty:
                         break
                 if video_interval is not None:

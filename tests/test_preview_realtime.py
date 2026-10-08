@@ -8,6 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from queue import Queue
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
@@ -34,6 +35,30 @@ def parse_video_frame(data):
 
 
 class MessageTests(unittest.TestCase):
+    def test_parking_batch_updates_reconnect_cache_before_any_event_and_is_atomic(self):
+        streams = [{"camera_id": "first", "id": 0, "runtime_session": "session",
+                    "runtime": {"generation": 1}}]
+        hub = RealtimeHub(lambda: {}, lambda: streams, {}, threading.Event())
+        hub.publish_message('first', 'parking_status', {'spaces': [{'occupancy': 'occupied'}]})
+        observed = []
+        class InspectQueue(Queue):
+            def put_nowait(self, message):
+                observed.append(hub.parking_current['first']['data']['spaces'][0]['occupancy'])
+                super().put_nowait(message)
+        queue = InspectQueue()
+        hub.outboxes[1] = (queue, threading.Event(), [None])
+        batch = [('first', 'event', {'kind': 'parking_occupancy_changed', 'occupancy': 'empty'}),
+                 ('first', 'parking_status', {'spaces': [{'occupancy': 'empty'}]})]
+        hub.publish_messages(batch)
+        self.assertEqual(observed, ['empty', 'empty'])
+        self.assertEqual([queue.get_nowait()['type'] for _ in range(2)], ['event', 'parking_status'])
+        batch[1][2]['spaces'][0]['occupancy'] = 'occupied'
+        self.assertEqual(hub.parking_current['first']['data']['spaces'][0]['occupancy'], 'empty')
+        with self.assertRaises(ValueError):
+            hub.publish_messages(batch + [('first', 'event', {'oversized': 'x' * 65536})])
+        self.assertTrue(queue.empty())
+        self.assertEqual(hub.parking_current['first']['data']['spaces'][0]['occupancy'], 'empty')
+
     def test_normalized_clipped_coordinates_and_lossless_identifiers(self):
         message = detection_message(frame(), "session")
         self.assertEqual(message["persons"][0]["bbox"], {"x": 0, "y": 0.1, "width": 0.2, "height": 0.9})
@@ -175,6 +200,67 @@ class SocketTests(unittest.TestCase):
         self.assertEqual((event["cameraId"], event["data"]["kind"]), ("second", "zone"))
         self.assertEqual(event["generation"], 0)
         self.assertIn("timestamp", event)
+
+    def test_parking_current_replayed_after_subscription_and_event_distinct(self):
+        self.send(type="subscribe", cameraIds=["second"])
+        self.until(lambda: any(m["type"] == "subscribed" for m in self.messages))
+        self.hub.publish_message("first", "parking_status", {"spaces": [{"occupancy": "occupied"}]})
+        self.messages.clear()
+        self.send(type="subscribe", cameraIds=["first"])
+        self.until(lambda: any(m["type"] == "parking_status" for m in self.messages))
+        current = next(m for m in self.messages if m["type"] == "parking_status")
+        self.assertEqual(current["data"]["spaces"][0]["occupancy"], "occupied")
+        self.hub.publish_message("first", "event", {"kind": "parking_occupancy_changed", "event_id": "4"})
+        self.until(lambda: any(m["type"] == "event" for m in self.messages))
+        self.assertEqual(next(m for m in self.messages if m["type"] == "event")["data"]["event_id"], "4")
+
+    def test_color_parking_replayed_with_existing_envelope(self):
+        self.send(type='subscribe', cameraIds=['second'])
+        self.until(lambda: any(m['type'] == 'subscribed' for m in self.messages))
+        self.hub.publish_message('first', 'parking.status_updated', {'spaces': [
+            {'parkingSpaceId': 'p', 'status': 'OCCUPIED', 'conflict': True, 'zones': []}]})
+        self.messages.clear()
+        self.send(type='subscribe', cameraIds=['first'], video=True)
+        self.stores[0].put(b'color-jpeg')
+        self.until(lambda: any(m['type'] == 'parking.status_updated' for m in self.messages) and bool(self.videos))
+        event = next(m for m in self.messages if m['type'] == 'parking.status_updated')
+        self.assertEqual((event['version'], event['cameraId'], event['sourceId']), (1, 'first', 0))
+        self.assertEqual(event['data']['spaces'][0]['status'], 'OCCUPIED')
+        self.assertIn('runtimeSession', event)
+        self.assertIn('timestamp', event)
+
+    def test_parking_batch_order_and_reconnect_with_jpeg_and_people(self):
+        self.send(type='subscribe', cameraIds=['first'], video=True)
+        self.until(lambda: any(m['type'] == 'subscribed' for m in self.messages))
+        self.hub.publish_messages([
+            ('first', 'event', {'kind': 'parking_occupancy_changed', 'event_id': '5', 'occupancy': 'empty'}),
+            ('first', 'parking_status', {'spaces': [{'occupancy': 'empty'}]})])
+        self.stores[0].put(b'parking-test-jpeg')
+        self.frames = [frame(number=2)]
+        self.until(lambda: any(m['type'] == 'parking_status' for m in self.messages)
+                   and any(m['type'] == 'detections' and m['frameNumber'] == 2 for m in self.messages)
+                   and bool(self.videos))
+        parking = [m for m in self.messages if m['type'] in ('event', 'parking_status')]
+        self.assertEqual([m['type'] for m in parking], ['event', 'parking_status'])
+        self.assertEqual(parking[-1]['data']['spaces'][0]['occupancy'], 'empty')
+        self.assertEqual(self.videos[-1][-1], b'parking-test-jpeg')
+        self.assertTrue(next(m for m in self.messages if m['type'] == 'detections')['persons'])
+
+        # A new connection receives the final cache, never the pre-event state.
+        self.sock.close()
+        self.sock = socket.create_connection(self.server.server_address, timeout=2)
+        self.ws = WSConnection(ConnectionType.CLIENT)
+        host = f'127.0.0.1:{self.server.server_port}'
+        self.sock.sendall(self.ws.send(Request(host=host, target='/ws')))
+        self.messages = []
+        self.until(lambda: any(m['type'] == 'parking_status' for m in self.messages))
+        self.assertEqual(next(m for m in self.messages if m['type'] == 'parking_status')
+                         ['data']['spaces'][0]['occupancy'], 'empty')
+        self.messages = []
+        self.send(type='subscribe', cameraIds=['first'])
+        self.until(lambda: any(m['type'] == 'parking_status' for m in self.messages))
+        self.assertEqual(next(m for m in self.messages if m['type'] == 'parking_status')
+                         ['data']['spaces'][0]['occupancy'], 'empty')
 
 
 if __name__ == "__main__":
