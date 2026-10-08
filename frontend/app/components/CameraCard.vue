@@ -3,10 +3,17 @@ import type { Camera } from '~/types/camera'
 import type { ConnectionState, RealtimePreviewClient } from '~/composables/realtimePreviewClient'
 import type { RealtimeCameraStatus } from '~/types/realtime'
 import type { CameraOverlayData, OverlaySelection } from '~/types/overlay'
+import type { ParkingStatus, ParkingZone } from '~/types/parking'
 import { emptyCameraOverlay } from '~/types/overlay'
 import CameraVideo from '~/components/CameraVideo.vue'
 import CameraOverlay from '~/components/CameraOverlay.vue'
-import { Maximize2, Minimize2 } from '@lucide/vue'
+import ParkingOverlay from '~/components/ParkingOverlay.vue'
+import ParkingSummary from '~/components/ParkingSummary.vue'
+import CameraZoomDialog from '~/components/CameraZoomDialog.vue'
+import { useVideoStage } from '~/composables/useVideoStage'
+import { countStatuses } from '~/lib/parking'
+import { floorLabel } from '~/lib/cameraSort'
+import { SquareParking, ZoomIn } from '@lucide/vue'
 import { Button } from '~/components/ui/button'
 import { Card, CardHeader, CardTitle } from '~/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '~/components/ui/tooltip'
@@ -17,36 +24,28 @@ const props = defineProps<{
   connection: ConnectionState
   liveStatus?: RealtimeCameraStatus
   annotations?: CameraOverlayData
+  parkingZones?: ParkingZone[]
+  /** parkingSpaceId → label */
+  parkingLabels?: Record<string, string>
+  /** zoneId → status */
+  parkingStatuses?: Record<string, ParkingStatus>
+  /** parkingSpaceIds whose cameras disagree */
+  parkingConflicts?: string[]
+  /** Show the link to this camera's parking space editor (parking page only). */
+  manageParking?: boolean
 }>()
 
 const stageElement = ref<HTMLElement | null>(null)
 const isVisible = ref(false)
-const isFullscreen = ref(false)
-const stageSize = ref({ width: 0, height: 0 })
 const mediaSize = ref({ width: 1280, height: 720 })
 const selection = ref<OverlaySelection>(null)
 const emptyAnnotations = emptyCameraOverlay()
 const displayAnnotations = computed(() => props.annotations ?? emptyAnnotations)
+const { content, contentStyle: overlayStyle } = useVideoStage(stageElement, mediaSize)
+const parkingCounts = computed(() =>
+  props.parkingZones?.length ? countStatuses(props.parkingZones.map((zone) => zone.id), props.parkingStatuses ?? {}) : null,
+)
 let observer: IntersectionObserver | undefined
-let resizeObserver: ResizeObserver | undefined
-
-const overlayStyle = computed(() => {
-  const { width: stageWidth, height: stageHeight } = stageSize.value
-  const { width: mediaWidth, height: mediaHeight } = mediaSize.value
-  if (!stageWidth || !stageHeight || !mediaWidth || !mediaHeight) {
-    return { inset: '0' }
-  }
-
-  const scale = Math.min(stageWidth / mediaWidth, stageHeight / mediaHeight)
-  const width = mediaWidth * scale
-  const height = mediaHeight * scale
-  return {
-    left: (stageWidth - width) / 2 + 'px',
-    top: (stageHeight - height) / 2 + 'px',
-    width: width + 'px',
-    height: height + 'px',
-  }
-})
 
 // Live /ws camera_status takes precedence over the 10-second API snapshot.
 const status = computed(() => {
@@ -62,9 +61,9 @@ const status = computed(() => {
 })
 
 const statusLabel = computed(() => {
-  if (!props.camera.enabled) return '비활성'
-  if (status.value.stale) return '상태 지연'
-  if (status.value.state === 'online') return '온라인'
+  if (!props.camera.enabled) return 'Disabled'
+  if (status.value.stale) return 'Stale'
+  if (status.value.state === 'online') return 'Online'
   return status.value.state
 })
 
@@ -79,73 +78,42 @@ const fpsLabel = computed(() =>
   Number.isFinite(status.value.fps) ? status.value.fps.toFixed(1) : '—',
 )
 
-function measureStage() {
-  const stage = stageElement.value
-  if (stage) stageSize.value = { width: stage.clientWidth, height: stage.clientHeight }
-}
-
-function onFullscreenChange() {
-  isFullscreen.value = document.fullscreenElement === stageElement.value
-  measureStage()
-}
-
-async function toggleFullscreen() {
-  const stage = stageElement.value
-  if (!stage) return
-  try {
-    if (document.fullscreenElement === stage) await document.exitFullscreen()
-    else await stage.requestFullscreen()
-  } catch {
-    // Keep the card usable when the browser does not allow fullscreen.
-  }
-}
+const zoomOpen = ref(false)
+const zoomStatusText = computed(() => `${floorLabel(props.camera.floor)} · ${statusLabel.value} · ${fpsLabel.value} FPS`)
 
 watch(() => props.camera.camera_id, () => {
   selection.value = null
 })
 
 onMounted(() => {
-  measureStage()
-  if (stageElement.value) {
-    if (typeof IntersectionObserver !== 'undefined') {
-      observer = new IntersectionObserver(([entry]) => {
-        isVisible.value = entry?.isIntersecting ?? false
-      }, { rootMargin: '120px 0px' })
-      observer.observe(stageElement.value)
-    } else {
-      isVisible.value = true
-    }
-
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(measureStage)
-      resizeObserver.observe(stageElement.value)
-    }
+  if (!stageElement.value) return
+  if (typeof IntersectionObserver !== 'undefined') {
+    observer = new IntersectionObserver(([entry]) => {
+      isVisible.value = entry?.isIntersecting ?? false
+    }, { rootMargin: '120px 0px' })
+    observer.observe(stageElement.value)
+  } else {
+    isVisible.value = true
   }
-  window.addEventListener('resize', measureStage)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   observer?.disconnect()
-  resizeObserver?.disconnect()
-  window.removeEventListener('resize', measureStage)
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
 <template>
-  <Card class="group gap-0 py-0 ring-white/[0.08]">
+  <Card class="glass-panel group gap-0 bg-white/[0.045] py-0 ring-0">
     <div
       ref="stageElement"
       class="relative aspect-video overflow-hidden bg-black"
-      :style="isFullscreen ? { aspectRatio: 'auto', width: '100vw', height: '100vh' } : undefined"
     >
       <CameraVideo
         :camera="camera"
         :realtime-client="realtimeClient"
         :connection="connection"
         :camera-state="liveStatus ? String(liveStatus.state) : undefined"
-        :active="isVisible || isFullscreen"
+        :active="isVisible"
         @dimensions="mediaSize = $event"
       />
       <CameraOverlay
@@ -157,23 +125,40 @@ onUnmounted(() => {
         :editable="false"
         @select="selection = $event"
       />
+      <ParkingOverlay
+        v-if="parkingZones?.length"
+        class="absolute z-10"
+        :style="overlayStyle"
+        :width="content.width"
+        :height="content.height"
+        :zones="parkingZones"
+        :space-labels="parkingLabels ?? {}"
+        :statuses="parkingStatuses ?? {}"
+        :conflict-space-ids="parkingConflicts"
+      />
       <div class="pointer-events-none absolute inset-x-0 top-0 z-20 h-16 bg-gradient-to-b from-black/50 to-transparent" />
-      <Tooltip>
-        <TooltipTrigger as-child>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            class="absolute top-3 right-3 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
-            :aria-label="isFullscreen ? '전체 화면 종료' : '영상 전체 화면'"
-            @click="toggleFullscreen"
-          >
-            <Minimize2 v-if="isFullscreen" />
-            <Maximize2 v-else />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{{ isFullscreen ? '전체 화면 종료' : '전체 화면' }}</TooltipContent>
-      </Tooltip>
+      <Button
+        v-if="manageParking"
+        as-child
+        size="icon-sm"
+        variant="ghost"
+        class="absolute top-3 right-12 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
+      >
+        <NuxtLink :to="'/cameras/' + encodeURIComponent(camera.camera_id) + '/parking'" :aria-label="camera.name + ' parking zones'">
+          <SquareParking />
+        </NuxtLink>
+      </Button>
+      <!-- Fullscreen lives in the zoom dialog only. -->
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        class="absolute top-3 right-3 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
+        :aria-label="'Zoom ' + camera.name"
+        @click="zoomOpen = true"
+      >
+        <ZoomIn />
+      </Button>
     </div>
 
     <CardHeader class="px-5 py-4">
@@ -183,7 +168,7 @@ onUnmounted(() => {
           <TooltipTrigger as-child>
             <div
               tabindex="0"
-              :aria-label="'상태: ' + statusLabel + (status.last_error ? ', 최근 오류 있음' : '')"
+              :aria-label="'Status: ' + statusLabel + (status.last_error ? ', recent error' : '')"
               class="flex shrink-0 cursor-default items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <span :class="['size-2 rounded-full transition-colors duration-500', statusDotClass]" />
@@ -198,7 +183,22 @@ onUnmounted(() => {
           </TooltipContent>
         </Tooltip>
       </div>
+      <ParkingSummary v-if="parkingCounts" :counts="parkingCounts" compact class="mt-2" />
     </CardHeader>
+
+    <CameraZoomDialog
+      v-model:open="zoomOpen"
+      :camera="camera"
+      :realtime-client="realtimeClient"
+      :connection="connection"
+      :live-status="liveStatus"
+      :parking-zones="parkingZones"
+      :parking-labels="parkingLabels"
+      :parking-statuses="parkingStatuses"
+      :parking-conflicts="parkingConflicts"
+      :parking-counts="parkingCounts"
+      :status-text="zoomStatusText"
+    />
 
   </Card>
 </template>

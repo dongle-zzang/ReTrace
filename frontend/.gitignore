@@ -7,3 +7,6 @@ node_modules
 .env.*
 !.env.example
 *.log
+
+# The root .gitignore ignores *.ts (MPEG-TS recordings); TypeScript sources here must be tracked.
+!*.ts

@@ -87,7 +87,7 @@ onUnmounted(() => {
       ref="imageElement"
       class="h-full w-full object-contain transition-[opacity,filter] duration-700 ease-out"
       :class="state === 'connected' ? 'opacity-100 blur-0' : 'opacity-0 blur-sm'"
-      :alt="camera.name + ' 실시간 미리보기'"
+      :alt="camera.name + ' live preview'"
     >
     <Transition
       enter-active-class="transition-opacity duration-300"
@@ -104,11 +104,11 @@ onUnmounted(() => {
           <LoaderCircle v-else-if="state === 'connecting' || state === 'reconnecting'" class="size-5 animate-spin text-primary" />
           <Video v-else class="size-5" />
         </div>
-        <p v-if="!camera.enabled" class="text-sm">비활성 카메라</p>
-        <p v-else-if="state === 'reconnecting' || state === 'connecting' && !serverConnected" class="text-sm">서버 연결 중…</p>
-        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">카메라 영상이 없습니다 ({{ cameraState }})</p>
-        <p v-else-if="state === 'connecting'" class="text-sm">영상 수신 대기 중…</p>
-        <p v-else class="text-sm">화면에 보이면 영상을 표시합니다</p>
+        <p v-if="!camera.enabled" class="text-sm">Camera disabled</p>
+        <p v-else-if="state === 'reconnecting' || state === 'connecting' && !serverConnected" class="text-sm">Connecting to server…</p>
+        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">No video from camera ({{ cameraState }})</p>
+        <p v-else-if="state === 'connecting'" class="text-sm">Waiting for video…</p>
+        <p v-else class="text-sm">Video starts when visible</p>
       </div>
     </Transition>
   </div>

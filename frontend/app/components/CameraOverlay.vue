@@ -153,7 +153,7 @@ function endDrag(event: PointerEvent) {
     class="pointer-events-none select-none"
     :viewBox="'0 0 1000 ' + viewHeight"
     preserveAspectRatio="none"
-    aria-label="카메라 오버레이"
+    aria-label="Camera overlay"
     :style="{ touchAction: editable ? 'none' : 'auto' }"
     @pointermove="onPointerMove"
     @pointerup="endDrag"
@@ -165,7 +165,7 @@ function endDrag(event: PointerEvent) {
       class="pointer-events-auto cursor-pointer"
       role="button"
       tabindex="0"
-      :aria-label="(zone.label || zone.id) + (zone.occupied ? ' 주차 중' : ' 빈 자리')"
+      :aria-label="(zone.label || zone.id) + (zone.occupied ? ' occupied' : ' available')"
       @click.stop="select('parking', zone.id)"
       @keydown.enter.stop="select('parking', zone.id)"
       @keydown.space.prevent.stop="select('parking', zone.id)"
@@ -188,7 +188,7 @@ function endDrag(event: PointerEvent) {
         stroke-width="5"
         paint-order="stroke"
         class="pointer-events-none"
-      >{{ zone.label || zone.id }} · {{ zone.occupied ? '주차 중' : '빈 자리' }}</text>
+      >{{ zone.label || zone.id }} · {{ zone.occupied ? 'Occupied' : 'Available' }}</text>
     </g>
 
     <g
@@ -275,7 +275,7 @@ function endDrag(event: PointerEvent) {
       class="pointer-events-auto cursor-pointer"
       role="button"
       tabindex="0"
-      :aria-label="'사람 트랙 ' + (person.trackId ?? '대기')"
+      :aria-label="'Person track ' + (person.trackId ?? 'pending')"
       @click.stop="select('person', person.id)"
       @keydown.enter.stop="select('person', person.id)"
       @keydown.space.prevent.stop="select('person', person.id)"
@@ -301,7 +301,7 @@ function endDrag(event: PointerEvent) {
         stroke-width="5"
         paint-order="stroke"
         class="pointer-events-none"
-      >{{ person.trackId === null ? '추적 중' : 'ID ' + person.trackId }}</text>
+      >{{ person.trackId === null ? 'Tracking' : 'ID ' + person.trackId }}</text>
     </g>
 
     <circle
