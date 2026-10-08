@@ -42,7 +42,7 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 npm run generate
 ```
 
-`.output/public/`의 **내용물**을 서버 `frontend/` 바로 아래에 업로드합니다(`frontend/index.html`, `frontend/_nuxt/`). `.output/public` 폴더째 한 단계 중첩하지 않습니다. 배포본은 같은 origin에서 `/api`, `/ws`를 쓰므로 별도 주소 설정이 필요 없습니다. `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`는 generate 시점 값이 들어갑니다.
+`.output/public/`의 **내용물**을 서버 저장소의 `frontend-dist/` 바로 아래에 업로드합니다(`frontend-dist/index.html`, `frontend-dist/_nuxt/`). `.output/public` 폴더째 올려 한 단계 중첩되면 `/`가 404입니다. 업로드용으로 `.output/public/` 내용물을 zip으로 묶어 `frontend-dist/`에 바로 풀어도 됩니다. 서버의 `frontend/`는 이 소스 폴더(Git 추적)이므로 빌드를 넣지 않습니다. 빌드 파일은 요청마다 읽으므로 교체 후 재시작은 필요 없고, 배포본은 같은 origin에서 `/api`, `/ws`를 쓰므로 별도 주소 설정이 필요 없습니다. `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`는 generate 시점 값이 들어갑니다.
 
 ## 확인
 
