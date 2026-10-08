@@ -14,7 +14,7 @@ const props = defineProps<{
   label: string
   status: ParkingStatus
   score: number | null
-  /** true / false when known from this page's own calibrate/reset; null when the server has not said. */
+  /** The zone's `calibrated` flag from the server; null when it isn't known yet. */
   calibrated: boolean | null
   calibrate: (register: boolean) => Promise<void>
 }>()

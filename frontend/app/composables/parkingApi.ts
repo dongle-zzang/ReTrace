@@ -15,7 +15,7 @@ export interface ParkingApi {
   saveZones(cameraId: string, update: ParkingZoneUpdate): Promise<ParkingZone[]>
   getStatus(): Promise<ParkingStatusReport>
   /** Registers the zone's current view as its empty baseline. Run only while the spot is empty. */
-  calibrateZone(zoneId: string): Promise<void>
+  calibrateZone(zoneId: string): Promise<ParkingZone>
   resetCalibration(zoneId: string): Promise<void>
 }
 
@@ -58,6 +58,7 @@ const fromZoneDto = (dto: ParkingZoneDto): ParkingZone => ({
   polygon: dto.polygon.map(({ x, y }) => ({ x, y })),
   revision: dto.revision,
   updatedAt: dto.updatedAt ?? null,
+  calibrated: typeof dto.calibrated === 'boolean' ? dto.calibrated : undefined,
 })
 
 /** Accepts a bare array or `{ items }`-style wrappers. */
@@ -80,12 +81,20 @@ export function planZoneSave(cameraId: string, update: ParkingZoneUpdate): Opera
   const base = new Map(update.base.map((zone) => [zone.id, zone]))
   const kept = new Set(update.zones.map((zone) => zone.id))
   const operations: Operation[] = []
+  // The server can't move a zone to another space, so a relabelled zone is deleted and re-created.
+  const relabelled = (zone: ParkingZone) => {
+    const before = base.get(zone.id)
+    return !!before && before.parkingSpaceId !== zone.parkingSpaceId
+  }
   for (const zone of base.values()) {
     if (!kept.has(zone.id)) operations.push({ method: 'DELETE', url: zoneUrl(zone.id), goneIsDone: true })
   }
   for (const zone of update.zones) {
+    if (relabelled(zone)) operations.push({ method: 'DELETE', url: zoneUrl(zone.id), goneIsDone: true })
+  }
+  for (const zone of update.zones) {
     const before = base.get(zone.id)
-    if (!before || isClientZoneId(zone.id)) {
+    if (!before || isClientZoneId(zone.id) || relabelled(zone)) {
       // Drawn in this edit (client `pz-…` id): the server assigns the id.
       operations.push({
         method: 'POST',
@@ -94,10 +103,9 @@ export function planZoneSave(cameraId: string, update: ParkingZoneUpdate): Opera
       })
       continue
     }
-    const body: { parkingSpaceId?: string; polygon?: Point[] } = {}
-    if (zone.parkingSpaceId !== before.parkingSpaceId) body.parkingSpaceId = zone.parkingSpaceId
-    if (!samePolygon(zone.polygon, before.polygon)) body.polygon = plainPolygon(zone.polygon)
-    if (body.parkingSpaceId !== undefined || body.polygon) operations.push({ method: 'PATCH', url: zoneUrl(zone.id), body })
+    if (!samePolygon(zone.polygon, before.polygon)) {
+      operations.push({ method: 'PATCH', url: zoneUrl(zone.id), body: { polygon: plainPolygon(zone.polygon) } })
+    }
   }
   return operations
 }
@@ -167,7 +175,7 @@ export function createHttpParkingApi(request: Request): ParkingApi {
       return parseStatusReport(await call('/api/parking/status'))
     },
     async calibrateZone(zoneId) {
-      await call(`/api/parking/zones/${encodeURIComponent(zoneId)}/calibrate`, { method: 'POST' })
+      return fromZoneDto(await call<ParkingZoneDto>(`/api/parking/zones/${encodeURIComponent(zoneId)}/calibrate`, { method: 'POST', body: {} }))
     },
     async resetCalibration(zoneId) {
       await call(`/api/parking/zones/${encodeURIComponent(zoneId)}/calibrate`, { method: 'DELETE' })
@@ -289,6 +297,15 @@ export function createMockParkingApi(options: MockOptions = {}): ParkingApi {
     }
   }
 
+  function setMockCalibrated(zoneId: string, calibrated: boolean) {
+    const all = load()
+    const zone = all.zones.find((item) => item.id === zoneId)
+    if (!zone) throw new ParkingApiError('not-found', 'Zone not found.')
+    zone.calibrated = calibrated
+    persist()
+    return zone
+  }
+
   const delay = <T>(value: () => T) => new Promise<T>((resolve, reject) => {
     const run = () => {
       try {
@@ -321,13 +338,19 @@ export function createMockParkingApi(options: MockOptions = {}): ParkingApi {
         throw new ParkingApiError('invalid', 'The server rejected the parking data.')
       }
       const updatedAt = new Date(now()).toISOString()
-      const saved = update.zones.map((zone): ParkingZone => ({
-        id: isClientZoneId(zone.id) ? 'mz-' + randomId() : zone.id,
-        cameraId,
-        parkingSpaceId: zone.parkingSpaceId,
-        polygon: plainPolygon(zone.polygon),
-        updatedAt,
-      }))
+      const before = new Map(all.zones.map((zone) => [zone.id, zone]))
+      const saved = update.zones.map((zone): ParkingZone => {
+        const old = before.get(zone.id)
+        const kept = !!old && old.parkingSpaceId === zone.parkingSpaceId && samePolygon(old.polygon, zone.polygon)
+        return {
+          id: isClientZoneId(zone.id) || (old && old.parkingSpaceId !== zone.parkingSpaceId) ? 'mz-' + randomId() : zone.id,
+          cameraId,
+          parkingSpaceId: zone.parkingSpaceId,
+          polygon: plainPolygon(zone.polygon),
+          updatedAt,
+          calibrated: kept ? old!.calibrated ?? false : false,
+        }
+      })
       data = { ...all, zones: [...all.zones.filter((zone) => zone.cameraId !== cameraId), ...saved] }
       persist()
       return clone(saved)
@@ -346,11 +369,9 @@ export function createMockParkingApi(options: MockOptions = {}): ParkingApi {
         spaces: [],
       }
     }),
-    calibrateZone: (zoneId) => delay(() => {
-      if (!load().zones.some((zone) => zone.id === zoneId)) throw new ParkingApiError('not-found', 'Zone not found.')
-    }),
+    calibrateZone: (zoneId) => delay(() => clone(setMockCalibrated(zoneId, true))),
     resetCalibration: (zoneId) => delay(() => {
-      if (!load().zones.some((zone) => zone.id === zoneId)) throw new ParkingApiError('not-found', 'Zone not found.')
+      setMockCalibrated(zoneId, false)
     }),
   }
 }

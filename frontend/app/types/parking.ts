@@ -15,14 +15,14 @@ import type { Point } from '~/types/overlay'
  * - POST   /api/parking/spaces                  ← { label }                              → 201 ParkingSpaceDto (409 if the label exists)
  * - GET    /api/parking/zones?cameraId={id}     → ParkingZoneDto[]
  * - POST   /api/parking/zones                   ← { cameraId, parkingSpaceId, polygon }  → 201 ParkingZoneDto
- * - PATCH  /api/parking/zones/{id}              ← { parkingSpaceId?, polygon? }           → ParkingZoneDto
+ * - PATCH  /api/parking/zones/{id}              ← { polygon? }  (space can't change: DELETE + POST) → ParkingZoneDto
  * - DELETE /api/parking/zones/{id}                                                        → 204
  * - GET    /api/parking/status                  → ParkingStatusDto
- * - POST   /api/parking/zones/{id}/calibrate    register the current (empty) view as the baseline
- * - DELETE /api/parking/zones/{id}/calibrate    clear the baseline
- * /ws: `parking.status_updated` with `data` shaped like ParkingStatusDto.
- * Status shape is from the server spec (2026-10-08); docs/color-parking.md was not available here,
- * so calibrate request/response bodies are not read beyond the HTTP status.
+ * - POST   /api/parking/zones/{id}/calibrate    ← {} → ParkingZoneDto (calibrated: true); 409 no frame, 422 ROI too small
+ * - DELETE /api/parking/zones/{id}/calibrate    → 204
+ * /ws: `parking.status_updated` per cameraId with `data` = ParkingStatusDto for that camera's spaces
+ * (upsert by parkingSpaceId; `spaces: []` after a zone is deleted → re-read REST).
+ * Contract: server repo docs/color-parking.md.
  */
 
 export type ParkingStatus = 'occupied' | 'empty' | 'unknown'
@@ -43,6 +43,8 @@ export interface ParkingZone {
   /** Server polygon revision, when the server reports one; status for an older revision is ignored. */
   revision?: number
   updatedAt?: string | null
+  /** Empty-spot baseline registered (server field). */
+  calibrated?: boolean
 }
 
 export interface ParkingZoneUpdate {
@@ -106,6 +108,7 @@ export interface ParkingZoneDto {
   polygon: Point[]
   revision?: number
   updatedAt?: string | null
+  calibrated?: boolean
 }
 
 export interface ParkingZoneStatusDto {
