@@ -27,7 +27,7 @@
 
 - 이유: 서버가 JPEG에 bbox와 Track ID를 이미 그려 보낸다. `detections`로 SVG를 다시 그리면 박스가 이중으로, 시간차를 두고 보인다. `CameraOverlay.vue`는 선/영역 표시용으로 남겨 두었다.
 
-## 루트 `.gitignore`가 `frontend/`를 무시한다
+## 빌드는 서버 `frontend-dist/`, 소스는 `frontend/`
 
-- 이유: 서버 저장소에서 `frontend/`는 정적 빌드 업로드 폴더이고 서버 쪽에서는 프론트 작업을 하지 않는다. 프론트 소스는 강제로 추적한다.
-- 변경 시 확인: 새 파일은 `git add -f`. 커밋 전 누락 여부를 확인한다(누락 시 저장소에서 빌드 실패).
+- 이유: 예전에는 서버의 `frontend/`가 Git 소스 폴더이면서 빌드 업로드 폴더(`FRONTEND_DIST_DIR`)였다. 빌드를 올리면 소스가 `git status`에서 삭제로 보였고(커밋하면 원격 소스가 지워짐), 소스를 복원하면 `/README.md` 같은 소스가 40225에서 열람됐다. 서버 커밋 `2a9254e`(2026-10-07)부터 빌드는 Git에서 무시되는 `frontend-dist/`에서 제공되고, 루트 `.gitignore`는 더 이상 `frontend/`를 무시하지 않는다(새 파일에 `git add -f` 불필요).
+- 변경 시 확인: 배포 안내에 `frontend/`로 업로드하라는 문구가 다시 생기지 않게 한다. 업로드 후 `/`가 200, `/README.md`가 404인지 본다.
