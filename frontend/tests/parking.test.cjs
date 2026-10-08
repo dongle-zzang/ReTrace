@@ -175,8 +175,11 @@ test('status payloads from REST and /ws parking.status_updated', () => {
   })
   assert.deepEqual(plain(parking.parseStatusReport(null)), { zones: [], spaces: [] })
 
-  const update = parking.statusReportFromMessage({ type: 'parking.status_updated', data: { spaces: [{ parkingSpaceId: 'A', status: 'EMPTY', conflict: false, zones: [{ zoneId: 'z1', cameraId: 'c1', status: 'EMPTY' }] }] } })
-  assert.equal(update.zones[0].status, 'empty')
+  const update = parking.statusReportFromMessage({ type: 'parking.status_updated', cameraId: 'c1', data: { spaces: [{ parkingSpaceId: 'A', status: 'EMPTY', conflict: false, zones: [{ zoneId: 'z1', cameraId: 'c1', status: 'EMPTY' }] }] } })
+  assert.equal(update.report.zones[0].status, 'empty')
+  assert.equal(update.empty, false)
+  const cleared = parking.statusReportFromMessage({ type: 'parking.status_updated', cameraId: 'c1', data: { spaces: [] } })
+  assert.deepEqual([cleared.cameraId, cleared.empty], ['c1', true])
   assert.equal(parking.statusReportFromMessage({ type: 'camera_status', data: {} }), null)
 
   const older = { zoneId: 'z', status: 'occupied', revision: 2, updatedAt: '2026-10-08T00:00:05Z' }
@@ -250,7 +253,7 @@ test('HTTP API uses the /api/parking spaces, zones and status endpoints', async 
       { id: 'zx', cameraId: 'other', parkingSpaceId: 's1', polygon: square },
     ],
     'GET /api/parking/status': () => ({ spaces: [{ parkingSpaceId: 's1', label: 'A-01', status: 'EMPTY', conflict: false, zones: [{ zoneId: 'z1', cameraId: 'cam 1', status: 'EMPTY', score: 0.8 }] }] }),
-    'POST /api/parking/zones/z1/calibrate': () => ({}),
+    'POST /api/parking/zones/z1/calibrate': () => ({ id: 'z1', cameraId: 'cam 1', parkingSpaceId: 's1', polygon: square, calibrated: true }),
     'DELETE /api/parking/zones/z1/calibrate': () => undefined,
   })
   const http = api.createHttpParkingApi(server.request)
@@ -261,14 +264,14 @@ test('HTTP API uses the /api/parking spaces, zones and status endpoints', async 
   assert.deepEqual(plain(zones).map(item => item.id), ['z1'])
   assert.equal(zones[0].revision, 3)
   assert.equal((await http.getStatus()).zones[0].status, 'empty')
-  await http.calibrateZone('z1')
+  assert.equal((await http.calibrateZone('z1')).calibrated, true)
   await http.resetCalibration('z1')
   assert.deepEqual(server.calls, [
     'GET /api/parking/spaces',
     'POST /api/parking/spaces {"label":"A-02"}',
     'GET /api/parking/zones?cameraId=cam%201',
     'GET /api/parking/status',
-    'POST /api/parking/zones/z1/calibrate',
+    'POST /api/parking/zones/z1/calibrate {}',
     'DELETE /api/parking/zones/z1/calibrate',
   ])
 })
@@ -280,27 +283,31 @@ test('HTTP createSpace maps 409 to duplicate; a missing endpoint is reported as 
   await assert.rejects(missing.listSpaces(), error => error.code === 'not-found')
 })
 
-test('HTTP save turns the zone diff into DELETE, PATCH and POST, then re-reads the camera', async () => {
+test('HTTP save: DELETE removed, PATCH polygon only, relabel = DELETE + POST, then re-read', async () => {
   const kept = zone('z1', 's1', square, 'cam')
   const moved = zone('z2', 's2', square, 'cam')
   const removed = zone('z3', 's3', square, 'cam')
+  const relabelled = zone('z4', 's6', square, 'cam')
   const shifted = square.map(point => ({ x: point.x + 0.1, y: point.y }))
   const added = zone('pz-new', 's4', square, 'cam')
   const server = fakeServer({
     'DELETE /api/parking/zones/z3': () => undefined,
+    'DELETE /api/parking/zones/z4': () => undefined,
     'PATCH /api/parking/zones/z2': () => ({}),
     'POST /api/parking/zones': () => ({}),
-    'GET /api/parking/zones?cameraId=cam': () => [{ id: 'z9', cameraId: 'cam', parkingSpaceId: 's4', polygon: square }],
+    'GET /api/parking/zones?cameraId=cam': () => [{ id: 'z9', cameraId: 'cam', parkingSpaceId: 's4', polygon: square, calibrated: false }],
   })
   const http = api.createHttpParkingApi(server.request)
   const saved = await http.saveZones('cam', {
-    base: [kept, moved, removed],
-    zones: [kept, { ...moved, parkingSpaceId: 's5', polygon: shifted }, added],
+    base: [kept, moved, removed, relabelled],
+    zones: [kept, { ...moved, polygon: shifted }, { ...relabelled, parkingSpaceId: 's5', polygon: shifted }, added],
   })
-  assert.deepEqual(plain(saved).map(item => item.id), ['z9'])
+  assert.deepEqual(plain(saved).map(item => [item.id, item.calibrated]), [['z9', false]])
   assert.deepEqual(server.calls, [
     'DELETE /api/parking/zones/z3',
-    `PATCH /api/parking/zones/z2 ${JSON.stringify({ parkingSpaceId: 's5', polygon: shifted })}`,
+    'DELETE /api/parking/zones/z4',
+    `PATCH /api/parking/zones/z2 ${JSON.stringify({ polygon: shifted })}`,
+    `POST /api/parking/zones ${JSON.stringify({ cameraId: 'cam', parkingSpaceId: 's5', polygon: shifted })}`,
     `POST /api/parking/zones ${JSON.stringify({ cameraId: 'cam', parkingSpaceId: 's4', polygon: square })}`,
     'GET /api/parking/zones?cameraId=cam',
   ])

@@ -96,10 +96,18 @@ export function parseStatusReport(payload: unknown): ParkingStatusReport {
   return { zones, spaces }
 }
 
-/** `parking.status_updated` from /ws (payload in `data`, or at the top level). Null for any other message. */
-export function statusReportFromMessage(message: { type?: unknown; data?: unknown }) {
+/**
+ * `parking.status_updated` from /ws: the full status of the spaces linked to `cameraId`.
+ * `empty` (spaces: []) means that camera lost its last zone. Null for any other message.
+ */
+export function statusReportFromMessage(message: { type?: unknown; cameraId?: unknown; data?: unknown }) {
   if (message.type !== 'parking.status_updated') return null
-  return parseStatusReport(message.data ?? message)
+  const data = message.data as { spaces?: unknown } | undefined
+  return {
+    cameraId: typeof message.cameraId === 'string' ? message.cameraId : null,
+    empty: Array.isArray(data?.spaces) && data.spaces.length === 0,
+    report: parseStatusReport(data),
+  }
 }
 
 /**

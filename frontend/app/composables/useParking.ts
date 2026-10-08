@@ -216,16 +216,25 @@ export function useParking(options: UseParkingOptions = {}) {
     }
   }
 
-  /**
-   * Baseline state per zone as far as this page knows: true after a successful calibrate, false
-   * after a reset. The status contract has no calibration field, so other zones stay unknown.
-   */
-  const calibrated = ref<Record<string, boolean>>({})
+  /** Empty-baseline flag per zone id, from the server's zone objects. */
+  const calibrated = computed(() => {
+    const result: Record<string, boolean> = {}
+    for (const zone of Object.values(zones.value).flat()) if (zone.calibrated !== undefined) result[zone.id] = zone.calibrated
+    return result
+  })
+
+  function replaceZone(updated: ParkingZone) {
+    const list = zones.value[updated.cameraId]
+    if (list) zones.value = { ...zones.value, [updated.cameraId]: list.map((zone) => (zone.id === updated.id ? { ...zone, ...updated } : zone)) }
+  }
 
   async function calibrate(zoneId: string, register: boolean) {
-    if (register) await api.calibrateZone(zoneId)
-    else await api.resetCalibration(zoneId)
-    calibrated.value = { ...calibrated.value, [zoneId]: register }
+    const zone = Object.values(zones.value).flat().find((item) => item.id === zoneId)
+    if (register) replaceZone(await api.calibrateZone(zoneId))
+    else {
+      await api.resetCalibration(zoneId)
+      if (zone) replaceZone({ ...zone, calibrated: false })
+    }
     void loadStatus()
   }
 
@@ -238,8 +247,14 @@ export function useParking(options: UseParkingOptions = {}) {
 
   if (options.realtime) {
     stopMessages = options.realtime.onMessage((message) => {
-      const report = statusReportFromMessage(message)
-      if (report) mergeReport(report)
+      const update = statusReportFromMessage(message)
+      if (!update) return
+      mergeReport(update.report)
+      // A zone was deleted (possibly elsewhere): don't guess what else changed, re-read REST.
+      if (update.empty && update.cameraId) {
+        if (zones.value[update.cameraId]) void loadZones(update.cameraId)
+        void loadStatus()
+      }
     })
     // First connect and every reconnect: messages may have been missed, so resync from REST.
     watch(options.realtime.connection, (state, previous) => {

@@ -51,19 +51,19 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 | --- | --- | --- |
 | GET | `/api/parking/spaces` | `[{id, label}]` |
 | POST | `/api/parking/spaces` | `{label}` → 201 `{id, label}`. 이미 있는 라벨은 409 |
-| GET | `/api/parking/zones?cameraId={id}` | `[{id, cameraId, parkingSpaceId, polygon[{x,y}], revision?, updatedAt?}]` |
+| GET | `/api/parking/zones?cameraId={id}` | `[{id, cameraId, parkingSpaceId, polygon[{x,y}], enabled, threshold, hysteresis, confirmFrames, calibrated, revision}]` |
 | POST | `/api/parking/zones` | `{cameraId, parkingSpaceId, polygon}` → 201 zone (`id`는 서버가 부여) |
-| PATCH | `/api/parking/zones/{id}` | `{parkingSpaceId?, polygon?}` → 200 zone |
+| PATCH | `/api/parking/zones/{id}` | `{polygon}` → 200 zone. 라벨(공간)은 바꿀 수 없어 라벨 변경은 DELETE 후 POST |
 | DELETE | `/api/parking/zones/{id}` | 204. 없으면 404(완료로 처리) |
 | GET | `/api/parking/status` | `{spaces[{parkingSpaceId, label, status, conflict, zones[{zoneId, cameraId, status, score, updatedAt}]}]}` |
-| POST | `/api/parking/zones/{id}/calibrate` | 현재 화면을 빈자리 기준으로 등록(자리가 실제로 비어 있을 때만) |
+| POST | `/api/parking/zones/{id}/calibrate` | `{}` → zone(`calibrated: true`). 자리가 실제로 비어 있을 때만. 프레임 없음 409, ROI 작음 422 |
 | DELETE | `/api/parking/zones/{id}/calibrate` | 기준 초기화 |
 
-`status`는 `OCCUPIED`/`EMPTY`/`UNKNOWN`(대소문자 무관, 화면 표시 Occupied/Empty/Unknown), `score`는 0~1입니다. 편집 화면(편집 모드가 아닐 때)에서 영역 행을 누르면 캘리브레이션 패널(현재 상태, 빈자리 기준 등록, 기준 초기화, 안내)이 열립니다. 상태 응답에 캘리브레이션 여부 필드가 없어서 완료 여부는 이 화면에서 등록/초기화에 성공한 경우에만 표시합니다. 목록 응답은 배열 또는 `{spaces: [...]}`/`{zones: [...]}`를 받습니다. 완료 시 편집 시작 시점의 영역과 비교해 DELETE → PATCH → POST를 하나씩 보내고 카메라를 다시 읽습니다(원자적이지 않음). 하나라도 실패하면 다시 읽은 서버 상태로 화면을 바꾼 뒤 오류를 보여 줍니다. 동시에 편집하면 나중 저장이 덮어씁니다.
+`status`는 `OCCUPIED`/`EMPTY`/`UNKNOWN`(대소문자 무관, 화면 표시 Occupied/Empty/Unknown), `score`는 0~1입니다. 편집 화면(편집 모드가 아닐 때)에서 영역 행을 누르면 캘리브레이션 패널(현재 상태, 빈자리 기준 등록, 기준 초기화, 안내)이 열립니다. 완료 여부는 zone의 `calibrated` 값입니다(polygon을 바꾸면 서버가 기준을 지웁니다). 목록 응답은 배열 또는 `{spaces: [...]}`/`{zones: [...]}`를 받습니다. 완료 시 편집 시작 시점의 영역과 비교해 DELETE → PATCH → POST를 하나씩 보내고 카메라를 다시 읽습니다(원자적이지 않음). 하나라도 실패하면 다시 읽은 서버 상태로 화면을 바꾼 뒤 오류를 보여 줍니다. 동시에 편집하면 나중 저장이 덮어씁니다.
 
 실시간 상태는 영상과 같은 `/ws`의 `parking.status_updated`(`data`가 위 status 응답과 같은 모양)로 받습니다. REST `/api/parking/status`는 처음 진입과 `/ws` 재연결 때만 읽습니다(mock은 `/ws`가 없어 10초마다). 이전 polygon `revision`이나 더 오래된 관측 시각의 상태는 버립니다. REST 조회가 실패하면 모두 판정 불가로 표시합니다. 편집은 별도 초안에서 하므로 상태 갱신·다른 브라우저의 변경 반영이 편집 중인 폴리곤을 바꾸지 않습니다.
 
-**서버 상태(2026-10-08 확인):** 서버 측 color 기반 감지 구현이 완료됐다고 전달받았으나, 이 개발 환경의 프록시 대상 서버에서는 아직 `/api/parking/*`가 404이고 `docs/color-parking.md`도 이 저장소에 없습니다. 위 계약은 전달받은 응답 형식 기준이며, calibrate 요청/응답 본문은 HTTP 상태 외에 읽지 않습니다. 배포 전에는 `NUXT_PUBLIC_PARKING_API=mock`으로 화면을 확인합니다.
+서버 계약 원문은 서버 저장소의 `docs/color-parking.md`입니다. `/ws` `parking.status_updated`는 카메라별로 그 카메라에 연결된 공간들의 전체 상태를 보내며 `parkingSpaceId`로 덮어씁니다. 영역 삭제 후 오는 `spaces: []`에는 해당 카메라 영역과 상태를 REST로 다시 읽습니다. 서버는 라벨 대소문자를 구분하지만 프론트는 `A-01`/`a-01`을 같은 라벨로 보고 새로 만들지 않습니다.
 
 ## 정적 배포
 
