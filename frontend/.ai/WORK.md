@@ -1,5 +1,12 @@
 # Frontend current work
 
+## CSR static deployment — upload pending (2026-10-10)
+
+- Added the missing `ssr: false` in `nuxt.config.ts` to match the intended CSR deployment.
+- Verified: `npm test` (20 passed), `npm run typecheck`, `npm run build`, `npm run generate`; output payload has `serverRendered: false`, all 12 referenced assets exist, configured backend address is absent from `.output/public/`.
+- Blocker: non-interactive SSH authentication was denied; user confirmed password authentication. No files were uploaded. User must run `scp -r .output/public/. <ssh-alias>:/home/ohjoo/ReTrace/frontend-dist/` from the local `frontend/` directory and enter the password in the terminal. Verify the deployed site after upload.
+- Preserve the unrelated work and verification notes below.
+
 ## App nav + CCTV/parking page split — implemented, not committed
 
 - Done (2026-10-08): `layouts/default.vue` + `AppNav.vue` (floating pill top bar: logo, `CCTV 모니터링` `/` · `주차 관리` `/parking` tabs, date/time; the editor `/cameras/:id/parking` highlights 주차 관리). `--app-nav-height` in `main.css` offsets the editor's sticky bar. `/` lost the hero (online/total count, per-floor dots, Liquid Ether background) and all parking data; title + search + floor tabs instead. New `/parking`: total `ParkingSummary` + cards of parking cameras (name has `주차장`, or already has spaces) with overlay, counts and the `P` editor link (`CameraCard` `manage-parking` prop). Editor back link → `/parking`. Floor sort moved to `lib/cameraSort.ts`.

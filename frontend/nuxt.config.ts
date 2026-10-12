@@ -55,6 +55,7 @@ function proxyWebSocket(target: string) {
 }
 
 export default defineNuxtConfig({
+  ssr: false,
   css: ['~/assets/css/main.css'],
   modules: ['shadcn-nuxt'],
   shadcn: {
