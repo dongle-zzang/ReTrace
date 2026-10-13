@@ -21,6 +21,8 @@ const props = withDefaults(defineProps<{
   width: number
   height: number
   editing?: boolean
+  /** Allow selecting saved zones without enabling vertex editing. Defaults to editing. */
+  interactive?: boolean
   selectedId?: string | null
   /** Vertices of the polygon being drawn, or null when not drawing. */
   drawing?: Point[] | null
@@ -28,6 +30,7 @@ const props = withDefaults(defineProps<{
   labels?: boolean
 }>(), {
   editing: false,
+  interactive: undefined,
   selectedId: null,
   drawing: null,
   invalidIds: () => [],
@@ -51,6 +54,7 @@ const dragging = ref<{ zoneId: string; index: number; pointerId: number } | null
 const hover = ref<Point | null>(null)
 
 const size = computed(() => ({ width: Math.max(1, props.width), height: Math.max(1, props.height) }))
+const canSelect = computed(() => props.interactive ?? props.editing)
 const isDrawing = computed(() => props.editing && !!props.drawing)
 const showLabels = computed(() => props.labels && props.width >= 320)
 const showStatusText = computed(() => props.labels && props.width >= 440)
@@ -106,7 +110,7 @@ function toNormalized(event: PointerEvent | MouseEvent) {
 }
 
 function onBackgroundPointerDown(event: PointerEvent) {
-  if (!props.editing || event.button !== 0) return
+  if ((!canSelect.value && !props.editing) || event.button !== 0) return
   const point = toNormalized(event)
   if (!point) return
   if (!props.drawing) {
@@ -119,7 +123,7 @@ function onBackgroundPointerDown(event: PointerEvent) {
 }
 
 function onZonePointerDown(zoneId: string, event: PointerEvent) {
-  if (!props.editing || isDrawing.value || event.button !== 0) return
+  if (!canSelect.value || isDrawing.value || event.button !== 0) return
   event.stopPropagation()
   emit('select', zoneId)
 }
@@ -162,7 +166,7 @@ watch(isDrawing, (drawing) => {
     ref="svgElement"
     class="select-none overflow-visible"
     :class="[
-      editing ? 'pointer-events-auto' : 'pointer-events-none',
+      editing || canSelect ? 'pointer-events-auto' : 'pointer-events-none',
       isDrawing ? 'cursor-crosshair' : '',
     ]"
     :viewBox="`0 0 ${size.width} ${size.height}`"
@@ -180,14 +184,14 @@ watch(isDrawing, (drawing) => {
     <g
       v-for="shape in shapes"
       :key="shape.zone.id"
-      :class="editing && !isDrawing ? 'cursor-pointer' : 'pointer-events-none'"
-      :role="editing ? 'button' : 'img'"
-      :tabindex="editing && !isDrawing ? 0 : undefined"
+      :class="canSelect && !isDrawing ? 'cursor-pointer' : 'pointer-events-none'"
+      :role="canSelect ? 'button' : 'img'"
+      :tabindex="canSelect && !isDrawing ? 0 : undefined"
       :aria-label="shape.name + ' ' + parkingStatusLabel[shape.status] + (shape.conflict ? ', cameras disagree' : '')"
-      :aria-pressed="editing ? shape.selected : undefined"
+      :aria-pressed="canSelect ? shape.selected : undefined"
       @pointerdown="onZonePointerDown(shape.zone.id, $event)"
-      @keydown.enter.prevent="editing && emit('select', shape.zone.id)"
-      @keydown.space.prevent="editing && emit('select', shape.zone.id)"
+      @keydown.enter.prevent="canSelect && !isDrawing && emit('select', shape.zone.id)"
+      @keydown.space.prevent="canSelect && !isDrawing && emit('select', shape.zone.id)"
     >
       <!-- The selected zone is outlined in the theme accent (--primary), apart from the status colors. -->
       <polygon
@@ -255,29 +259,46 @@ watch(isDrawing, (drawing) => {
         v-if="drawing.length >= 3"
         :points="pointList(hover ? [...drawing, hover] : drawing)"
         class="fill-primary"
-        fill-opacity="0.15"
+        fill-opacity="0.1"
         stroke="none"
       />
       <polyline
         :points="pointList(hover ? [...drawing, hover] : drawing)"
         fill="none"
-        class="stroke-primary"
-        stroke-width="2"
-        stroke-dasharray="6 4"
+        stroke="#071116"
+        stroke-opacity="0.72"
+        stroke-width="5"
+        stroke-dasharray="7 5"
+        stroke-linecap="round"
         stroke-linejoin="round"
       />
-      <circle
-        v-for="(point, index) in drawing"
-        :key="'draw-' + index"
-        :cx="px(point).x"
-        :cy="px(point).y"
-        :r="index === 0 && canClose ? CLOSE_RADIUS_PX - 3 : 5"
-        :fill="index === 0 && canClose ? undefined : '#ffffff'"
-        :class="index === 0 && canClose ? 'fill-primary' : ''"
-        :fill-opacity="index === 0 && canClose ? 0.35 : 1"
-        stroke="#0f172a"
-        stroke-width="2"
+      <polyline
+        :points="pointList(hover ? [...drawing, hover] : drawing)"
+        fill="none"
+        class="stroke-primary"
+        stroke-width="2.5"
+        stroke-dasharray="7 5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
       />
+      <g v-for="(point, index) in drawing" :key="'draw-' + index">
+        <circle
+          :cx="px(point).x"
+          :cy="px(point).y"
+          :r="index === 0 && canClose ? CLOSE_RADIUS_PX - 3 : 6.5"
+          fill="#071116"
+          fill-opacity="0.92"
+          :stroke="index === 0 && canClose ? 'white' : 'var(--primary)'"
+          :stroke-width="index === 0 && canClose ? 1.5 : 2"
+        />
+        <circle
+          :cx="px(point).x"
+          :cy="px(point).y"
+          :r="index === 0 && canClose ? 3.25 : 2.25"
+          :fill="index === 0 && canClose ? 'white' : 'var(--primary)'"
+          class="pointer-events-none"
+        />
+      </g>
     </g>
   </svg>
 </template>
