@@ -108,11 +108,11 @@ def test_cors_allows_only_configured_origins_and_crud_requests(service):
             assert "access-control-allow-origin" not in response.headers
         headers = {"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"}
         assert client.options("/api/health", headers=headers).status_code == 200
-        for method in ("POST", "PATCH", "DELETE"):
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
             headers["Access-Control-Request-Method"] = method
             headers["Access-Control-Request-Headers"] = "content-type"
             assert client.options("/api/cameras/first/parking-spaces", headers=headers).status_code == 200
-        headers["Access-Control-Request-Method"] = "PUT"
+        headers["Access-Control-Request-Method"] = "TRACE"
         assert client.options("/api/health", headers=headers).status_code == 400
 
 
@@ -220,7 +220,7 @@ def test_status_row_count_does_not_grow(service):
         app.state.poller.poll_once()
     with app.state.sessions() as session:
         assert session.scalar(select(func.count()).select_from(CameraStatus)) == 3
-    assert set(inspect(engine).get_table_names()) == {"cameras", "camera_status", "person_tracks", "parking_spaces", "parking_events", "color_parking_spaces", "parking_zones"}
+    assert set(inspect(engine).get_table_names()) == {"cameras", "camera_status", "person_tracks", "parking_spaces", "parking_events", "color_parking_spaces", "parking_zones", "dataset_images", "dataset_exports"}
 
 
 def test_track_summary_upsert_not_frame_insert_and_uint64(service):

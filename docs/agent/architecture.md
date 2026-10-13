@@ -23,7 +23,7 @@ RTSP → retrace (preview.py, 공유 DeepStream batch pipeline)
 - `preview_socket.py`: 같은 HTTP listener의 `/ws`. 다중 camera 구독, normalized bbox와 상태/event, 요청 시 카메라별 최신 JPEG binary 전송. 네트워크는 GPU callback 밖에서 수행한다.
 - `preview_mjpeg.py`: 카메라별 최신 JPEG 저장(FrameStore)과 `/mjpeg/sourceN` multipart 전송.
 - `backend/app/`: GPU를 import하지 않는 API·poller·DB 계층. 서버/API/DB 수정은 [backend](backend.md)를 읽는다.
-- `preview_web.py`: 전용 디렉터리의 CSR 정적 빌드 제공과 같은 40225 origin의 `/api/*` 프록시. GET/HEAD를 유지하고 쓰기는 주차 CRUD 경로로만 제한하고 body 크기/framing/timeout을 검사한다(별도 IP/Origin allowlist·CORS 없음). API 요청은 HTTP request thread에서 처리하며 공유 GPU callback과 연결하지 않는다. Backend polling 계약은 유지한다.
+- `preview_web.py`: 전용 디렉터리의 CSR 정적 빌드 제공과 같은 40225 origin의 `/api/*` 프록시. GET/HEAD를 유지하고 쓰기는 주차 CRUD 및 데이터셋 캡처/라벨/삭제/내보내기 경로로 제한하고 body 크기/framing/timeout을 검사한다(별도 IP/Origin allowlist·CORS 없음). API 요청은 HTTP request thread에서 처리하며 공유 GPU callback과 연결하지 않는다. Backend polling 계약은 유지한다.
 
 ## 경계를 변경할 때
 
@@ -40,3 +40,7 @@ app.py 직접 실행은 tracker/video를 포함하지 않는다. native PyDS 대
 새 장비는 Git 문서만으로 모델/secret/GPU 환경까지 복구할 수 없다. 실행 환경 준비는 [deployment](deployment.md)를 따른다.
 
 색상 주차 worker는 기존 FrameStore의 `/snapshots/{cameraId}.jpg`를 CPU Backend에서 주기적으로 조회·decode한다. RTSP/source/GPU pipeline은 추가하지 않는다. `parking_relay.py`가 새 통합 상태를 기존 `/ws`에 `parking.status_updated`로 전달한다. 상세 경계/좌표/TTL은 [색상 주차](../color-parking.md)를 따른다.
+
+데이터셋은 opt-in `preview_capture.py`가 기존 decode 결과의 OSD RGBA 변환 앞에서 요청당 한 프레임을
+JPEG로 전달하고, `backend/app/dataset.py`가 파일 볼륨/DB·라벨·ZIP을 관리한다. 기존 미리보기와
+metadata polling은 유지한다. 해상도·동일 프레임 한계·저장 경계는 [AI 데이터셋](../datasets.md)을 따른다.

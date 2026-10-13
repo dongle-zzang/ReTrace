@@ -19,6 +19,8 @@ class Settings:
     cors_origins: tuple[str, ...] = ()
     parking_policy: ParkingPolicy = field(default_factory=ParkingPolicy)
 
+    dataset_dir: Path = Path("dataset-storage")
+
     color_parking_interval: float = 1.0
     color_parking_stale_after: float = 5.0
 
@@ -47,6 +49,7 @@ class Settings:
                        password=password, host="postgres", port=5432,
                        database=os.environ.get("POSTGRES_DB", "retrace")),
             Path(os.environ.get("CAMERAS_PATH", "/app/configs/cameras.yaml")),
+            dataset_dir=Path(os.environ.get("DATASET_STORAGE_DIR", "/app/dataset-storage")),
             preview_url=os.environ.get("BACKEND_PREVIEW_URL", "http://retrace:40225"),
             cors_origins=cls.cors_origins_from_env(),
             color_parking_interval=float(os.environ.get("COLOR_PARKING_INTERVAL", "1")),

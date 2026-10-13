@@ -14,7 +14,7 @@
 
 ## API와 데이터 변경
 
-preview JSON과 backend `/api/*`는 서로 다른 계약이다. preview producer는 `preview.py`, consumer는 `ingest.py`, 외부 응답 schema는 `schemas.py`에 있다. 배포한 Browser는 40225의 `/api/*` 프록시로 Backend에 접근한다. GET/HEAD와 접근 제어를 설정한 주차면 CRUD만 전달하며 상세 조건은 Backend README를 따른다. `preview_path`도 같은 origin의 상대 경로이며 backend가 영상을 relay하지 않는다.
+preview JSON과 backend `/api/*`는 서로 다른 계약이다. preview producer는 `preview.py`, consumer는 `ingest.py`, 외부 응답 schema는 `schemas.py`에 있다. 배포한 Browser는 40225의 `/api/*` 프록시로 Backend에 접근한다. GET/HEAD와 제한된 주차 CRUD·데이터셋 쓰기를 전달하며 상세 조건은 Backend README 및 데이터셋 계약을 따른다. `preview_path`도 같은 origin의 상대 경로이며 backend가 영상을 relay하지 않는다.
 
 CameraOut의 `preview_path`는 `/mjpeg/sourceN`, `metadata_path`는 `/ws`다. `/ws`(여러 카메라 JPEG·metadata)는
 Preview가 소유하고 Backend는 기존 JSON snapshot을 polling한다. browser 계약은 [실시간 Preview](../preview-realtime.md)다.
@@ -26,3 +26,7 @@ API/DB 수정 전 backend README의 “저장 정책”을 확인한다. track �
 계약 검증은 `backend/tests/`의 API/polling/보안 테스트와 preview AST 계약 테스트를 먼저 찾는다. 명령은 [testing](testing.md)에 있다.
 
 색상 기반 주차는 `color_parking.py`의 별도 router/worker와 `color_analysis.py`의 HSV 알고리즘을 사용한다. 논리 공간(`color_parking_spaces`)과 카메라 영역(`parking_zones`)을 분리하고 기존 차량 기반 테이블/API는 유지한다. 새 API/캘리브레이션/통합 상태/저장 정책은 [색상 주차](../color-parking.md)를 따른다.
+
+데이터셋은 `dataset.py` router/service, `dataset_models.py` additive tables를 사용한다.
+원본 JPEG/썸네일/ZIP은 DB 외부 볼륨에 두고 픽셀 박스·검수·revision은 DB에 저장한다.
+삭제 tombstone 복구, 캡처 중복/세션, export snapshot/분할과 제한은 [AI 데이터셋](../datasets.md)이 원문이다.

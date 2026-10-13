@@ -23,7 +23,7 @@ Backend는 기존 Preview JSON을 polling하며 영상을 relay하지 않는다.
 
 배포한 Frontend는 `/api/*`를 같은 40225 origin으로 호출한다. HTTP request thread에서
 `PREVIEW_BACKEND_URL`의 Backend로 GET/HEAD를 전달한다. 쓰기는 주차면 CRUD 경로의
-POST/PATCH/DELETE만 허용하며, 40225에 접근 가능한 클라이언트면 별도 IP/Origin 허용 목록 없이 사용한다.
+POST/PATCH/DELETE 및 데이터셋의 제한된 POST/PUT/DELETE를 허용하며, 40225에 접근 가능한 클라이언트면 별도 IP/Origin 허용 목록 없이 사용한다.
 method/query/JSON body/status를 유지한다. CORS/preflight는 제공하지 않으므로 같은 origin 또는 Nuxt 개발 프록시를 쓴다.
 설정·제한·적용은 [Backend README](../../backend/README.md#preview-주차-crud-프록시)를 따른다.
 Backend 장애/timeout은 502이며 frontend 정적 파일 및 MJPEG 제공과 별도로 처리한다.
@@ -37,3 +37,7 @@ Preview HTTP와 API readiness의 CPU 검증 명령은 [testing](testing.md)에 �
 제품 Nuxt 구현은 [frontend/README.md](../../frontend/README.md)를 따른다.
 
 색상 기반 주차의 logical space/zone API와 `parking.status_updated` 통합 상태는 [색상 주차 프론트 연결](../color-parking.md#프론트엔드-연결)을 따른다. 기존 차량 주차 계약과 다르며 초기/재접속 시 REST status로 최신 점수를 조회한다.
+
+`/datasets` 수집/관리와 `/datasets/images/:imageId` 박스 편집은 기존 Nuxt 프론트에 통합한다.
+API 프록시는 데이터셋 JPEG/ZIP만 큰 응답을 스트리밍한다. 계약·원본 프레임 경계와 운영 검증은
+[AI 데이터셋](../datasets.md), 화면 구현은 frontend README를 따른다.

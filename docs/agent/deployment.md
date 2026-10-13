@@ -26,3 +26,8 @@ WebRTC용 host network·UDP 설정은 제거했다. 기본 Compose와 private ov
 Git 공유 대상은 `AGENTS.md`, `CLAUDE.md`, `.ai/`, `docs/agent/`다. `.gitignore`에서 이 경로들을 제외하지 않는다. 실제 `.env`, host binding override, 모델·engine·캐시·출력 및 도구별 로컬 설정은 공유 대상과 구분한다.
 
 환경 변수 목록과 역할은 `.env.example`, Compose, `settings.py` / `camera_config.py`에서 확인한다. Backend/PostgreSQL에는 명시된 DB 변수만 전달한다. `docker compose config` / inspect / logs에는 private 값이 포함될 수 있으므로 원문을 공유 문서나 인수인계에 복사하지 않는다. 실행 경로 확인이 필요하면 README의 `tools/check_container_startup.py` 요약 절차를 사용한다.
+
+데이터셋은 Backend의 새 `dataset_data` named volume(`/app/dataset-storage`)과 additive 테이블을 쓴다.
+`DATASET_CAPTURE_ENABLED` 기본은 0이며 1로 바꾸면 Preview 재생성과 native GPU 확인이 필요하다.
+기존 PostgreSQL volume·모델/config를 보존하고 DB/파일 볼륨을 함께 백업한다.
+운영 적용과 검증 순서는 [AI 데이터셋](../datasets.md#실행과-아직-필요한-검증)을 따른다.

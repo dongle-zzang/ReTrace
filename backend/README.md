@@ -391,3 +391,12 @@ HTTP MockTransport로 대체한다. 실제 PostgreSQL 연결/GPU/RTSP/컨테이�
 ## 색상 기반 주차 MVP
 
 새 `/api/parking/spaces`, `/api/parking/zones`, `/api/parking/status`와 영역별 calibrate API는 차량 모델 없이 동작한다. 논리 공간과 다중 카메라 영역을 별도 테이블에 보존하며 기존 카메라별 주차 API는 유지한다. 기존 JPEG 프레임을 재사용한다. 요청·응답, 환경 변수, WS 연결, 추가 테이블 적용 및 한계는 [색상 주차 계약](../docs/color-parking.md)을 따른다. Backend image rebuild(OpenCV/NumPy 포함)와 Preview restart가 필요하다.
+
+## AI 차량 데이터셋
+
+`app/dataset.py`의 router/service와 `app/dataset_models.py`가 캡처·영속 이미지 관리·픽셀 박스
+저장·검수·YOLO ZIP 작업을 제공합니다. 새 `dataset_images`, `dataset_exports`는 기존 Base의
+additive `create_all`로 생성하며, JPEG/ZIP은 `DATASET_STORAGE_DIR`의 `dataset_data` 볼륨에 둡니다.
+기존 Preview OSD JPEG를 데이터셋으로 저장하지 않습니다. 기본 비활성인 요청 시 pre-OSD 캡처,
+API·DB·좌표·분할·복구·용량 제한·단일 worker 경계와 운영 적용/미검증 사항의 원문은
+[AI 데이터셋](../docs/datasets.md)입니다. `tests/test_datasets.py`로 CPU 검증합니다.

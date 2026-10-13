@@ -65,3 +65,7 @@ credentials*
 # Private host interface bindings
 compose.override.yaml
 compose.override.yml
+
+# Private dataset images and generated training archives
+/dataset-storage/
+/datasets/

@@ -15,6 +15,7 @@ from .parking import event_out, record_transition
 from .schemas import (CameraOut, HealthOut, LiveTrackOut, StatusOut, StatusSummary, TrackOut, TracksOut,
                       ParkingSpaceCreate, ParkingSpaceUpdate, ParkingSpaceOut, ParkingSummary)
 from .settings import Settings
+from .dataset import DatasetService, router as dataset_router
 from .color_parking import ColorParkingWorker, router as color_parking_router
 
 
@@ -32,6 +33,12 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
             poller.initialize()
         except SQLAlchemyError:
             pass  # DB can recover later; health/API respond 503 in the meantime.
+        datasets = DatasetService(config, sessions, transport)
+        app.state.datasets = datasets
+        try:
+            datasets.initialize()
+        except (SQLAlchemyError, OSError):
+            pass
         color_parking = ColorParkingWorker(config, sessions, transport)
         app.state.color_parking = color_parking
         thread = threading.Thread(target=poller.run, name="preview-poller", daemon=True)
@@ -41,6 +48,7 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
         try:
             yield
         finally:
+            datasets.close()
             poller.stop.set()
             color_parking.stop.set()
             if start_poller:
@@ -55,10 +63,11 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
 
     app = FastAPI(title="ReTrace Backend", lifespan=lifespan)
     app.include_router(color_parking_router)
+    app.include_router(dataset_router)
     origins = settings.cors_origins if settings is not None else Settings.cors_origins_from_env()
     if origins:
         app.add_middleware(CORSMiddleware, allow_origins=list(origins),
-                           allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "DELETE"],
+                           allow_credentials=False, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
                            allow_headers=["Content-Type"])
 
     @app.exception_handler(SQLAlchemyError)

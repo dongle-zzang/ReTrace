@@ -82,6 +82,13 @@ class BackendAPIProxy:
         self.timeout = timeout
 
     def parking_methods(self, path):
+        dataset_id = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
+        if path in ('/api/datasets/capture', '/api/datasets/exports'):
+            return ('GET', 'HEAD', 'POST')
+        if re.fullmatch('/api/datasets/images/' + dataset_id, path):
+            return ('GET', 'HEAD', 'DELETE')
+        if re.fullmatch('/api/datasets/images/' + dataset_id + '/annotations', path):
+            return ('PUT',)
         if path in ('/api/parking/spaces', '/api/parking/zones'):
             return ('GET', 'HEAD', 'POST')
         zone = r'/api/parking/zones/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
@@ -167,7 +174,8 @@ class BackendAPIProxy:
             body = self.read_body(handler)
             if body is None:
                 return
-        connection = self.connection_class(self.host, self.port, timeout=self.timeout)
+        timeout = max(self.timeout, 10) if path == '/api/datasets/capture' else self.timeout
+        connection = self.connection_class(self.host, self.port, timeout=timeout)
         try:
             # Fixed upstream, no redirects, no caller-selected host or proxy env.
             headers = {'Accept': 'application/json'}
@@ -176,6 +184,36 @@ class BackendAPIProxy:
                     headers[name] = handler.headers[name]
             connection.request(method, target, body=body, headers=headers)
             response = connection.getresponse()
+            dataset_file = re.fullmatch(r'/api/datasets/(images/[0-9a-fA-F-]{36}/(file|thumbnail)|exports/[0-9a-fA-F-]{36}/download)', path)
+            if dataset_file and response.status == 200:
+                # Dataset JPEG/ZIP responses are streamed, never buffered under the JSON cap.
+                length = response.getheader('Content-Length', '')
+                content_type = response.getheader('Content-Type', '')
+                if not re.fullmatch(r'[0-9]{1,15}', length) or content_type not in ('image/jpeg', 'application/zip'):
+                    handler.send_error(502)
+                    return
+                handler.send_response(200)
+                handler.send_header('Content-Type', content_type)
+                handler.send_header('Content-Length', length)
+                disposition = response.getheader('Content-Disposition', '')
+                if re.fullmatch(r'attachment; filename="[A-Za-z0-9_.-]+"', disposition):
+                    handler.send_header('Content-Disposition', disposition)
+                handler.send_header('Cache-Control', 'no-store')
+                handler.end_headers()
+                if method != 'HEAD':
+                    remaining = int(length)
+                    try:
+                        while remaining:
+                            chunk = response.read(min(65536, remaining))
+                            if not chunk:
+                                break
+                            handler.wfile.write(chunk)
+                            remaining -= len(chunk)
+                    except (OSError, HTTPException):
+                        pass
+                    if remaining:
+                        handler.close_connection = True
+                return
             body = response.read(4 * 1024 * 1024 + 1)
             if len(body) > 4 * 1024 * 1024 or 300 <= response.status < 400:
                 handler.send_error(502)

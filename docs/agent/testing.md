@@ -62,3 +62,10 @@ sudo docker compose exec -T retrace python3 -c 'from pathlib import Path; print(
 ```
 
 색상 주차: `python -m pytest -q backend/tests/test_color_parking.py`는 합성 HSV/단색 기준 차이, 연속 확인·hysteresis, 통합/충돌, CRUD/재시작 보존, 만료/반복 JPEG를 검증한다. `python -m unittest discover -s tests -p 'test_color_parking_transport.py'`는 실제 loopback JPEG snapshot 및 relay를 검증한다. 기존 Preview 쓰기/실시간 테스트에도 새 API/메시지 회귀가 포함된다. OpenCV/NumPy는 backend requirements에 있다. 운영 CCTV 정확도는 검증하지 않는다.
+
+데이터셋: `python -m pytest -q backend/tests/test_datasets.py`는 SQLite/합성 JPEG로
+clean 헤더/촬영 시각·파일/DB 저장·삭제 실패 복구·revision·검수·YOLO ZIP 매칭/정규화/해시·세션 분할을 확인한다.
+`python -m unittest discover -s tests -p 'test_preview_capture.py'`는 요청당 한 프레임/PTS·세대 검사,
+pre-OSD 변환 앞 tee 위치·bounded queue·preroll·handoff 실패를 fake Gst로 검사한다.
+`test_preview_api_writes.py`에는 dataset PUT/DELETE/POST와 4MiB 초과 ZIP 스트리밍 회귀가 포함된다.
+실제 GPU/PG/저장 볼륨·브라우저 검증은 [AI 데이터셋 실행 절차](../datasets.md#실행과-아직-필요한-검증)를 따른다.
