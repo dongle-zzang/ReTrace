@@ -2,6 +2,7 @@
 import type { VehicleBox } from '~/types/dataset'
 import { DATASET_CLASSES } from '~/types/dataset'
 import { clientToNormalized } from '~/lib/videoGeometry'
+import { createDatasetBoxId } from '~/lib/datasetBoxId'
 import { useVideoStage } from '~/composables/useVideoStage'
 
 const props = defineProps<{
@@ -32,7 +33,7 @@ function start(event: PointerEvent) {
   if (props.disabled || !loaded.value || event.button !== 0) return
   if (props.tool !== 'draw') { emit('select', null); return }
   const p = point(event)
-  draft.value = { id: crypto.randomUUID(), class_id: props.classId, x: p.x, y: p.y, width: 0, height: 0, source: 'manual' }
+  draft.value = { id: createDatasetBoxId(), class_id: props.classId, x: p.x, y: p.y, width: 0, height: 0, source: 'manual' }
   drag = { mode: 'draw', start: p, box: { ...draft.value }, pointer: event.pointerId }
   capture(event)
 }
