@@ -35,6 +35,7 @@ from preview_diagnostics import InferenceDiagnostics, log_safe_traceback, log_se
 from startup_timing import StartupTiming, startup_origin, source_observer, bus_observer
 from preview_timing import FrameTiming
 from preview_mjpeg import FrameStore, serve_mjpeg
+from preview_capture import RawCapture, CaptureBusy, CaptureUnavailable, add_capture_branch
 from preview_web import FrontendFiles, BackendAPIProxy
 from preview_socket import RealtimeHub
 from parking_relay import ParkingRelay
@@ -145,6 +146,34 @@ class PreviewHandler(BaseHTTPRequestHandler):
             else:
                 proxy.serve(self)
             return
+        if path.startswith('/training-snapshots/') and path.endswith('.jpg'):
+            camera_id = path[len('/training-snapshots/'):-4]
+            stream = next((s for s in self.server.stream_snapshot() if s['camera_id'] == camera_id), None)
+            capture = getattr(self.server, 'raw_captures', {}).get(camera_id)
+            if capture is None or stream is None or stream['runtime']['state'] not in ('online', 'degraded') or self.command == 'HEAD':
+                self.send_error(503)
+                return
+            identity = (stream['runtime_session'], stream['runtime']['generation'])
+            try:
+                jpeg, captured_at = capture.request()
+            except CaptureBusy:
+                self.send_error(409)
+                return
+            except CaptureUnavailable:
+                self.send_error(503)
+                return
+            current = next((s for s in self.server.stream_snapshot() if s['camera_id'] == camera_id), None)
+            if current is None or current['runtime']['state'] not in ('online', 'degraded') or identity != (current['runtime_session'], current['runtime']['generation']):
+                self.send_error(503)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(jpeg)))
+            self.send_header('X-Capture-Clean', 'pre-osd-v1')
+            self.send_header('X-Captured-At', captured_at)
+            self.end_headers()
+            self.wfile.write(jpeg)
+            return
         if path.startswith('/snapshots/') and path.endswith('.jpg'):
             camera_id = path[len('/snapshots/'):-4]
             stream = next((s for s in self.server.stream_snapshot() if s['camera_id'] == camera_id), None)
@@ -224,6 +253,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         else:
             proxy.serve(self)
 
+    do_PUT = do_POST
     do_PATCH = do_POST
     do_DELETE = do_POST
 
@@ -375,12 +405,24 @@ def build_output(index, args, store, fail):
                 return Gst.FlowReturn.OK
 
         sink.connect("new-sample", on_sample)
-        chain = (queue, osd_convert, rgba_caps, osd, converter, raw_caps, encoder, sink)
+        capture = getattr(args, 'raw_captures', {}).get(index)
+        if capture is not None:
+            tee = make_element('tee', f'capture-tee-{index}')
+            preview_queue = make_element('queue', f'capture-preview-queue-{index}')
+            preview_queue.set_property('max-size-buffers', 1)
+            preview_queue.set_property('max-size-bytes', 0)
+            preview_queue.set_property('max-size-time', 0)
+            preview_queue.set_property('leaky', 2)
+            chain = (queue, tee, preview_queue, osd_convert, rgba_caps, osd, converter, raw_caps, encoder, sink)
+        else:
+            chain = (queue, osd_convert, rgba_caps, osd, converter, raw_caps, encoder, sink)
         for element in chain:
             output_bin.add(element)
         for left, right in zip(chain, chain[1:]):
             if not left.link(right):
                 raise RuntimeError(f"Could not link {left.get_name()} -> {right.get_name()}")
+        if capture is not None:
+            add_capture_branch(output_bin, tee, capture, index, Gst, make_element)
         ghost_pad = Gst.GhostPad.new("sink", queue.get_static_pad("sink"))
         if ghost_pad is None or not output_bin.add_pad(ghost_pad):
             raise RuntimeError("Could not create output sink pad")
@@ -985,6 +1027,10 @@ def run(args, metadata_store=None, runtime_statuses=None):
         for slot, camera in enumerate(args.cameras):
             stores[camera.source_id].startup_observer = lambda stage, i=slot: startup.mark(stage, i)
     server.mjpeg_streams = {f"/mjpeg/source{index}": store for index, store in stores.items()}
+    args.raw_captures = ({slot: RawCapture() for slot in range(len(args.cameras))}
+                         if os.environ.get('DATASET_CAPTURE_ENABLED', '0') == '1' else {})
+    server.raw_captures = {camera.camera_id: args.raw_captures[slot] for slot, camera in enumerate(args.cameras)
+                           if slot in args.raw_captures}
 
     runtime_session = uuid.uuid4().hex  # Track identities must not collide after process restart.
 

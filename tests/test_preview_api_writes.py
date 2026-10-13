@@ -27,9 +27,17 @@ class ParkingProxyTests(unittest.TestCase):
             def serve(self):
                 body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 owner.requests.append((self.command, self.path, dict(self.headers), body))
+                if self.path.endswith('/download') and hasattr(owner, 'archive'):
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/zip')
+                    self.send_header('Content-Length', str(len(owner.archive)))
+                    self.send_header('Content-Disposition', 'attachment; filename="dataset_fixture.zip"')
+                    self.end_headers()
+                    if self.command != 'HEAD': self.wfile.write(owner.archive)
+                    return
                 status = 200
                 result = owner.spaces
-                if self.command in ('POST', 'PATCH'):
+                if self.command in ('POST', 'PATCH', 'PUT'):
                     try:
                         data = json.loads(body)
                         if not isinstance(data, dict):
@@ -58,6 +66,7 @@ class ParkingProxyTests(unittest.TestCase):
             do_GET = serve
             do_HEAD = serve
             do_POST = serve
+            do_PUT = serve
             do_PATCH = serve
             do_DELETE = serve
 
@@ -218,6 +227,41 @@ class ParkingProxyTests(unittest.TestCase):
         connection.getresponse.return_value = response
         with patch.object(self.proxy, 'connection_class', return_value=connection):
             self.assertEqual(self.request('GET')[0], 502)
+
+    def test_dataset_write_routes_and_payload_preserve_existing_bounds(self):
+        image = '/api/datasets/images/11111111-1111-4111-8111-111111111111'
+        self.spaces.append({})
+        body = b'{"revision":1,"boxes":[],"status":"in_progress"}'
+        status, _, payload = self.request('PUT', image + '/annotations', body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload)['revision'], 1)
+        self.assertEqual(self.requests[-1][0], 'PUT')
+        self.assertEqual(self.requests[-1][3], body)
+        for path in ('/api/datasets/capture', '/api/datasets/exports'):
+            self.assertEqual(self.request('POST', path, b'{}')[0], 201)
+        self.assertEqual(self.request('DELETE', image)[0], 204)
+        self.assertEqual(self.request('PUT', image, body)[0], 405)
+        self.assertEqual(self.request('PUT', image + '/annotations', b'x' * 65537)[0], 413)
+
+    def test_dataset_zip_stream_exceeds_json_limit_and_preserves_download_headers(self):
+        self.archive = b'PK' + bytes(range(256)) * 20000
+        path = '/api/datasets/exports/11111111-1111-4111-8111-111111111111/download'
+        status, headers, body = self.request('GET', path)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self.archive)
+        self.assertEqual(headers['Content-Disposition'], 'attachment; filename="dataset_fixture.zip"')
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        status, headers, body = self.request('HEAD', path)
+        self.assertEqual((status, body), (200, b''))
+        self.assertEqual(int(headers['Content-Length']), len(self.archive))
+
+    def test_dataset_download_rejects_invalid_upstream_file_headers(self):
+        connection = Mock()
+        response = Mock(status=200)
+        response.getheader.side_effect = lambda name, default='': {'Content-Length': '12', 'Content-Type': 'text/html'}.get(name, default)
+        connection.getresponse.return_value = response
+        with patch.object(self.proxy, 'connection_class', return_value=connection):
+            self.assertEqual(self.request('GET', '/api/datasets/exports/11111111-1111-4111-8111-111111111111/download')[0], 502)
 
 
 if __name__ == '__main__':
