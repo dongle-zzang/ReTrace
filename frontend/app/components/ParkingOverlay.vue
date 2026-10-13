@@ -184,7 +184,7 @@ watch(isDrawing, (drawing) => {
     <g
       v-for="shape in shapes"
       :key="shape.zone.id"
-      :class="canSelect && !isDrawing ? 'cursor-pointer' : 'pointer-events-none'"
+      :class="['outline-none', canSelect && !isDrawing ? 'cursor-pointer' : 'pointer-events-none']"
       :role="canSelect ? 'button' : 'img'"
       :tabindex="canSelect && !isDrawing ? 0 : undefined"
       :aria-label="shape.name + ' ' + parkingStatusLabel[shape.status] + (shape.conflict ? ', cameras disagree' : '')"
@@ -255,50 +255,14 @@ watch(isDrawing, (drawing) => {
     </g>
 
     <g v-if="isDrawing && drawing" class="pointer-events-none">
-      <polygon
-        v-if="drawing.length >= 3"
-        :points="pointList(hover ? [...drawing, hover] : drawing)"
-        class="fill-primary"
-        fill-opacity="0.1"
-        stroke="none"
-      />
-      <polyline
-        :points="pointList(hover ? [...drawing, hover] : drawing)"
-        fill="none"
-        stroke="#071116"
-        stroke-opacity="0.72"
-        stroke-width="5"
-        stroke-dasharray="7 5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-      <polyline
-        :points="pointList(hover ? [...drawing, hover] : drawing)"
-        fill="none"
-        class="stroke-primary"
-        stroke-width="2.5"
-        stroke-dasharray="7 5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-      <g v-for="(point, index) in drawing" :key="'draw-' + index">
-        <circle
-          :cx="px(point).x"
-          :cy="px(point).y"
-          :r="index === 0 && canClose ? CLOSE_RADIUS_PX - 3 : 6.5"
-          fill="#071116"
-          fill-opacity="0.92"
-          :stroke="index === 0 && canClose ? 'white' : 'var(--primary)'"
-          :stroke-width="index === 0 && canClose ? 1.5 : 2"
-        />
-        <circle
-          :cx="px(point).x"
-          :cy="px(point).y"
-          :r="index === 0 && canClose ? 3.25 : 2.25"
-          :fill="index === 0 && canClose ? 'white' : 'var(--primary)'"
-          class="pointer-events-none"
-        />
+      <g v-if="hover" stroke="white" stroke-opacity="0.55" stroke-width="1">
+        <line :x1="px(hover).x" y1="0" :x2="px(hover).x" :y2="size.height" vector-effect="non-scaling-stroke" />
+        <line x1="0" :y1="px(hover).y" :x2="size.width" :y2="px(hover).y" vector-effect="non-scaling-stroke" />
       </g>
+      <polygon v-if="drawing.length >= 3" :points="pointList(hover ? [...drawing, hover] : drawing)" fill="var(--primary)" fill-opacity="0.1" stroke="none" />
+      <polyline :points="pointList(hover ? [...drawing, hover] : drawing)" fill="none" stroke="var(--primary)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+      <rect v-for="(point, index) in drawing" :key="'draw-' + index" :x="px(point).x - 5" :y="px(point).y - 5" width="10" height="10" rx="1" fill="white" stroke="var(--primary)" :stroke-width="index === 0 && canClose ? 2.5 : 1.5" vector-effect="non-scaling-stroke" />
+      <rect v-if="canClose && drawing[0]" :x="px(drawing[0]).x - 8" :y="px(drawing[0]).y - 8" width="16" height="16" rx="2" fill="none" stroke="var(--primary)" stroke-opacity="0.5" stroke-width="1" vector-effect="non-scaling-stroke" />
     </g>
   </svg>
 </template>

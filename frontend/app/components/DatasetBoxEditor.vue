@@ -8,7 +8,7 @@ const props = defineProps<{
   imageUrl: string; width: number; height: number; boxes: VehicleBox[]
   selectedId: string | null; classId: number; tool: 'draw' | 'select'; zoom: number; disabled: boolean
 }>()
-const emit = defineEmits<{ update: [boxes: VehicleBox[]]; select: [id: string | null]; ready: [ready: boolean] }>()
+const emit = defineEmits<{ update: [boxes: VehicleBox[]]; select: [id: string | null]; ready: [ready: boolean]; delete: [id: string] }>()
 const stage = ref<HTMLElement | null>(null)
 const svg = ref<SVGSVGElement | null>(null)
 const loaded = ref(false)
@@ -16,6 +16,7 @@ const loadError = ref(false)
 const { contentStyle, content } = useVideoStage(stage, computed(() => ({ width: props.width, height: props.height })))
 const handleSize = computed(() => 5 * props.width / Math.max(1, content.value.width))
 const colors = ['var(--primary)', '#fbbf24', '#7dd3fc']
+const cursor = ref<{ x: number; y: number } | null>(null)
 const draft = ref<VehicleBox | null>(null)
 let drag: { mode: string; start: { x: number; y: number }; box: VehicleBox; pointer: number } | null = null
 const corners = ['nw', 'ne', 'sw', 'se']
@@ -26,7 +27,7 @@ function point(event: PointerEvent) {
   const p = clientToNormalized(event.clientX, event.clientY, { left: r.left, top: r.top, width: r.width, height: r.height })
   return { x: p.x * props.width, y: p.y * props.height }
 }
-function capture(event: PointerEvent) { svg.value?.setPointerCapture(event.pointerId); svg.value?.focus() }
+function capture(event: PointerEvent) { svg.value?.setPointerCapture(event.pointerId); svg.value?.focus({ preventScroll: true }) }
 function start(event: PointerEvent) {
   if (props.disabled || !loaded.value || event.button !== 0) return
   if (props.tool !== 'draw') { emit('select', null); return }
@@ -43,8 +44,10 @@ function grab(box: VehicleBox, mode: string, event: PointerEvent) {
   capture(event)
 }
 function move(event: PointerEvent) {
+  const p = point(event)
+  cursor.value = event.pointerType === 'touch' ? null : p
   if (!drag || drag.pointer !== event.pointerId) return
-  const p = point(event), original = drag.box
+  const original = drag.box
   let box = { ...original }
   if (drag.mode === 'draw') {
     box = { ...box, x: Math.min(drag.start.x, p.x), y: Math.min(drag.start.y, p.y), width: Math.abs(p.x - drag.start.x), height: Math.abs(p.y - drag.start.y) }
@@ -77,17 +80,21 @@ function key(event: KeyboardEvent) {
   if (props.disabled) return
   if (event.key === 'Escape') { draft.value = null; drag = null; emit('select', null) }
   if ((event.key === 'Delete' || event.key === 'Backspace') && props.selectedId) {
-    event.preventDefault(); emit('update', props.boxes.filter(box => box.id !== props.selectedId)); emit('select', null)
+    event.preventDefault(); emit('delete', props.selectedId)
   }
 }
 function imageLoaded() { loaded.value = true; loadError.value = false; emit('ready', true) }
 </script>
 
 <template>
-  <div class="relative h-full min-h-0 overflow-auto rounded-xl bg-black/80 ring-1 ring-white/10" aria-label="Bounding box canvas">
+  <div class="relative h-full min-h-0 basis-0 overflow-auto [scrollbar-gutter:stable] [overflow-anchor:none] rounded-xl bg-black/80 ring-1 ring-white/10" aria-label="Bounding box canvas">
     <div ref="stage" class="relative" :style="{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }">
       <img :src="imageUrl" alt="Clean captured frame for vehicle annotation" class="absolute inset-0 h-full w-full object-contain" draggable="false" @load="imageLoaded" @error="loadError = true; loaded = false; emit('ready', false)">
-      <svg v-if="loaded" ref="svg" class="absolute z-10 touch-none select-none outline-none" :class="tool === 'draw' ? 'cursor-crosshair' : ''" :style="{ ...contentStyle, pointerEvents: disabled ? 'none' : 'auto' }" :viewBox="`0 0 ${width} ${height}`" tabindex="0" role="group" aria-label="Vehicle bounding boxes" @pointerdown="start" @pointermove="move" @pointerup="end" @pointercancel="cancel" @keydown="key">
+      <svg v-if="loaded" ref="svg" class="absolute z-10 touch-none select-none outline-none" :class="tool === 'draw' ? 'cursor-crosshair' : ''" :style="{ ...contentStyle, pointerEvents: disabled ? 'none' : 'auto' }" :viewBox="`0 0 ${width} ${height}`" tabindex="0" role="group" aria-label="Vehicle bounding boxes" @pointerdown="start" @pointerenter="move" @pointerleave="cursor = null" @pointermove="move" @pointerup="end" @pointercancel="cancel" @keydown="key">
+        <g v-if="cursor && tool === 'draw' && !disabled" class="pointer-events-none" stroke="white" stroke-opacity="0.55" stroke-width="1">
+          <line :x1="cursor.x" y1="0" :x2="cursor.x" :y2="height" vector-effect="non-scaling-stroke" />
+          <line x1="0" :y1="cursor.y" :x2="width" :y2="cursor.y" vector-effect="non-scaling-stroke" />
+        </g>
         <g v-for="(box, index) in boxes" :key="box.id" :style="{ color: colors[box.class_id] }" @pointerdown.stop.prevent="grab(box, 'move', $event)">
           <rect :x="box.x" :y="box.y" :width="box.width" :height="box.height" fill="currentColor" :fill-opacity="box.id === selectedId ? 0.16 : 0.05" stroke="currentColor" :stroke-width="box.id === selectedId ? 2.5 : 1.5" vector-effect="non-scaling-stroke" :class="tool === 'select' ? 'cursor-move' : ''" />
           <text :x="box.x + handleSize" :y="box.y + handleSize * 3.5" :font-size="handleSize * 2.5" fill="white" stroke="#071116" :stroke-width="handleSize * 0.7" paint-order="stroke" class="pointer-events-none">{{ DATASET_CLASSES[box.class_id] }} {{ index + 1 }}</text>

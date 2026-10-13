@@ -25,10 +25,15 @@ const busy = ref<'register' | 'reset' | null>(null)
 const error = ref<string | null>(null)
 const done = ref<string | null>(null)
 
+const { confirm } = useConfirmDialog()
+
 async function run(register: boolean) {
+  if (busy.value) return
+  const requestedLabel = props.label
   if (register && props.status === 'occupied'
-    && !window.confirm(`${props.label} currently reads as occupied. Register the baseline anyway? Only do this if the spot is really empty.`)) return
-  if (!register && !window.confirm(`Reset the empty baseline of ${props.label}?`)) return
+    && !await confirm({ title: 'Register empty baseline?', description: `${props.label} currently reads as occupied. Continue only if the spot is actually empty.`, confirmLabel: 'Register baseline' })) return
+  if (!register && !await confirm({ title: 'Reset empty baseline?', description: `Reset the empty baseline of ${props.label}?`, confirmLabel: 'Reset baseline', destructive: true })) return
+  if (props.label !== requestedLabel || busy.value) return
   busy.value = register ? 'register' : 'reset'
   error.value = null
   done.value = null

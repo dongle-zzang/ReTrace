@@ -95,3 +95,17 @@ npm run build
 ```
 
 실제 서버와 브라우저에서 6대 이상 동시 재생, 필터·스크롤 시 구독 변경, 서버 단절 후 재접속, DevTools Memory/Network에서 object URL·JPEG 누적 없음 등을 확인합니다.
+
+Dataset controls share `DatasetSelect.vue` (Reka UI, body scroll lock disabled). Camera options match names containing `주차장`. The box editor stays in Draw mode between boxes, shows solid image-aligned crosshairs, and uses Select / resize or a box-list row to edit an existing box. Capture/review feedback reserves layout space and refresh keeps existing cards visible.
+
+데이터셋 ZIP 구조·학습 흐름·다른 모델에 전달할 프롬프트: [학습 안내](docs/dataset-training.md).
+
+라벨 도구 바는 기본 그리기이며 Select / resize 버튼으로 편집을 토글합니다. 새 박스는 car로 생성하고 기존 클래스는 보존합니다. 목록의 각 행·도구 바·Delete 키에서 박스 삭제 모달을 열며 저장 전에는 초안에만 반영됩니다. 이미지 삭제는 영구 삭제 확인 모달을 사용합니다.
+
+편집 도구 바는 `.editor-tools` 아이콘 그룹 스타일을 공유합니다. 모달은 root scrollbar gutter와 ConfigProvider의 padding/margin 0 조합으로 스크롤 잠금 시 중복 여백을 방지하고, 공통 fade/scale 애니메이션 및 reduced-motion을 지원합니다.
+
+브라우저 native confirm은 `useConfirmDialog`와 레이아웃의 `AppConfirmDialog`로 통일합니다. 내부 화면 이탈·편집 취소·캘리브레이션은 비동기 확인 모달을 기다리고, 닫을 때 표시 내용은 유지합니다. 탭 종료/새로고침의 `beforeunload`는 브라우저 제어이므로 유지합니다. Parking의 Zones는 우측 끝에 독립하며 편집 중 폴리곤 선택 시 라벨 모달을 엽니다.
+
+최신 라벨 편집 UI는 임시저장 없이 Save labels로 저장·검수 완료를 함께 처리합니다. 확대 도구는 영상 중앙, 저장은 영상 우측, 선택 박스 삭제는 Boxes 목록 상단에 둡니다.
+
+데이터셋 목록 진입 시 필터와 최신순 ID 순서를 보관해 편집기의 이전/다음에 재사용합니다. 페이지 경계를 지원하고 저장 후 상태가 바뀌어도 순서를 유지합니다. 브라우저 세션 저장소를 사용할 수 없으면 메모리로만 유지합니다. 영상 위 빈 메시지 줄은 없고 하단 설명과 완료 메시지가 같은 높이를 사용합니다. 내보내기 삭제는 원본/라벨을 유지하며 서버의 새 DELETE API가 필요합니다. 새 ZIP은 car-only, 과거 다중 클래스 기록은 Legacy로 표시합니다.

@@ -223,3 +223,56 @@
   backdrop-filter: blur(16px) saturate(150%);
   -webkit-backdrop-filter: blur(16px) saturate(150%);
 }
+
+/* Reserve page scrollbar space before, during and after modal body locking. */
+html { overflow-y: scroll; scrollbar-gutter: stable; }
+
+.editor-tools {
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.035);
+  gap: 5px;
+}
+.editor-tools button[data-slot="button"] {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 10px;
+  border-color: transparent;
+  background-color: rgb(255 255 255 / 0.055);
+  color: var(--muted-foreground);
+  transition: background-color 150ms, color 150ms;
+}
+.editor-tools button[data-slot="button"]:hover {
+  background-color: rgb(255 255 255 / 0.12);
+  color: var(--foreground);
+}
+.editor-tools button[aria-pressed="true"],
+.editor-tools button[data-variant="default"] {
+  background-color: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+}
+
+[data-slot="dialog-content"][data-state="open"] { animation: retrace-modal-in 180ms ease-out both; }
+[data-slot="dialog-content"][data-state="closed"] { animation: retrace-modal-out 140ms ease-in both; }
+[data-slot="dialog-overlay"][data-state="open"] { animation: retrace-backdrop-in 180ms ease-out both; }
+[data-slot="dialog-overlay"][data-state="closed"] { animation: retrace-backdrop-out 140ms ease-in both; }
+@keyframes retrace-modal-in { from { opacity: 0; scale: .97; } to { opacity: 1; scale: 1; } }
+@keyframes retrace-modal-out { from { opacity: 1; scale: 1; } to { opacity: 0; scale: .97; } }
+@keyframes retrace-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes retrace-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-content"], [data-slot="dialog-overlay"] { animation-duration: 1ms !important; }
+}
+
+.editor-tools button[data-variant="destructive"] {
+  background-color: rgb(248 113 113 / .1);
+  color: #f87171;
+}
+.editor-tools button[data-variant="destructive"]:hover {
+  background-color: rgb(248 113 113 / .2);
+  color: #fca5a5;
+}
