@@ -25,12 +25,13 @@ let stopWatch: (() => void) | undefined
 const cameraId = computed(() => props.camera.camera_id)
 const shouldWatch = computed(() => props.camera.enabled && props.active && !!props.realtimeClient)
 const serverConnected = computed(() => props.connection === 'open')
-const cameraUnavailable = computed(() => !!props.cameraState && !['online', 'degraded'].includes(props.cameraState))
+const cameraUnavailable = computed(() => !['online', 'degraded'].includes(props.cameraState ?? props.camera.status.state)
+  || (!props.cameraState && props.camera.status.stale))
 
 const state = computed<TransportState>(() => {
   if (!shouldWatch.value) return 'waiting'
   if (!serverConnected.value) return props.connection === 'reconnecting' ? 'reconnecting' : 'connecting'
-  return hasFrame.value ? 'connected' : 'connecting'
+  return hasFrame.value && !cameraUnavailable.value ? 'connected' : 'connecting'
 })
 
 watch(state, (next) => emit('transport', next), { immediate: true })
@@ -51,6 +52,7 @@ function startFrames() {
 
 let lastSize = ''
 function onFrameShown(size: { width: number; height: number }) {
+  if (!shouldWatch.value || !serverConnected.value || cameraUnavailable.value || !size.width || !size.height) return
   hasFrame.value = true
   const key = size.width + 'x' + size.height
   if (!size.width || !size.height || key === lastSize) return
@@ -65,6 +67,13 @@ watch([cameraId, shouldWatch, () => props.realtimeClient], startFrames, { flush:
 // A dropped connection leaves no fresh frames; don't keep showing a frozen image.
 watch(serverConnected, (connected) => {
   if (!connected) {
+    view?.clear()
+    hasFrame.value = false
+  }
+})
+
+watch(cameraUnavailable, (unavailable) => {
+  if (unavailable) {
     view?.clear()
     hasFrame.value = false
   }
@@ -106,7 +115,7 @@ onUnmounted(() => {
         </div>
         <p v-if="!camera.enabled" class="text-sm">Camera disabled</p>
         <p v-else-if="state === 'reconnecting' || state === 'connecting' && !serverConnected" class="text-sm">Connecting to server…</p>
-        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">No video from camera ({{ cameraState }})</p>
+        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">No video from camera ({{ cameraState ?? camera.status.state }})</p>
         <p v-else-if="state === 'connecting'" class="text-sm">Waiting for video…</p>
         <p v-else class="text-sm">Video starts when visible</p>
       </div>

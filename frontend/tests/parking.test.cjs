@@ -146,10 +146,24 @@ test('summarizeSpaces groups zones of different cameras by parkingSpaceId', () =
     state('z3', 'cam1', 'empty', 0.7, 'B'),
     state('z4', 'cam1', 'empty', 0.7, null),
   ])
-  assert.deepEqual(plain(summaries.map(summary => summary.space.label)), ['A-2', 'A-10'])
+  assert.deepEqual(plain(summaries.map(summary => summary.space.label)), ['A-2', 'A-10', 'unused'])
   assert.deepEqual(plain(summaries[1].zones.map(zone => zone.cameraId)), ['cam1', 'cam2'])
   assert.equal(summaries[1].status, 'occupied')
   assert.equal(summaries[1].conflict, false)
+  assert.equal(summaries[2].status, 'unknown')
+  assert.equal(summaries[2].zones.length, 0)
+})
+
+test('same label with separate IDs counts as one spot and combines all camera views', () => {
+  const summaries = parking.summarizeSpaces([
+    { id: 'A', label: 'A-P1' }, { id: 'B', label: ' a-p1 ' }, { id: 'C', label: 'Other' },
+  ], [state('z1', 'cam1', 'empty', 0.6, 'A'), state('z2', 'cam2', 'occupied', 0.9, 'B')])
+  assert.equal(summaries.length, 2)
+  assert.deepEqual(plain(summaries[0].spaceIds), ['A', 'B'])
+  assert.equal(summaries[0].zones.length, 2)
+  assert.equal(summaries[0].status, 'occupied')
+  assert.equal(summaries[0].conflict, true)
+  assert.equal(summaries[1].status, 'unknown')
 })
 
 test('status payloads from REST and /ws parking.status_updated', () => {

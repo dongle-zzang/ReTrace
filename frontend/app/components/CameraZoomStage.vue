@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Camera } from '~/types/camera'
-import type { ConnectionState, RealtimePreviewClient } from '~/composables/realtimePreviewClient'
+import type { ConnectionState, RealtimePreviewClient, TransportState } from '~/composables/realtimePreviewClient'
 import type { RealtimeCameraStatus } from '~/types/realtime'
 import type { ParkingStatus, ParkingZone } from '~/types/parking'
 import { Maximize2, Minimize2 } from '@lucide/vue'
@@ -26,6 +26,7 @@ defineProps<{
 
 const stageElement = ref<HTMLElement | null>(null)
 const mediaSize = ref({ width: 1280, height: 720 })
+const videoTransport = ref<TransportState>('waiting')
 const { content, contentStyle, isFullscreen, toggleFullscreen } = useVideoStage(stageElement, mediaSize)
 </script>
 
@@ -40,9 +41,10 @@ const { content, contentStyle, isFullscreen, toggleFullscreen } = useVideoStage(
       :camera-state="liveStatus ? String(liveStatus.state) : undefined"
       :active="true"
       @dimensions="mediaSize = $event"
+      @transport="videoTransport = $event"
     />
     <ParkingOverlay
-      v-if="parkingZones?.length"
+      v-if="parkingZones?.length && videoTransport === 'connected'"
       class="absolute z-10"
       :style="contentStyle"
       :width="content.width"

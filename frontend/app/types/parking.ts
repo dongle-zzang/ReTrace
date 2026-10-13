@@ -81,6 +81,8 @@ export interface ParkingStatusReport {
 /** A space's combined status across all cameras that see it. */
 export interface ParkingSpaceSummary {
   space: ParkingSpace
+  /** All server IDs with the same normalized label. */
+  spaceIds: string[]
   status: ParkingStatus
   /** Cameras that can see the spot disagree (one occupied, another empty). */
   conflict: boolean

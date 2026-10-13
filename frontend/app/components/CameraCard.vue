@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Camera } from '~/types/camera'
-import type { ConnectionState, RealtimePreviewClient } from '~/composables/realtimePreviewClient'
+import type { ConnectionState, RealtimePreviewClient, TransportState } from '~/composables/realtimePreviewClient'
 import type { RealtimeCameraStatus } from '~/types/realtime'
 import type { CameraOverlayData, OverlaySelection } from '~/types/overlay'
 import type { ParkingStatus, ParkingZone } from '~/types/parking'
@@ -37,6 +37,7 @@ const props = defineProps<{
 
 const stageElement = ref<HTMLElement | null>(null)
 const isVisible = ref(false)
+const videoTransport = ref<TransportState>('waiting')
 const mediaSize = ref({ width: 1280, height: 720 })
 const selection = ref<OverlaySelection>(null)
 const emptyAnnotations = emptyCameraOverlay()
@@ -115,6 +116,7 @@ onUnmounted(() => {
         :camera-state="liveStatus ? String(liveStatus.state) : undefined"
         :active="isVisible"
         @dimensions="mediaSize = $event"
+        @transport="videoTransport = $event"
       />
       <CameraOverlay
         class="absolute z-10"
@@ -126,7 +128,7 @@ onUnmounted(() => {
         @select="selection = $event"
       />
       <ParkingOverlay
-        v-if="parkingZones?.length"
+        v-if="parkingZones?.length && videoTransport === 'connected'"
         class="absolute z-10"
         :style="overlayStyle"
         :width="content.width"
