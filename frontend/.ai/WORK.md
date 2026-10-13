@@ -1,5 +1,16 @@
 # Frontend current work
 
+## Dataset management and bounding-box editor — source implemented; native verification pending (2026-10-12)
+
+- Completed source: `/datasets` collection/export and `/datasets/images/:imageId` pixel box editor; opt-in one-frame pre-OSD JPEG on existing decode; persistent image/thumbnail/ZIP volume; additive dataset_images/exports; review/revision/deletion recovery; session-safe YOLO ZIP. Contract/runbook: docs/datasets.md.
+- Tests: Backend 138 passed (13 dataset); capture 5, write/large-file proxy 12, shared pipeline 14, WebSocket 11, parking relay 9 passed. Frontend 27, typecheck, build passed. Actual local backend/SQLite/files with synthetic JPEG passed Chrome capture → draw/move/resize/zoom → review/reload → export/download and dirty-route protection at 1440/1920/390 widths.
+- Existing Preview HTTP tests: 2 pass, 2 Windows environment errors (symlink privilege and connect-refusal/client timeout), reproduced with HEAD proxy. No new failures identified; native Linux rerun pending.
+- No operational services/DB/model/config changed. Real GPU pre-OSD surface/plugin/FPS, PostgreSQL locking and persistent Compose restart/CCTV flow remain NOT VERIFIED. Auto labels deferred: exact JPEG/metadata frame association not implemented. DATASET_CAPTURE_ENABLED defaults 0.
+- Next: operator backup DB + image volume, preserve existing live model/private config and pending tasks, apply Backend + opt-in Preview + frontend per docs/datasets.md, then verify actual CCTV/PG/restart/regressions. Do not activate an earlier pending model switch as part of this work.
+- Dataset camera picker uses the existing Reka UI Select with `bodyLock=false` so opening options preserves the page scrollbar. Compact 36px-high/208px-wide trigger shows the camera name and a dropdown chevron; options show camera names only. Selection highlight and disabled states remain.
+- Handoff checks (2026-10-13): frontend 27 tests, typecheck and production build passed; clean capture 5 tests passed. Backend dataset rerun could not collect because the current default Python lacks cv2; earlier full verification above is historical. Server native GPU/PostgreSQL verification remains pending.
+- Existing parking UI edits and all unrelated tasks below preserved. New source pages must remain tracked: root /datasets/ ignore is anchored. Git handoff authorized for server testing on 2026-10-13. Local development UI runs at http://127.0.0.1:3002/datasets (other project's :3000 and user's :3123 left untouched); backend API deployment is still needed for real captures.
+
 ## CSR static deployment — upload pending (2026-10-10)
 
 - Added the missing `ssr: false` in `nuxt.config.ts` to match the intended CSR deployment.

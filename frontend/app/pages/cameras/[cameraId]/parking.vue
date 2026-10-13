@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ArrowLeft, Check, CircleAlert, Maximize2, Minimize2, Pencil, Plus, SquareParking, Undo2, X } from '@lucide/vue'
+import { ArrowLeft, Check, CircleAlert, Maximize2, Minimize2, PanelRight, Pencil, Plus, SquareParking, Undo2, X, Trash2 } from '@lucide/vue'
 import CameraVideo from '~/components/CameraVideo.vue'
 import ParkingCalibrationPanel from '~/components/ParkingCalibrationPanel.vue'
-import ParkingLabelList from '~/components/ParkingLabelList.vue'
+import ParkingZoneInspector from '~/components/ParkingZoneInspector.vue'
+import ParkingStatusBadge from '~/components/ParkingStatusBadge.vue'
 import ParkingOverlay from '~/components/ParkingOverlay.vue'
 import ParkingSpaceBoard from '~/components/ParkingSpaceBoard.vue'
 import ParkingSummary from '~/components/ParkingSummary.vue'
@@ -18,7 +19,10 @@ import { useParkingEditor } from '~/composables/useParkingEditor'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { useVideoStage } from '~/composables/useVideoStage'
 import { floorLabel } from '~/lib/cameraSort'
-import { countStatuses } from '~/lib/parking'
+import { compareLabels, countStatuses } from '~/lib/parking'
+
+// Let the layout reserve the actual navigation and footer heights.
+definePageMeta({ viewportWorkspace: true })
 
 const route = useRoute()
 const cameraId = computed(() => String(route.params.cameraId ?? ''))
@@ -61,66 +65,63 @@ function retry() {
 
 // ---- Selection ---------------------------------------------------------------------------------
 
-/** View mode: the zone whose details (status, calibration) are shown. */
 const focusedZoneId = ref<string | null>(null)
-/** Label picked for the next shape, when no zone is selected. */
-const pendingSpaceId = ref<string | null>(null)
-
+const inspector = ref<InstanceType<typeof ParkingZoneInspector> | null>(null)
+const zonesOpen = ref(false)
+const zonesButton = ref<HTMLButtonElement | null>(null)
+const labelButton = ref<HTMLButtonElement | null>(null)
 const selectedZoneId = computed(() => (editor.editing.value ? editor.selectedId.value : focusedZoneId.value))
 const selectedZone = computed(() => zones.value.find((zone) => zone.id === selectedZoneId.value) ?? null)
-const activeSpaceId = computed(() => selectedZone.value?.parkingSpaceId || pendingSpaceId.value)
-const focusedZone = computed(() => (editor.editing.value ? null : (savedZones.value ?? []).find((zone) => zone.id === focusedZoneId.value) ?? null))
-const focusedSummary = computed(() => (focusedZone.value ? parking.summaryBySpace.value[focusedZone.value.parkingSpaceId] ?? null : null))
+const focusedZone = computed(() => editor.editing.value ? null : selectedZone.value)
+const focusedSummary = computed(() => focusedZone.value ? parking.summaryBySpace.value[focusedZone.value.parkingSpaceId] ?? null : null)
+const zoneRows = computed(() => [...zones.value].sort((a, b) => compareLabels(parking.spaceLabels.value[a.parkingSpaceId] ?? '', parking.spaceLabels.value[b.parkingSpaceId] ?? '')))
 
-function zoneOfSpace(spaceId: string) {
-  return zones.value.find((zone) => zone.parkingSpaceId === spaceId) ?? null
+function focusLabel() {
+  void nextTick(() => inspector.value?.focus())
 }
 
-/**
- * A label row was clicked. Drawn on this camera → select that zone. Otherwise: give it to the
- * selected unlabelled/relabelled zone, or start drawing a new zone with this label.
- */
-function pickLabel(spaceId: string) {
-  const existing = zoneOfSpace(spaceId)
-  const selected = editor.editing.value ? selectedZone.value : null
-  if (selected && (!existing || existing.id === selected.id)) {
-    editor.assign(selected.id, spaceId)
-    editor.notice.value = null
-    return
-  }
-  if (existing) {
-    if (editor.editing.value) editor.select(existing.id)
-    else focusedZoneId.value = focusedZoneId.value === existing.id ? null : existing.id
-    return
-  }
-  pendingSpaceId.value = spaceId
-  if (!editor.editing.value) startEditing()
-  editor.select(null)
-  editor.startDrawing()
+function closeZones() {
+  zonesOpen.value = false
+  zonesButton.value?.focus()
 }
 
 function selectZone(zoneId: string | null) {
-  pendingSpaceId.value = null
+  if (saving.value) return
   if (editor.editing.value) editor.select(zoneId)
   else focusedZoneId.value = zoneId
 }
 
+function assignLabel(zoneId: string, spaceId: string) {
+  if (saving.value || !editor.editing.value || editor.selectedId.value !== zoneId) return
+  if (zones.value.some((zone) => zone.id !== zoneId && zone.parkingSpaceId === spaceId)) return
+  editor.assign(zoneId, spaceId)
+  editor.notice.value = null
+}
+
 function finishShape() {
-  const spaceId = pendingSpaceId.value && !zoneOfSpace(pendingSpaceId.value) ? pendingSpaceId.value : ''
-  if (!editor.finishDrawing(spaceId)) return
-  pendingSpaceId.value = null
-  if (!spaceId) editor.notice.value = 'Pick a label for the new zone in the list'
+  if (saving.value || !editor.finishDrawing()) return
+  focusLabel()
 }
 
 function cancelShape() {
   editor.cancelDrawing()
-  pendingSpaceId.value = null
 }
 
-/** Starts drawing a new zone, entering edit mode first when needed. */
+function removeZone(zoneId: string) {
+  if (!saving.value) editor.remove(zoneId)
+}
+
 function addZone() {
+  if (saving.value || editor.drawing.value) return
   if (!editor.editing.value) startEditing()
-  pendingSpaceId.value = null
+  const unlabeled = zones.value.find((zone) => !zone.parkingSpaceId)
+  if (unlabeled) {
+    editor.select(unlabeled.id)
+    editor.notice.value = 'Choose a label or delete this zone before adding another.'
+    focusLabel()
+    return
+  }
+  zonesOpen.value = false
   editor.startDrawing()
 }
 
@@ -128,8 +129,10 @@ function addZone() {
 
 function startEditing() {
   saveError.value = null
+  const previousSelection = focusedZoneId.value
   focusedZoneId.value = null
   editor.begin(savedZones.value)
+  editor.select(previousSelection)
 }
 
 function confirmDiscard() {
@@ -139,11 +142,11 @@ function confirmDiscard() {
 function cancelEditing() {
   if (!confirmDiscard()) return
   editor.end()
-  pendingSpaceId.value = null
   saveError.value = null
 }
 
 async function save() {
+  if (saving.value) return
   if (editor.drawing.value) {
     finishShape()
     if (editor.drawing.value) return
@@ -153,6 +156,7 @@ async function save() {
     editor.select(firstProblem.zoneId)
     const zone = zones.value.find((item) => item.id === firstProblem.zoneId)
     editor.notice.value = `${(zone && parking.spaceLabels.value[zone.parkingSpaceId]) || 'New zone'}: ${firstProblem.message}`
+    if (zone && !zone.parkingSpaceId) focusLabel()
     return
   }
   saving.value = true
@@ -174,38 +178,15 @@ async function save() {
   }
 }
 
-/** Tool group above the video; which tools show depends on the mode. */
-const tools = computed(() => {
-  if (!editor.editing.value) {
-    return [
-      { label: 'Edit zones', icon: Pencil, run: startEditing, disabled: parking.loading.value, primary: false },
-      { label: 'Add zone', icon: Plus, run: addZone, disabled: parking.loading.value, primary: false },
-    ]
-  }
-  if (editor.drawing.value) {
-    return [
-      { label: 'Undo point', icon: Undo2, run: editor.undoPoint, disabled: !editor.drawing.value.length, primary: false },
-      { label: 'Finish shape', icon: Check, run: finishShape, disabled: editor.drawing.value.length < 3, primary: true },
-      { label: 'Cancel shape', icon: X, run: cancelShape, disabled: false, primary: false },
-    ]
-  }
-  return [
-    { label: 'Add zone', icon: Plus, run: addZone, disabled: false, primary: false },
-    { label: saving.value ? 'Saving…' : 'Save', icon: Check, run: save, disabled: saving.value, primary: true },
-    { label: 'Cancel', icon: X, run: cancelEditing, disabled: saving.value, primary: false },
-  ]
-})
-
 const hint = computed(() => {
-  if (!editor.editing.value) return null
   if (editor.notice.value) return editor.notice.value
   if (editor.drawing.value) {
-    const label = pendingSpaceId.value ? parking.spaceLabels.value[pendingSpaceId.value] + ': ' : ''
-    return (editor.drawing.value.length ?? 0) < 3
-      ? `${label}click the video to place points (${editor.drawing.value.length}/3)`
-      : `${label}click the first point or press Enter to finish · Backspace undoes · Esc cancels`
+    return editor.drawing.value.length < 3
+      ? `Click the video to place points (${editor.drawing.value.length}/3)`
+      : 'Click the first point or press Enter to finish · Backspace undoes · Esc cancels'
   }
-  return null
+  if (editor.editing.value) return 'Select a zone to adjust its points. Save changes when done.'
+  return 'Select a zone to see its status and empty baseline, or add a new zone.'
 })
 
 // ---- Keyboard / navigation ---------------------------------------------------------------------
@@ -215,7 +196,7 @@ function isTextInput(target: EventTarget | null) {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (!editor.editing.value || isTextInput(event.target)) return
+  if (event.defaultPrevented || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) || saving.value || !editor.editing.value || isTextInput(event.target)) return
   if (editor.drawing.value) {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -231,7 +212,7 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') editor.select(null)
   else if ((event.key === 'Delete' || event.key === 'Backspace') && editor.selectedId.value) {
     event.preventDefault()
-    editor.remove(editor.selectedId.value)
+    removeZone(editor.selectedId.value)
   }
 }
 
@@ -243,7 +224,7 @@ onBeforeRouteLeave(() => confirmDiscard())
 
 watch(cameraId, () => {
   focusedZoneId.value = null
-  pendingSpaceId.value = null
+  zonesOpen.value = false
   editor.end()
   saveError.value = null
 })
@@ -260,84 +241,74 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="text-foreground">
-    <div class="sticky top-(--app-nav-height) z-30 border-b border-border/60 bg-background/75 backdrop-blur-xl">
-      <div class="mx-auto flex max-w-[1500px] items-center gap-3 px-5 py-3 sm:px-8 lg:px-10">
-        <Button as-child variant="ghost" size="icon-sm" aria-label="Back to Parking">
-          <NuxtLink to="/parking"><ArrowLeft /></NuxtLink>
-        </Button>
-        <SquareParking class="size-4 shrink-0 text-muted-foreground" />
-        <h1 class="min-w-0 truncate text-base font-semibold tracking-tight">
-          <Skeleton v-if="camerasLoading && !camera" class="h-5 w-40" />
-          <template v-else>{{ camera?.name ?? cameraId }} <span class="font-normal text-muted-foreground">Parking zones</span></template>
-        </h1>
-        <Badge v-if="camera" variant="secondary" class="tabular-nums">{{ floorLabel(camera.floor) }}</Badge>
-        <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="ml-auto text-muted-foreground">Mock data</Badge>
-      </div>
-    </div>
-
+  <main class="flex min-h-0 flex-1 flex-col text-foreground">
+    <header class="flex min-h-16 shrink-0 items-center gap-3 px-4 py-3 sm:px-6">
+      <Button as-child variant="ghost" size="icon-sm" aria-label="Back to Parking"><NuxtLink to="/parking"><ArrowLeft /></NuxtLink></Button>
+      <SquareParking class="hidden size-4 shrink-0 text-muted-foreground sm:block" />
+      <h1 class="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight sm:text-base">
+        <Skeleton v-if="camerasLoading && !camera" class="h-5 w-40" />
+        <template v-else>{{ camera?.name ?? cameraId }} <span class="font-normal text-muted-foreground">Parking zones</span></template>
+      </h1>
+      <Badge v-if="camera" variant="secondary" class="shrink-0 tabular-nums">{{ floorLabel(camera.floor) }}</Badge>
+      <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="shrink-0 text-muted-foreground">Mock data</Badge>
+    </header>
     <Empty v-if="!camerasLoading && !camera" class="mx-auto mt-16 max-w-xl border border-border bg-card/40 py-16">
       <EmptyHeader>
-        <EmptyMedia variant="icon" class="size-12 rounded-xl">
-          <SquareParking class="size-6" />
-        </EmptyMedia>
+        <EmptyMedia variant="icon" class="size-12 rounded-xl"><SquareParking class="size-6" /></EmptyMedia>
         <EmptyTitle class="text-base">Camera not found</EmptyTitle>
         <EmptyDescription>{{ cameraId }} isn't in the camera list.</EmptyDescription>
       </EmptyHeader>
-      <EmptyContent>
-        <Button as-child variant="outline"><NuxtLink to="/parking">Back to Parking</NuxtLink></Button>
-      </EmptyContent>
+      <EmptyContent><Button as-child variant="outline"><NuxtLink to="/parking">Back to Parking</NuxtLink></Button></EmptyContent>
     </Empty>
-
-    <div v-else class="mx-auto grid max-w-[1500px] gap-6 px-5 pt-6 pb-16 sm:px-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-10">
-      <div class="min-w-0">
-        <div ref="viewerElement" :class="['flex flex-col', isFullscreen ? 'h-screen w-screen bg-black' : '']">
-          <!-- Icon tool group above the video (never over it); it goes fullscreen with the video. -->
-          <div :class="['flex items-center gap-2', isFullscreen ? 'p-3' : 'pb-3']">
-            <div class="glass-panel flex items-center gap-1 rounded-xl p-1" role="toolbar" aria-label="Zone tools">
-              <Tooltip v-for="tool in tools" :key="tool.label">
-                <TooltipTrigger as-child>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    :variant="tool.primary ? 'default' : 'ghost'"
-                    class="size-8 rounded-lg"
-                    :aria-label="tool.label"
-                    :disabled="tool.disabled"
-                    @click="tool.run"
-                  >
-                    <component :is="tool.icon" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{{ tool.label }}</TooltipContent>
-              </Tooltip>
-            </div>
-
-            <p v-if="hint" :class="['min-w-0 truncate px-1 text-xs', editor.notice.value ? 'text-amber-300' : 'text-muted-foreground']" role="status">
-              {{ hint }}
-            </p>
-
-            <div class="glass-panel ml-auto flex items-center rounded-xl p-1">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    class="size-8 rounded-lg"
-                    :aria-label="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-                    @click="toggleFullscreen"
-                  >
-                    <Minimize2 v-if="isFullscreen" />
-                    <Maximize2 v-else />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{{ isFullscreen ? 'Exit fullscreen' : 'Fullscreen' }}</TooltipContent>
-              </Tooltip>
-            </div>
+    <div v-else class="flex min-h-0 flex-1 flex-col px-3 pb-4 sm:px-6">
+      <div ref="viewerElement" :class="['flex min-h-0 flex-1 flex-col gap-2', isFullscreen ? 'h-dvh w-full bg-background p-3' : '']" aria-label="Parking zone workspace">
+        <div class="flex shrink-0 flex-wrap items-center gap-2" role="toolbar" aria-label="Zone tools">
+          <template v-if="editor.drawing.value">
+            <Button size="sm" variant="outline" :disabled="!editor.drawing.value.length" @click="editor.undoPoint"><Undo2 /> Undo point</Button>
+            <Button size="sm" :disabled="editor.drawing.value.length < 3" @click="finishShape"><Check /> Finish shape</Button>
+            <Button size="sm" variant="ghost" @click="cancelShape"><X /> Cancel shape</Button>
+          </template>
+          <template v-else>
+            <Button v-if="!editor.editing.value" size="sm" variant="outline" :disabled="parking.loading.value" @click="startEditing"><Pencil /> Edit zones</Button>
+            <Button size="sm" :variant="editor.editing.value ? 'outline' : 'default'" :disabled="saving || parking.loading.value" @click="addZone"><Plus /> Add zone</Button>
+            <template v-if="editor.editing.value">
+              <Button size="sm" :disabled="saving" @click="save"><Check /> {{ saving ? 'Saving…' : 'Save changes' }}</Button>
+              <Button size="sm" variant="ghost" :disabled="saving" @click="cancelEditing"><X /> Cancel</Button>
+            </template>
+          </template>
+          <template v-if="selectedZone && !editor.drawing.value">
+            <span class="max-w-28 truncate px-1 text-xs font-medium text-muted-foreground">{{ parking.spaceLabels.value[selectedZone.parkingSpaceId] ?? 'New zone' }}</span>
+            <template v-if="editor.editing.value">
+              <Button as-child size="sm" variant="ghost" :disabled="saving">
+                <button ref="labelButton" type="button" @click="focusLabel"><Pencil /> {{ selectedZone.parkingSpaceId ? 'Edit label' : 'Set label' }}</button>
+              </Button>
+              <Button size="icon-sm" variant="ghost" :disabled="saving" aria-label="Delete selected zone" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
+            </template>
+          </template>
+          <div class="ml-auto flex items-center gap-2">
+            <Button as-child size="sm" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
+              <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /> Zones {{ zones.length }}</button>
+            </Button>
+            <Badge v-if="editor.editing.value" variant="outline" class="hidden border-primary/40 text-primary sm:inline-flex">{{ editor.drawing.value ? 'Drawing' : 'Editing' }}</Badge>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button type="button" size="icon-sm" variant="ghost" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'" @click="toggleFullscreen"><Minimize2 v-if="isFullscreen" /><Maximize2 v-else /></Button>
+              </TooltipTrigger>
+              <TooltipContent>{{ isFullscreen ? 'Exit fullscreen' : 'Fullscreen' }}</TooltipContent>
+            </Tooltip>
           </div>
-
-          <div ref="stageElement" :class="['relative overflow-hidden bg-black', isFullscreen ? 'min-h-0 flex-1' : 'aspect-video rounded-xl ring-1 ring-white/[0.08]']">
+        </div>
+        <p :class="['shrink-0 px-1 text-xs', editor.notice.value ? 'text-amber-300' : 'text-muted-foreground']" role="status">{{ hint }}</p>
+        <div v-if="pageError" class="flex shrink-0 items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-red-300" role="alert">
+          <CircleAlert class="size-3.5 shrink-0" />
+          <span class="min-w-0 flex-1">{{ pageError }}</span>
+          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-2 text-xs" :disabled="saving" @click="retry">Retry</Button>
+        </div>
+        <div class="flex min-h-0 flex-1 gap-3 overflow-hidden">
+          <div
+            ref="stageElement"
+            :class="['relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl bg-black ring-1 ring-white/[0.08]', zonesOpen ? 'hidden sm:block' : '']"
+          >
             <CameraVideo
               v-if="camera"
               :camera="camera"
@@ -356,7 +327,8 @@ onUnmounted(() => {
               :space-labels="parking.spaceLabels.value"
               :statuses="parking.zoneStatuses.value"
               :conflict-space-ids="conflictSpaceIds"
-              :editing="editor.editing.value"
+              :editing="editor.editing.value && !saving"
+              :interactive="!saving"
               :selected-id="selectedZoneId"
               :drawing="editor.drawing.value"
               :invalid-ids="invalidIds"
@@ -367,82 +339,96 @@ onUnmounted(() => {
               @insert-vertex="editor.insertVertex"
               @remove-vertex="editor.removeVertex"
             />
-            <!-- Mode tag only: no pointer events, so clicks near the corner still reach the video. -->
-            <Badge
-              v-if="editor.editing.value"
-              class="pointer-events-none absolute top-3 left-3 z-20 border border-primary/40 bg-black/60 text-primary backdrop-blur-md"
-            >
-              {{ editor.drawing.value ? 'Drawing' : 'Editing' }}
-            </Badge>
           </div>
+          <Transition name="zone-panel">
+            <aside
+              v-show="zonesOpen"
+              id="camera-zone-panel"
+              :inert="!zonesOpen"
+              class="flex w-full min-w-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-xl border border-white/10 bg-background/75 p-4 backdrop-blur-xl sm:w-80 lg:w-88"
+              aria-label="Parking zone list"
+              @keydown.esc.stop="closeZones"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <h2 class="text-sm font-semibold">Zones <span class="ml-1 text-muted-foreground">{{ zones.length }}</span></h2>
+                <Button size="icon-sm" variant="ghost" aria-label="Close zone list" @click="closeZones"><X /></Button>
+              </div>
+              <ParkingSummary :counts="counts" compact />
+              <!-- Keep this mounted while the panel is hidden; its modal portals to the workspace. -->
+              <ParkingZoneInspector
+                v-if="editor.editing.value && selectedZone && !editor.drawing.value"
+                :key="selectedZone.id"
+                ref="inspector"
+                :zone="selectedZone"
+                :zones="zones"
+                :spaces="parking.spaces.value"
+                :disabled="saving"
+                :create-space="parking.createSpace"
+                :portal-target="viewerElement"
+                :return-focus-target="labelButton ?? zonesButton"
+                @assign="assignLabel"
+                @remove="removeZone"
+                @add-another="addZone"
+              />
+              <p v-if="parking.loading.value" class="text-xs text-muted-foreground">Loading zones…</p>
+              <p v-else-if="!zones.length" class="text-xs text-muted-foreground">No zones yet. Add a zone on the video to get started.</p>
+              <ul v-else class="space-y-2" aria-label="Zones on this camera">
+                <li
+                  v-for="zone in zoneRows"
+                  :key="zone.id"
+                  class="flex min-w-0 items-center gap-1 rounded-lg border"
+                  :class="zone.id === selectedZoneId ? 'border-primary/50 bg-primary/10' : 'border-white/10 bg-white/[0.03]'"
+                >
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2 p-2.5 text-left text-sm"
+                    :disabled="!!editor.drawing.value || saving"
+                    :aria-pressed="zone.id === selectedZoneId"
+                    @click="selectZone(zone.id)"
+                  >
+                    <span class="min-w-0 truncate font-medium" :class="!zone.parkingSpaceId ? 'text-amber-200' : ''">{{ parking.spaceLabels.value[zone.parkingSpaceId] ?? 'Choose a label' }}</span>
+                    <ParkingStatusBadge :status="parking.zoneStatuses.value[zone.id] ?? 'unknown'" :score="zoneScores[zone.id] ?? null" />
+                    <span v-if="conflictSpaceIds.includes(zone.parkingSpaceId)" class="text-xs text-amber-300">Check</span>
+                  </button>
+                  <Button
+                    v-if="editor.editing.value"
+                    size="icon-sm"
+                    variant="ghost"
+                    class="mr-1 shrink-0 text-muted-foreground hover:text-destructive"
+                    :disabled="saving || !!editor.drawing.value"
+                    :aria-label="'Delete zone ' + (parking.spaceLabels.value[zone.parkingSpaceId] ?? 'without label')"
+                    @click="removeZone(zone.id)"
+                  ><Trash2 /></Button>
+                </li>
+              </ul>
+              <template v-if="focusedZone">
+                <ParkingCalibrationPanel
+                  :key="focusedZone.id"
+                  :label="parking.spaceLabels.value[focusedZone.parkingSpaceId] ?? '?'"
+                  :status="parking.zoneStatuses.value[focusedZone.id] ?? 'unknown'"
+                  :score="zoneScores[focusedZone.id] ?? null"
+                  :calibrated="parking.calibrated.value[focusedZone.id] ?? null"
+                  :calibrate="(register) => parking.calibrate(focusedZone!.id, register)"
+                  @close="focusedZoneId = null"
+                />
+                <ParkingSpaceBoard v-if="focusedSummary && focusedSummary.zones.length > 1" :summaries="[focusedSummary]" :camera-names="cameraNames" />
+              </template>
+            </aside>
+          </Transition>
         </div>
-
-        <p class="mt-3 text-xs text-muted-foreground">
-          <template v-if="editor.editing.value">
-            Pick a label on the right, then click the video to draw its zone. Select a zone to drag its points; drag an edge midpoint to add a point, double-click a point to delete it.
-          </template>
-          <template v-else>
-            Click a label to see its status or register its empty baseline. {{ parking.api.kind === 'mock' ? 'Mock status changes every 30 s.' : 'Status updates live.' }}
-          </template>
-        </p>
       </div>
-
-      <!-- Plain column (no card), like a tool sidebar. -->
-      <aside class="flex min-w-0 flex-col gap-3 self-start lg:sticky lg:top-[calc(var(--app-nav-height)+5rem)] lg:max-h-[calc(100dvh-var(--app-nav-height)-7rem)]">
-        <div class="space-y-1.5 px-1">
-          <h2 class="text-sm font-semibold tracking-tight">Labels</h2>
-          <ParkingSummary :counts="counts" compact />
-        </div>
-
-        <div
-          v-if="pageError"
-          class="flex items-center gap-2 rounded-lg bg-destructive/10 py-1.5 pr-1.5 pl-3 text-xs text-red-300"
-          role="alert"
-        >
-          <CircleAlert class="size-3.5 shrink-0" />
-          <span class="min-w-0 flex-1">{{ pageError }}</span>
-          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-2 text-xs text-red-200 hover:bg-red-400/10 hover:text-red-100" @click="retry">
-            Retry
-          </Button>
-        </div>
-
-        <div v-if="parking.loading.value" class="space-y-1.5">
-          <Skeleton v-for="item in 4" :key="item" class="h-11 w-full rounded-xl" />
-        </div>
-        <ParkingLabelList
-          v-else
-          class="min-h-0 flex-1"
-          :spaces="parking.spaces.value"
-          :zones="zones"
-          :statuses="parking.zoneStatuses.value"
-          :scores="zoneScores"
-          :active-space-id="activeSpaceId"
-          :selected-zone-id="selectedZoneId"
-          :editing="editor.editing.value"
-          :conflict-space-ids="conflictSpaceIds"
-          :create-space="parking.createSpace"
-          @pick="pickLabel"
-          @select-zone="selectZone"
-          @remove-zone="editor.remove"
-        />
-
-        <template v-if="focusedZone">
-          <ParkingCalibrationPanel
-            :label="parking.spaceLabels.value[focusedZone.parkingSpaceId] ?? '?'"
-            :status="parking.zoneStatuses.value[focusedZone.id] ?? 'unknown'"
-            :score="zoneScores[focusedZone.id] ?? null"
-            :calibrated="parking.calibrated.value[focusedZone.id] ?? null"
-            :calibrate="(register) => parking.calibrate(focusedZone!.id, register)"
-            @close="focusedZoneId = null"
-          />
-          <ParkingSpaceBoard
-            v-if="focusedSummary && focusedSummary.zones.length > 1"
-            :summaries="[focusedSummary]"
-            :camera-names="cameraNames"
-            :current-camera-id="cameraId"
-          />
-        </template>
-      </aside>
     </div>
   </main>
 </template>
+
+<style scoped>
+.zone-panel-enter-active,
+.zone-panel-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.zone-panel-enter-from,
+.zone-panel-leave-to {
+  opacity: 0;
+  transform: translateX(16px);
+}
+</style>

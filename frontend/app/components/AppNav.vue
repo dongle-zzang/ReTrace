@@ -5,8 +5,9 @@ const route = useRoute()
 
 // The parking editor (/cameras/:id/parking) belongs to the parking section.
 const items = [
-  { to: '/', label: 'CCTV Monitoring', match: (path: string) => path === '/' },
-  { to: '/parking', label: 'Parking', match: (path: string) => path === '/parking' || /^\/cameras\/[^/]+\/parking\/?$/.test(path) },
+  { to: '/', label: 'CCTV Monitoring', shortLabel: 'Monitoring', match: (path: string) => path === '/' },
+  { to: '/parking', label: 'Parking', shortLabel: 'Parking', match: (path: string) => path === '/parking' || /^\/cameras\/[^/]+\/parking\/?$/.test(path) },
+  { to: '/datasets', label: 'AI Datasets', shortLabel: 'Datasets', match: (path: string) => path === '/datasets' || path.startsWith('/datasets/') },
 ]
 
 // Sliding active pill: moves on click (before the route resolves) and follows the route after.
@@ -61,14 +62,14 @@ const dateLabel = computed(() => now.value.toLocaleDateString('en-US', { weekday
             :to="item.to"
             :aria-current="item.match(route.path) ? 'page' : undefined"
             :class="[
-              'flex h-8 items-center gap-1.5 rounded-full px-3 text-sm sm:px-3.5 font-medium whitespace-nowrap outline-none transition-colors duration-300 focus-visible:ring-2 focus-visible:ring-ring/50',
+              'flex h-8 items-center gap-1.5 rounded-full px-2 text-sm sm:px-3.5 font-medium whitespace-nowrap outline-none transition-colors duration-300 focus-visible:ring-2 focus-visible:ring-ring/50',
               index === selectedIndex
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             ]"
             @click="selectedIndex = index"
           >
-            {{ item.label }}
+            <span class="sm:hidden">{{ item.shortLabel }}</span><span class="hidden sm:inline">{{ item.label }}</span>
           </NuxtLink>
         </li>
       </ul>
