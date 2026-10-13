@@ -1,8 +1,13 @@
 # Frontend current work
 
+## HTTP dataset box drawing — deployment pending (2026-10-13)
+
+- DatasetBoxEditor called secure-context-only crypto.randomUUID on pointerdown. Added datasetBoxId using getRandomValues UUID v4 fallback for HTTP LAN deployments; backend requires UUID box IDs.
+- Regression tests cover missing randomUUID and native generation: frontend 30 tests, typecheck and static generate passed. Actual deployed browser drawing/save verification pending; upload regenerated .output/public contents to frontend-dist.
+
 ## Person overlay removed with server PeopleNet removal — not deployed (2026-10-13)
 
-- Removed unused person overlay/types (`PersonDetection`, `RealtimePerson`, `'person'` selection); realtime type now has `vehicles`/`vehicleDetectionEnabled`/`vehicleInferenceDone`, `persons?` legacy. Vehicle boxes stay server-drawn in JPEG. `npm test` 27 + typecheck passed; no generate/deploy. Root `.ai/WORK.md` has the server rollout.
+- Removed unused person overlay/types (`PersonDetection`, `RealtimePerson`, `'person'` selection); realtime type now has `vehicles`/`vehicleDetectionEnabled`/`vehicleInferenceDone`, `persons?` legacy. Vehicle boxes stay server-drawn in JPEG. `npm test` 27 + typecheck passed. Local npm run generate completed at 8884a1a (2026-10-13); .output/public index, SPA fallbacks, datasets route and referenced assets verified. Not deployed. Root `.ai/WORK.md` has the server rollout.
 
 ## Dataset server build prepared — coordinated deployment blocked (2026-10-13)
 

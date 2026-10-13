@@ -2,6 +2,11 @@
 
 비자명한 장기 제약과 그 이유만 둔다.
 
+## HTTP 배포에서도 편집 ID를 생성할 수 있어야 한다
+
+- 이유: localhost에서는 crypto.randomUUID가 제공되지만 일반 HTTP 서버에서는 없어 박스 pointerdown이 실패한다. 데이터셋 박스는 서버가 UUID로 검증하므로 datasetBoxId의 getRandomValues 기반 UUID v4 fallback을 사용한다.
+- 변경 시 확인: randomUUID가 없는 환경의 tests/datasetBoxId.test.cjs와 실제 HTTP 배포 화면에서 그리기·저장을 확인한다. 문자열 임시 ID로 대체하면 저장 API가 거부한다.
+
 ## `/ws` dev 프록시는 `nuxt.config.ts`의 `listen` hook이 직접 처리한다
 
 - 이유: 서버는 같은 origin의 WebSocket만 허용한다(Origin 검사). Nitro `devProxy`는 HTTP만 전달하고 upgrade는 Nitro worker로 보내며, Vite `server.proxy`는 Nuxt의 middleware mode에서 upgrade를 받지 못한다. 그래서 `listen` hook에서 `/ws` upgrade만 가로채 Node `http`로 전달하고 `Origin`을 서버 origin으로 바꾼다. 서버의 `PREVIEW_WS_ORIGINS`는 compose에 연결돼 있지 않아 쓰지 않는다.
