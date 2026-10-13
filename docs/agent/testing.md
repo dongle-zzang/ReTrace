@@ -69,3 +69,5 @@ clean 헤더/촬영 시각·파일/DB 저장·삭제 실패 복구·revision·�
 pre-OSD 변환 앞 tee 위치·bounded queue·preroll·handoff 실패를 fake Gst로 검사한다.
 `test_preview_api_writes.py`에는 dataset PUT/DELETE/POST와 4MiB 초과 ZIP 스트리밍 회귀가 포함된다.
 실제 GPU/PG/저장 볼륨·브라우저 검증은 [AI 데이터셋 실행 절차](../datasets.md#실행과-아직-필요한-검증)를 따른다.
+
+데이터셋 후속 회귀: backend/tests/test_datasets.py는 car-only ZIP, legacy non-car 거부, export 삭제의 building 차단·파일/DB rollback·재시작 tombstone 복구를 검증한다. frontend/tests/datasetNavigation.test.cjs는 페이지 경계·여러 카메라 순서·검수 후 필터 snapshot 유지를 검증한다.

@@ -19,7 +19,7 @@
 - 박스는 저장 이미지의 원본 픽셀 좌표 `{id, class_id, x, y, width, height, source: "manual"}`다.
   `(x,y)`는 좌상단이다. `DatasetBoxEditor.vue`는 기존 `useVideoStage`/`videoGeometry`를
   재사용하여 letterbox·리사이즈·확대 후에도 SVG와 원본 좌표가 일치하도록 한다.
-- 클래스는 **데이터셋 전용 `0: car`, `1: truck`, `2: bus`**다. COCO 모델의 class ID와 다르다.
+- 새 내보내기의 클래스는 **데이터셋 전용 `0: car` 한 개**다. 기존 truck/bus 저장 라벨은 자동 변경하지 않으며, 포함된 검수 이미지에 non-car 라벨이 있으면 새 export는 명확한 오류로 실패한다. 이전에 생성한 ZIP은 원래 클래스 맵을 유지한다. COCO 모델의 class ID와 다르다.
 
 ## 깨끗한 프레임의 경계
 
@@ -73,6 +73,7 @@ Preview는 응답 전후 카메라 runtime session/generation과 online/degraded
 | GET | `/exports` | 최신 20건, building/ready/failed, 개수/경고/다운로드 URL |
 | POST | `/exports` | `{seed: 42}` → 202 백그라운드 작업 |
 | GET | `/exports/{uuid}/download` | ready인 ZIP 다운로드 |
+| DELETE | `/exports/{uuid}` | 생성 기록·ZIP 삭제 → 204. building은 409, 원본 이미지/라벨은 유지 |
 
 없는 이미지/파일은 404, 동시 캡처/내보내기·동일 JPEG 중복·revision 충돌은 409,
 유효하지 않은 박스/검수 조건은 422, 카메라 캡처·저장소·DB 장애는 503이다.
@@ -116,7 +117,7 @@ DATASET_STORAGE_DIR/
 DB와 이미지 볼륨을 함께 백업해야 한다. 용량 quota/자동 이미지·ZIP 보존 기간은 이번에 추가하지 않았다.
 
 완성 ZIP은 생성 시점의 immutable snapshot이다. 원본 라벨 수정/이미지 삭제로 이미 만든 ZIP은
-바뀌지 않으며 다시 생성해야 한다. 삭제 시 과거 ZIP의 복사본까지 삭제하는 기능은 없다.
+바뀌지 않으며 다시 생성해야 한다. 생성 기록 삭제 API는 해당 ZIP과 export row만 삭제하며 원본 이미지·라벨에는 영향을 주지 않는다. 파일을 .deleting으로 옮긴 후 DB commit하고 실패 시 복원하며, 시작 시 남은 export tombstone도 복구/정리한다. 삭제 시 과거 ZIP의 복사본까지 삭제하는 기능은 없다.
 Backend 재시작으로 중단된 building 작업은 failed로 표시하고 새 작업을 만들도록 한다.
 
 루트 `/dataset-storage/`, `/datasets/`, `.cache/`는 Git 제외다. `/datasets/` 규칙은 루트에만
@@ -137,7 +138,7 @@ labels/{train,val,test}/{image_uuid}.txt
 ```
 
 TXT 한 줄은 `class_id (x+w/2)/W (y+h/2)/H w/W h/H`이며 8자리 소수로 쓴다.
-`data.yaml`은 train/val/test 상대 경로와 0 car/1 truck/2 bus를 담는다.
+`data.yaml`은 train/val/test 상대 경로와 0 car만 담는다.
 이동 가능한 ZIP이므로 고정 서버 경로나 `path: .`를 넣지 않고 YAML 부모를 기준으로 한다
 ([Ultralytics 경로 해석 원문](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/data/utils.py)).
 학습은 실행하지 않는다.
@@ -200,3 +201,10 @@ python -m unittest discover -s tests -p 'test_preview_http.py'
 기존 `test_preview_http.py`는 2개 통과/2개 Windows 환경 오류다(심볼릭 링크 권한 WinError 1314,
 연결 거절 처리보다 짧은 클라이언트 timeout). 변경 전 HEAD 프록시로도 같은 두 오류를 재현했다.
 이 테스트를 통과로 기록하지 않으며 native Linux에서 재검증해야 한다.
+
+## 2026-10-13 후속 변경
+
+- 프론트 이전/다음은 상세 API의 같은 카메라/오래된순 필드를 사용하지 않고, 목록 진입 시 보관한 전체 필터 결과의 최신순 ID snapshot을 사용한다. 페이지 경계를 포함하며 저장으로 status가 바뀌어도 순서는 유지한다. 목록 필터·페이지와 snapshot은 브라우저 세션 내 유지한다. 직접 URL 진입 시 전체 최신순을 기본으로 한다.
+- 새 ZIP은 car 한 클래스다. 기존 annotation 입력의 0~2 호환성은 유지하지만 non-car 라벨을 포함한 검수 데이터는 export에서 거부한다. 자동 삭제·자동 재라벨링하지 않는다.
+- 삭제 UI는 확인 후 `/api/datasets/exports/{uuid}`를 호출한다. 기존 서버에는 해당 DELETE 경로와 car-only 변경이 없으므로 Backend rebuild 및 Preview 프록시 restart가 필요하다. 스키마/환경 변수/캡처 파이프라인 변경은 없다. 기존 기록은 운영 서버에서 삭제하지 않았다.
+- 이번 CPU 검증: Backend 142, Preview 쓰기·파일 프록시 12, frontend 28 tests/typecheck/build 통과. 실제 서버 새 API 적용/운영 ZIP 삭제는 미검증이다.

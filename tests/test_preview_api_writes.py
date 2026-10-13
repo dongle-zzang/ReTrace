@@ -240,6 +240,10 @@ class ParkingProxyTests(unittest.TestCase):
         for path in ('/api/datasets/capture', '/api/datasets/exports'):
             self.assertEqual(self.request('POST', path, b'{}')[0], 201)
         self.assertEqual(self.request('DELETE', image)[0], 204)
+        export = image.replace('/images/', '/exports/')
+        self.assertEqual(self.request('DELETE', export)[0], 204)
+        self.assertEqual(self.request('PATCH', export, b'{}')[0], 405)
+        self.assertEqual(self.request('DELETE', '/api/datasets/exports/not-a-uuid')[0], 405)
         self.assertEqual(self.request('PUT', image, body)[0], 405)
         self.assertEqual(self.request('PUT', image + '/annotations', b'x' * 65537)[0], 413)
 

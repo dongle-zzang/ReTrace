@@ -1,5 +1,12 @@
 # Current work
 
+## Dataset navigation / car-only export management — source complete, server apply pending (2026-10-13)
+
+- Backend new exports use class 0 car only; existing non-car labels are preserved and rejected with a clear export error. Prior ZIPs remain immutable. DELETE /api/datasets/exports/{uuid} removes only export row/ZIP using row locks and rollback/restart tombstone recovery; building jobs return 409. Preview write allowlist updated. No schema/config/operational data changes.
+- Frontend includes export-delete confirmation, legacy-class badges, list-order navigation snapshots across filters/pages/saves, and centered capture with no blank feedback row. Earlier uncommitted UI changes preserved.
+- Verified: Backend 142 tests, write/file proxy 12, frontend 28 + typecheck/build. Browser verified latest list order across different cameras and filtered camera navigation; local test DB/files only for deletion. Isolated Python test runtime in ignored .cache/dataset-tests-env.
+- Next on server: Git handoff authorized on 2026-10-13; pull the two follow-up commits, rebuild Backend and restart Preview per docs/datasets.md; test new car-only ZIP and DELETE API. No deployment or operational deletion performed; commit/push authorized for this handoff. Preserve existing tasks below.
+
 ## Dataset capture, annotation and export — source implemented; native verification pending (2026-10-12)
 
 - Completed source: `/datasets` collection/export and `/datasets/images/:imageId` pixel box editor; opt-in one-frame pre-OSD JPEG on existing decode; persistent image/thumbnail/ZIP volume; additive dataset_images/exports; review/revision/deletion recovery; session-safe YOLO ZIP. Contract/runbook: docs/datasets.md.

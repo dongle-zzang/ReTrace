@@ -217,3 +217,69 @@ def test_delete_rolls_back_files_and_db_on_transaction_failure(dataset, monkeypa
     assert client.get('/api/datasets/images/' + image['id']).status_code == 200
     assert client.get(image['image_url']).status_code == 200
     assert not list(app.state.datasets.path('images').glob('*.deleting'))
+
+
+def test_car_only_manifest_and_legacy_export_fails_without_relabeling(dataset):
+    client = dataset[0]
+    assert client.get('/api/datasets/classes').json()['classes'] == {'0': 'car'}
+    image = capture(client)
+    assert save(client, image, [box(class_id=1)]).status_code == 200
+    job = await_export(client)
+    assert job['status'] == 'failed' and 'legacy' in job['error']
+    assert client.get('/api/datasets/images/' + image['id']).json()['boxes'][0]['class_id'] == 1
+
+
+def test_delete_export_removes_only_zip_and_record(dataset):
+    client, app, *_ = dataset
+    image = capture(client)
+    assert save(client, image, [box()]).status_code == 200
+    job = await_export(client)
+    path = app.state.datasets.path(f'exports/{job["id"]}.zip')
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read('data.yaml').decode().endswith('names:\n  0: car\n')
+        assert json.loads(archive.read('manifest.json'))['classes'] == {'0': 'car'}
+    assert client.delete('/api/datasets/exports/' + job['id']).status_code == 204
+    assert not path.exists()
+    assert all(row['id'] != job['id'] for row in client.get('/api/datasets/exports').json())
+    assert client.get(job['download_url']).status_code == 404
+    assert client.get('/api/datasets/images/' + image['id']).json()['box_count'] == 1
+    assert client.get(image['image_url']).status_code == 200
+    assert client.delete('/api/datasets/exports/' + job['id']).status_code == 404
+
+
+def test_export_delete_blocks_building_and_allows_failed_records(dataset):
+    from backend.app.dataset_models import DatasetExport
+    client, app, *_ = dataset
+    job_id = str(uuid4())
+    with app.state.sessions.begin() as session:
+        session.add(DatasetExport(id=job_id, seed=42, status='building'))
+    assert client.delete('/api/datasets/exports/' + job_id).status_code == 409
+    with app.state.sessions.begin() as session:
+        session.get(DatasetExport, job_id).status = 'failed'
+    assert client.delete('/api/datasets/exports/' + job_id).status_code == 204
+
+
+def test_export_delete_rollback_and_restart_tombstone_recovery(dataset, monkeypatch):
+    from backend.app.dataset_models import DatasetExport
+    from sqlalchemy.orm import Session
+    from sqlalchemy.exc import SQLAlchemyError
+    client, app, *_ = dataset
+    image = capture(client)
+    assert save(client, image, [box()]).status_code == 200
+    job = await_export(client)
+    path = app.state.datasets.path(f'exports/{job["id"]}.zip')
+    original_flush = Session.flush
+    def fail_delete(session, *args, **kwargs):
+        if any(isinstance(row, DatasetExport) for row in session.deleted):
+            raise SQLAlchemyError('fixture')
+        return original_flush(session, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, 'flush', fail_delete)
+        assert client.delete('/api/datasets/exports/' + job['id']).status_code == 503
+    assert path.is_file() and client.get(job['download_url']).status_code == 200
+    tombstone = path.with_name(path.name + '.deleting')
+    path.replace(tombstone)
+    orphan = app.state.datasets.path(f'exports/{uuid4()}.zip.deleting')
+    orphan.write_bytes(b'fixture')
+    app.state.datasets.initialize()
+    assert path.is_file() and not tombstone.exists() and not orphan.exists()

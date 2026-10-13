@@ -30,3 +30,5 @@ API/DB 수정 전 backend README의 “저장 정책”을 확인한다. track �
 데이터셋은 `dataset.py` router/service, `dataset_models.py` additive tables를 사용한다.
 원본 JPEG/썸네일/ZIP은 DB 외부 볼륨에 두고 픽셀 박스·검수·revision은 DB에 저장한다.
 삭제 tombstone 복구, 캡처 중복/세션, export snapshot/분할과 제한은 [AI 데이터셋](../datasets.md)이 원문이다.
+
+데이터셋 export 삭제는 row lock·파일 tombstone 복구를 사용하고 이미지/라벨을 삭제하지 않는다. 새 ZIP은 car-only이며 legacy non-car 라벨은 오류로 거부한다. 계약은 docs/datasets.md를 따른다.

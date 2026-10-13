@@ -400,3 +400,5 @@ additive `create_all`로 생성하며, JPEG/ZIP은 `DATASET_STORAGE_DIR`의 `dat
 기존 Preview OSD JPEG를 데이터셋으로 저장하지 않습니다. 기본 비활성인 요청 시 pre-OSD 캡처,
 API·DB·좌표·분할·복구·용량 제한·단일 worker 경계와 운영 적용/미검증 사항의 원문은
 [AI 데이터셋](../docs/datasets.md)입니다. `tests/test_datasets.py`로 CPU 검증합니다.
+
+데이터셋 후속: 새 ZIP은 `0: car`만 내보냅니다. 기존 truck/bus 라벨을 자동 변경하지 않고 해당 검수 데이터가 있으면 내보내기 오류로 안내합니다. `DELETE /api/datasets/exports/{uuid}`는 building을 거부하고 기록·ZIP만 삭제하며 원본 이미지·라벨은 보존합니다. Backend rebuild와 Preview 프록시 restart 후 사용합니다.
