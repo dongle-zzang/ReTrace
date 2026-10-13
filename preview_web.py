@@ -85,7 +85,7 @@ class BackendAPIProxy:
         dataset_id = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
         if path in ('/api/datasets/capture', '/api/datasets/exports'):
             return ('GET', 'HEAD', 'POST')
-        if re.fullmatch('/api/datasets/images/' + dataset_id, path):
+        if re.fullmatch('/api/datasets/(?:images|exports)/' + dataset_id, path):
             return ('GET', 'HEAD', 'DELETE')
         if re.fullmatch('/api/datasets/images/' + dataset_id + '/annotations', path):
             return ('PUT',)

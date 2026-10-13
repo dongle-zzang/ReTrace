@@ -23,7 +23,7 @@ from .db import Camera
 from .dataset_models import DatasetImage, DatasetExport
 
 router = APIRouter(prefix='/api/datasets')
-CLASSES = {0: 'car', 1: 'truck', 2: 'bus'}  # Dataset IDs, deliberately NOT COCO detector IDs.
+CLASSES = {0: 'car'}  # Dataset IDs, deliberately NOT COCO detector IDs.
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
@@ -134,6 +134,15 @@ class DatasetService:
             else:
                 tombstone.unlink(missing_ok=True)
 
+        for tombstone in self.path('exports').glob('*.deleting'):
+            job_id = tombstone.name.split('.')[0]
+            with self.sessions() as session:
+                exists = session.get(DatasetExport, job_id) is not None
+            if exists:
+                tombstone.replace(tombstone.with_suffix(''))
+            else:
+                tombstone.unlink(missing_ok=True)
+
     def close(self):
         self.stop.set()
         for thread in self.threads:
@@ -227,7 +236,7 @@ class DatasetService:
             manifest = {'classes': CLASSES, 'seed': seed, 'images': [], 'session_splits': assignment, 'warnings': []}
             partial.parent.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(partial, 'w', zipfile.ZIP_STORED, allowZip64=True) as archive:
-                archive.writestr('data.yaml', 'train: images/train\nval: images/val\ntest: images/test\nnames:\n  0: car\n  1: truck\n  2: bus\n')
+                archive.writestr('data.yaml', 'train: images/train\nval: images/val\ntest: images/test\nnames:\n  0: car\n')
                 for split in counts:
                     archive.writestr(f'images/{split}/', '')
                     archive.writestr(f'labels/{split}/', '')
@@ -236,6 +245,8 @@ class DatasetService:
                         raise HTTPException(503, 'Export interrupted. Create a new export.')
                     boxes = [Box.model_validate(box) for box in image.boxes]
                     validate_boxes(boxes, image.width, image.height)
+                    if any(box.class_id != 0 for box in boxes):
+                        raise HTTPException(422, 'Car-only export requires reviewing legacy truck/bus labels. Existing labels were not changed.')
                     if not boxes and not image.reviewed_empty:
                         raise HTTPException(422, 'An empty image was not explicitly reviewed as having no vehicles')
                     path = self.path(image.file_path)
@@ -400,6 +411,37 @@ def create_export(request: Request, body: ExportRequest):
     except Exception:
         worker.export_lock.release()
         raise
+
+
+@router.delete('/exports/{job_id}', status_code=204)
+def delete_export(request: Request, job_id: UUID):
+    moved = []
+    try:
+        with request.app.state.sessions.begin() as session:
+            job = session.scalar(select(DatasetExport).where(DatasetExport.id == str(job_id)).with_for_update())
+            if job is None:
+                raise HTTPException(404, 'Dataset export not found')
+            if job.status == 'building':
+                raise HTTPException(409, 'Wait for the dataset export to finish before deleting it')
+            for relative in (f'exports/{job_id}.zip', f'exports/{job_id}.zip.partial'):
+                path = service(request).path(relative)
+                if path.is_file():
+                    tombstone = path.with_name(path.name + '.deleting')
+                    path.replace(tombstone)
+                    moved.append((path, tombstone))
+            session.delete(job)
+    except Exception as error:
+        for path, tombstone in moved:
+            with suppress(OSError):
+                if tombstone.exists():
+                    tombstone.replace(path)
+        if isinstance(error, OSError):
+            raise HTTPException(503, 'Dataset storage is not writable') from None
+        raise
+    for _, tombstone in moved:
+        with suppress(OSError):
+            tombstone.unlink(missing_ok=True)
+    return Response(status_code=204)
 
 
 @router.get('/exports/{job_id}/download')
