@@ -5,9 +5,9 @@ const route = useRoute()
 
 // The parking editor (/cameras/:id/parking) belongs to the parking section.
 const items = [
-  { to: '/', label: 'CCTV Monitoring', shortLabel: 'Monitoring', match: (path: string) => path === '/' },
   { to: '/parking', label: 'Parking', shortLabel: 'Parking', match: (path: string) => path === '/parking' || /^\/cameras\/[^/]+\/parking\/?$/.test(path) },
   { to: '/datasets', label: 'AI Datasets', shortLabel: 'Datasets', match: (path: string) => path === '/datasets' || path.startsWith('/datasets/') },
+  { to: '/', label: 'CCTV Monitoring', shortLabel: 'Monitoring', match: (path: string) => path === '/' },
 ]
 
 // Sliding active pill: moves on click (before the route resolves) and follows the route after.

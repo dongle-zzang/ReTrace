@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Check, CircleAlert, Maximize2, Minimize2, PanelRight, Pencil, Plus, SquareParking, Undo2, X, Trash2 } from '@lucide/vue'
+import { ArrowLeft, Check, CircleAlert, PanelRight, Pencil, Plus, SquareParking, Undo2, X, Trash2 } from '@lucide/vue'
 import CameraVideo from '~/components/CameraVideo.vue'
 import ParkingCalibrationPanel from '~/components/ParkingCalibrationPanel.vue'
 import ParkingZoneInspector from '~/components/ParkingZoneInspector.vue'
@@ -11,7 +11,6 @@ import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '~/components/ui/empty'
 import { Skeleton } from '~/components/ui/skeleton'
-import { Tooltip, TooltipContent, TooltipTrigger } from '~/components/ui/tooltip'
 import { ParkingApiError } from '~/composables/parkingApi'
 import { useCameras } from '~/composables/useCameras'
 import { useParking } from '~/composables/useParking'
@@ -49,8 +48,8 @@ useHead({ title: () => `ReTrace · ${camera.value?.name ?? cameraId.value} parki
 const viewerElement = ref<HTMLElement | null>(null)
 const stageElement = ref<HTMLElement | null>(null)
 const mediaSize = ref({ width: 1280, height: 720 })
-// The toolbar sits above the video (never over it) and goes fullscreen with it.
-const { content, contentStyle, isFullscreen, toggleFullscreen } = useVideoStage(stageElement, mediaSize, 'contain', viewerElement)
+// Keep editing controls above the video and measure overlays against its content rect.
+const { content, contentStyle } = useVideoStage(stageElement, mediaSize, 'contain', viewerElement)
 
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -69,7 +68,6 @@ const focusedZoneId = ref<string | null>(null)
 const inspector = ref<InstanceType<typeof ParkingZoneInspector> | null>(null)
 const zonesOpen = ref(false)
 const zonesButton = ref<HTMLButtonElement | null>(null)
-const labelButton = ref<HTMLButtonElement | null>(null)
 const selectedZoneId = computed(() => (editor.editing.value ? editor.selectedId.value : focusedZoneId.value))
 const selectedZone = computed(() => zones.value.find((zone) => zone.id === selectedZoneId.value) ?? null)
 const focusedZone = computed(() => editor.editing.value ? null : selectedZone.value)
@@ -87,7 +85,7 @@ function closeZones() {
 
 function selectZone(zoneId: string | null) {
   if (saving.value) return
-  if (editor.editing.value) editor.select(zoneId)
+  if (editor.editing.value) { editor.select(zoneId); if (zoneId) focusLabel() }
   else focusedZoneId.value = zoneId
 }
 
@@ -135,12 +133,13 @@ function startEditing() {
   editor.select(previousSelection)
 }
 
+const { confirm } = useConfirmDialog()
 function confirmDiscard() {
-  return !editor.dirty.value || window.confirm('Discard unsaved parking zone changes?')
+  return !editor.dirty.value || confirm({ title: 'Discard parking changes?', description: 'Your unsaved parking zone changes will be lost.', confirmLabel: 'Discard changes', destructive: true })
 }
 
-function cancelEditing() {
-  if (!confirmDiscard()) return
+async function cancelEditing() {
+  if (saving.value || !await confirmDiscard()) return
   editor.end()
   saveError.value = null
 }
@@ -196,7 +195,7 @@ function isTextInput(target: EventTarget | null) {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.defaultPrevented || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) || saving.value || !editor.editing.value || isTextInput(event.target)) return
+  if (event.defaultPrevented || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"], [role="alertdialog"]')) || saving.value || !editor.editing.value || isTextInput(event.target)) return
   if (editor.drawing.value) {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -220,7 +219,8 @@ function onBeforeUnload(event: BeforeUnloadEvent) {
   if (editor.dirty.value) event.preventDefault()
 }
 
-onBeforeRouteLeave(() => confirmDiscard())
+onBeforeRouteLeave(() => !saving.value && confirmDiscard())
+onBeforeRouteUpdate(() => !saving.value && confirmDiscard())
 
 watch(cameraId, () => {
   focusedZoneId.value = null
@@ -261,42 +261,29 @@ onUnmounted(() => {
       <EmptyContent><Button as-child variant="outline"><NuxtLink to="/parking">Back to Parking</NuxtLink></Button></EmptyContent>
     </Empty>
     <div v-else class="flex min-h-0 flex-1 flex-col px-3 pb-4 sm:px-6">
-      <div ref="viewerElement" :class="['flex min-h-0 flex-1 flex-col gap-2', isFullscreen ? 'h-dvh w-full bg-background p-3' : '']" aria-label="Parking zone workspace">
-        <div class="flex shrink-0 flex-wrap items-center gap-2" role="toolbar" aria-label="Zone tools">
+      <div ref="viewerElement" class="flex min-h-0 flex-1 flex-col gap-2" aria-label="Parking zone workspace">
+        <div class="flex shrink-0 items-center justify-between gap-3">
+        <div class="editor-tools flex shrink-0 flex-wrap items-center" role="toolbar" aria-label="Zone tools" title="Zone tools">
           <template v-if="editor.drawing.value">
-            <Button size="sm" variant="outline" :disabled="!editor.drawing.value.length" @click="editor.undoPoint"><Undo2 /> Undo point</Button>
-            <Button size="sm" :disabled="editor.drawing.value.length < 3" @click="finishShape"><Check /> Finish shape</Button>
-            <Button size="sm" variant="ghost" @click="cancelShape"><X /> Cancel shape</Button>
+            <Button title="Undo point" size="icon" variant="outline" :disabled="!editor.drawing.value.length" @click="editor.undoPoint"><Undo2 /><span class="sr-only">Undo point</span></Button>
+            <Button title="Finish shape" size="icon" :disabled="editor.drawing.value.length < 3" @click="finishShape"><Check /><span class="sr-only">Finish shape</span></Button>
+            <Button title="Cancel shape" size="icon" variant="destructive" @click="cancelShape"><X /><span class="sr-only">Cancel shape</span></Button>
           </template>
           <template v-else>
-            <Button v-if="!editor.editing.value" size="sm" variant="outline" :disabled="parking.loading.value" @click="startEditing"><Pencil /> Edit zones</Button>
-            <Button size="sm" :variant="editor.editing.value ? 'outline' : 'default'" :disabled="saving || parking.loading.value" @click="addZone"><Plus /> Add zone</Button>
+            <Button title="Add zone" size="icon" :variant="editor.editing.value ? 'outline' : 'default'" :disabled="saving || parking.loading.value" @click="addZone"><Plus /><span class="sr-only">Add zone</span></Button>
+            <Button title="Edit zones" v-if="!editor.editing.value" size="icon" variant="outline" :disabled="parking.loading.value" @click="startEditing"><Pencil /><span class="sr-only">Edit zones</span></Button>
             <template v-if="editor.editing.value">
-              <Button size="sm" :disabled="saving" @click="save"><Check /> {{ saving ? 'Saving…' : 'Save changes' }}</Button>
-              <Button size="sm" variant="ghost" :disabled="saving" @click="cancelEditing"><X /> Cancel</Button>
+              <Button title="Save changes" size="icon" :disabled="saving" @click="save"><Check /><span class="sr-only">{{ saving ? 'Saving…' : 'Save changes' }}</span></Button>
+              <Button title="Cancel" size="icon" variant="destructive" :disabled="saving" @click="cancelEditing"><X /><span class="sr-only">Cancel</span></Button>
             </template>
           </template>
-          <template v-if="selectedZone && !editor.drawing.value">
-            <span class="max-w-28 truncate px-1 text-xs font-medium text-muted-foreground">{{ parking.spaceLabels.value[selectedZone.parkingSpaceId] ?? 'New zone' }}</span>
-            <template v-if="editor.editing.value">
-              <Button as-child size="sm" variant="ghost" :disabled="saving">
-                <button ref="labelButton" type="button" @click="focusLabel"><Pencil /> {{ selectedZone.parkingSpaceId ? 'Edit label' : 'Set label' }}</button>
-              </Button>
-              <Button size="icon-sm" variant="ghost" :disabled="saving" aria-label="Delete selected zone" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
-            </template>
-          </template>
-          <div class="ml-auto flex items-center gap-2">
-            <Button as-child size="sm" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
-              <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /> Zones {{ zones.length }}</button>
-            </Button>
-            <Badge v-if="editor.editing.value" variant="outline" class="hidden border-primary/40 text-primary sm:inline-flex">{{ editor.drawing.value ? 'Drawing' : 'Editing' }}</Badge>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button type="button" size="icon-sm" variant="ghost" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'" @click="toggleFullscreen"><Minimize2 v-if="isFullscreen" /><Maximize2 v-else /></Button>
-              </TooltipTrigger>
-              <TooltipContent>{{ isFullscreen ? 'Exit fullscreen' : 'Fullscreen' }}</TooltipContent>
-            </Tooltip>
-          </div>
+          <Button v-if="selectedZone && editor.editing.value && !editor.drawing.value" size="icon" variant="destructive" :disabled="saving" aria-label="Delete selected zone" title="Delete selected zone" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
+        </div>
+        <div class="editor-tools flex shrink-0 items-center">
+        <Button title="Zones" as-child size="icon" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
+          <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" :aria-pressed="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /><span class="sr-only">Zones {{ zones.length }}</span></button>
+        </Button>
+        </div>
         </div>
         <p :class="['shrink-0 px-1 text-xs', editor.notice.value ? 'text-amber-300' : 'text-muted-foreground']" role="status">{{ hint }}</p>
         <div v-if="pageError" class="flex shrink-0 items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-red-300" role="alert">
@@ -345,7 +332,7 @@ onUnmounted(() => {
               v-show="zonesOpen"
               id="camera-zone-panel"
               :inert="!zonesOpen"
-              class="flex w-full min-w-0 shrink-0 flex-col gap-4 overflow-y-auto rounded-xl border border-white/10 bg-background/75 p-4 backdrop-blur-xl sm:w-80 lg:w-88"
+              class="flex w-full min-w-0 shrink-0 flex-col gap-4 overflow-y-auto px-2 py-3 sm:w-80 sm:pl-4 lg:w-88"
               aria-label="Parking zone list"
               @keydown.esc.stop="closeZones"
             >
@@ -365,19 +352,19 @@ onUnmounted(() => {
                 :disabled="saving"
                 :create-space="parking.createSpace"
                 :portal-target="viewerElement"
-                :return-focus-target="labelButton ?? zonesButton"
+                :return-focus-target="zonesButton"
                 @assign="assignLabel"
                 @remove="removeZone"
                 @add-another="addZone"
               />
               <p v-if="parking.loading.value" class="text-xs text-muted-foreground">Loading zones…</p>
               <p v-else-if="!zones.length" class="text-xs text-muted-foreground">No zones yet. Add a zone on the video to get started.</p>
-              <ul v-else class="space-y-2" aria-label="Zones on this camera">
+              <ul v-else class="divide-y divide-white/10" aria-label="Zones on this camera">
                 <li
                   v-for="zone in zoneRows"
                   :key="zone.id"
-                  class="flex min-w-0 items-center gap-1 rounded-lg border"
-                  :class="zone.id === selectedZoneId ? 'border-primary/50 bg-primary/10' : 'border-white/10 bg-white/[0.03]'"
+                  class="flex min-w-0 items-center gap-1 transition-colors"
+                  :class="zone.id === selectedZoneId ? 'bg-primary/10' : 'hover:bg-white/[0.04]'"
                 >
                   <button
                     type="button"

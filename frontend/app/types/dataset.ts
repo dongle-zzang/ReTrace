@@ -33,7 +33,7 @@ export interface DatasetExport {
   status: 'building' | 'ready' | 'failed'
   created_at: string
   error: string | null
-  manifest: { counts: Record<string, number>; warnings: string[] } | null
+  manifest: { classes?: Record<string, string>; counts: Record<string, number>; warnings: string[] } | null
   download_url: string | null
 }
 export const DATASET_CLASSES = ['car', 'truck', 'bus'] as const

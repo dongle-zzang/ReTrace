@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ParkingSpace, ParkingZone } from '~/types/parking'
-import { LoaderCircle, Pencil, Plus, Trash2, X } from '@lucide/vue'
+import { Pencil, Plus, Trash2, X } from '@lucide/vue'
 import { DialogContent, DialogPortal } from 'reka-ui'
 import { Button } from '~/components/ui/button'
 import { Dialog, DialogClose, DialogDescription, DialogOverlay, DialogTitle } from '~/components/ui/dialog'
@@ -26,7 +26,20 @@ const emit = defineEmits<{
 const input = ref<HTMLInputElement | null>(null)
 const labelTrigger = ref<HTMLButtonElement | null>(null)
 const open = ref(false)
+const modalSpaceId = ref(props.zone.parkingSpaceId)
+const closingBusy = ref(false)
+const closingExisting = ref(false)
+const closingDisabled = ref(false)
+const applyDisabled = computed(() => open.value ? props.disabled || busy.value || !query.value.trim() || unchanged.value : closingDisabled.value)
+const displayBusy = computed(() => open.value ? busy.value : closingBusy.value)
+const displayExisting = computed(() => open.value ? !!existing.value : closingExisting.value)
 const query = ref('')
+const closingQuery = ref('')
+const closingError = ref<string | null>(null)
+const closingOptions = ref<ParkingSpace[]>([])
+const modalQuery = computed({ get: () => open.value ? query.value : closingQuery.value, set: (value: string) => { query.value = value } })
+const modalError = computed(() => open.value ? error.value : closingError.value)
+const modalOptions = computed(() => open.value ? labelOptions.value : closingOptions.value)
 const busy = ref(false)
 const error = ref<string | null>(null)
 const inputId = useId()
@@ -47,9 +60,9 @@ function setOpen(next: boolean) {
   if (next && props.disabled) return
   // Closing cancels the application, even if a server-side label creation is still in flight.
   requestVersion++
+  if (!next && open.value) { closingBusy.value = busy.value; closingExisting.value = !!existing.value; closingDisabled.value = applyDisabled.value; closingQuery.value = query.value; closingError.value = error.value; closingOptions.value = [...labelOptions.value] }
   busy.value = false
-  error.value = null
-  if (next) query.value = currentLabel.value
+  if (next) { error.value = null; query.value = currentLabel.value; modalSpaceId.value = props.zone.parkingSpaceId }
   open.value = next
 }
 
@@ -149,7 +162,7 @@ async function apply() {
           @keydown="onDialogKeydown"
         >
           <div class="space-y-2 pr-7">
-            <DialogTitle class="text-lg font-semibold">{{ zone.parkingSpaceId ? 'Edit zone label' : 'Name this zone' }}</DialogTitle>
+            <DialogTitle class="text-lg font-semibold">{{ modalSpaceId ? 'Edit zone label' : 'Name this zone' }}</DialogTitle>
             <DialogDescription class="text-sm text-muted-foreground">
               Choose an existing label to share this spot across cameras, or type a new one.
             </DialogDescription>
@@ -163,35 +176,33 @@ async function apply() {
               <input
                 :id="inputId"
                 ref="input"
-                v-model="query"
+                v-model="modalQuery"
                 :maxlength="MAX_LABEL_LENGTH"
-                :disabled="disabled || busy"
-                :aria-invalid="!!error"
-                :aria-describedby="error ? errorId : undefined"
+                :disabled="disabled || displayBusy"
+                :aria-invalid="!!modalError"
+                :aria-describedby="modalError ? errorId : undefined"
                 autocomplete="off"
                 placeholder="e.g. A-01"
                 class="h-11 w-full rounded-lg border border-white/15 bg-white/[0.04] px-3 text-base outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-50"
               >
-              <div v-if="labelOptions.length" class="space-y-1.5">
+              <div v-if="modalOptions.length" class="space-y-1.5">
                 <p class="px-1 text-xs font-medium text-muted-foreground">Registered labels</p>
                 <ul class="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-white/10 bg-black/10 p-1" aria-label="Registered labels">
-                  <li v-for="space in labelOptions" :key="space.id">
-                    <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50" :disabled="busy || disabled || usedOnCamera(space.id)" @click="query = space.label">
+                  <li v-for="space in modalOptions" :key="space.id">
+                    <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-white/5 focus-visible:outline focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50" :disabled="displayBusy || disabled || usedOnCamera(space.id)" @click="query = space.label">
                       <span class="truncate">{{ space.label }}</span>
-                      <span class="shrink-0 text-xs text-muted-foreground">{{ space.id === zone.parkingSpaceId ? 'Current' : usedOnCamera(space.id) ? 'Already used' : 'Use label' }}</span>
                     </button>
                   </li>
                 </ul>
               </div>
-              <p v-else-if="query.trim() && !existing" class="text-xs text-muted-foreground">No registered match. A new label will be created.</p>
+              <p v-else-if="modalQuery.trim() && !displayExisting" class="text-xs text-muted-foreground">No registered match. A new label will be created.</p>
             </div>
-            <p v-if="error" :id="errorId" class="text-sm text-red-300" role="alert">{{ error }}</p>
+            <p v-if="modalError" :id="errorId" class="text-sm text-red-300" role="alert">{{ modalError }}</p>
             <p class="text-xs leading-relaxed text-muted-foreground">Apply the label to this zone, then use Save changes to save your zones.</p>
             <div class="flex justify-end gap-2">
               <Button type="button" variant="outline" @click="setOpen(false)">Cancel</Button>
-              <Button type="submit" :disabled="disabled || busy || !query.trim() || unchanged">
-                <LoaderCircle v-if="busy" class="animate-spin" />
-                {{ busy ? 'Applying…' : existing ? 'Apply label' : 'Create & apply' }}
+              <Button type="submit" class="border border-primary/20 bg-primary/15 text-primary hover:bg-primary/25" :disabled="applyDisabled">
+                {{ displayBusy ? 'Applying…' : displayExisting ? 'Apply label' : 'Create & apply' }}
               </Button>
             </div>
           </form>

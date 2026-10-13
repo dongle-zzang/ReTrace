@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ConfigProvider } from 'reka-ui'
+import AppConfirmDialog from '~/components/AppConfirmDialog.vue'
 import AppNav from '~/components/AppNav.vue'
 import LiquidEtherBackground from '~/components/LiquidEtherBackground.vue'
 
@@ -10,6 +12,7 @@ const etherColors = ['#5bb7b1', '#587fa3', '#857bb0']
 </script>
 
 <template>
+  <ConfigProvider :scroll-body="{ padding: 0, margin: 0 }">
   <div :class="['relative flex flex-col bg-background text-foreground', viewportWorkspace ? 'h-dvh overflow-hidden' : 'min-h-screen']">
     <!-- Lives in the layout so it keeps running across page changes. -->
     <div class="pointer-events-none absolute inset-x-0 top-0 h-[36rem] overflow-hidden">
@@ -25,4 +28,6 @@ const etherColors = ['#5bb7b1', '#587fa3', '#857bb0']
       © {{ year }} ReTrace · made by ohjoo
     </footer>
   </div>
+    <AppConfirmDialog />
+  </ConfigProvider>
 </template>
