@@ -12,7 +12,7 @@
 | 첫 영상 startup timing / batch camera attribution / HTTP 저장·flush 경계 | `python3 -m unittest discover -s tests -p 'test_camera_startup_timing.py'` |
 | 단일 RTSP 진단/오류 분류/native 출력 차단 | `python3 -m unittest discover -s tests -p 'test_camera_rtsp_diagnostics.py'` |
 | nvurisrcbin 진단/caps 보호/NVMM gate 관측 | `python3 -m unittest discover -s tests -p 'test_camera_nvuri_probe.py'` |
-| 실제 CLI parser 계약 (AST로 GPU import 우회) | `python3 -m unittest discover -s tests -p 'test_rtsp_inputs.py'` |
+| 실제 Preview CLI parser 계약 (AST로 GPU import 우회) | `python3 -m unittest discover -s tests -p 'test_rtsp_inputs.py'` |
 | canonical container 실행 설정 | `python3 -m unittest discover -s tests -p 'test_canonical_startup.py'` |
 | Preview/CSR 파일·SPA routing·격리, 동일 origin API 프록시, MJPEG/JSON | `python3 -m unittest discover -s tests -p 'test_preview_http.py'` |
 | 주차 쓰기 프록시·경로 제한·allowlist/CORS 없음·body framing/크기·원본 응답/204 | `python3 -m unittest discover -s tests -p 'test_preview_api_writes.py'` |
@@ -22,8 +22,9 @@
 | Backend API/polling/DB/preview 계약/보안 | `python -m pytest -q backend/tests` |
 | 주차면 CRUD/Polygon 검증/카메라 분리/재시작 보존/점유 revision | `python -m pytest -q backend/tests/test_parking.py` |
 | 점유 기하/정차·통과/누락·재연결/이벤트·재생 평가 | `python -m pytest -q backend/tests/test_occupancy.py` |
-| 선택 카메라 ROI/모델 config/차량 metadata | `python -m unittest discover -s tests -p 'test_vehicle_detection.py'` |
+| 주차장 카메라 선택(비활성 ID skip)/공유 batch/ROI/모델 config/차량 metadata | `python -m unittest discover -s tests -p 'test_vehicle_detection.py'` |
 | 상태/이벤트 cursor 경계·페이지 backlog·원자적 발행 실패·장애 unknown | `python -m unittest discover -s tests -p 'test_parking_relay.py'` |
+| 학습 데이터셋 검사/coco80 view (training venv) | `cd training && .venv/bin/python -m unittest discover -s tests` |
 | DeepStream HTTP/element link 포함 전체 Python 회귀 | `docker compose exec -T retrace python3 -m unittest discover -s tests -p 'test_*.py'` |
 
 더 작은 변경은 관련 unittest 모듈이나 pytest 파일/테스트만 선택한다. Backend CPU 환경 준비 방법은 [backend README의 CPU 테스트](../../backend/README.md#cpu-테스트)를 따른다. dependency 설치가 필요한지 먼저 확인한다.
@@ -31,12 +32,12 @@
 ## 검증 환경과 한계
 
 - WebSocket CPU 테스트에는 루트 requirements의 wsproto가 필요하며 실제 loopback socket을 사용한다. 브라우저
-  렌더링/대역폭/PeopleNet/NvDCF를 증명하지 않는다. 실제 다중 camera/restart 점검은 [실시간 Preview](../preview-realtime.md)를 따른다.
-  parking batch의 cache/큐 원자성, 새 연결·재구독의 최신 상태, JPEG·사람 metadata 동시 전달도 검증한다.
+  렌더링/대역폭/차량 detector/NvDCF를 증명하지 않는다. 실제 다중 camera/restart 점검은 [실시간 Preview](../preview-realtime.md)를 따른다.
+  parking batch의 cache/큐 원자성, 새 연결·재구독의 최신 상태, JPEG·차량 metadata 동시 전달도 검증한다.
   Backend snapshot의 PostgreSQL REPEATABLE READ 선택 테스트는 session 대역을 사용하므로
   실제 PostgreSQL 격리·동시 commit 검증을 대체하지 않는다.
 
-- `tests/test_camera_shared_pipeline.py`는 실제 공유 pipeline 함수의 생성/연결을 fake Gst로 실행해 instance 수, batch 크기, mux/demux request pad, 상태/세대 독립성 및 HTTP schema를 CPU에서 검증한다. 실제 plugin 협상/복구 보장은 아니다.
+- `tests/test_camera_shared_pipeline.py`는 실제 공유 pipeline 함수의 생성/연결을 fake Gst로 실행해 PeopleNet(primary nvinfer) 부재, 차량 nvinfer 0/1개와 연결 순서, instance 수, batch 크기, mux/demux request pad, 상태/세대 독립성 및 HTTP schema를 CPU에서 검증한다. 실제 plugin 협상/복구 보장은 아니다.
 - `tests/test_pgie_cache.py`는 CPU 파일 fixture로 config 생성, 빌드 조건/후처리 분리, 별도 프로세스의 경로 안정성, 모델 staging 및 config/GObject 일치를 검증한다. 실제 TensorRT serialization은 GPU 서버에서 최초 생성 후 동일 설정으로 재실행하여 canonical engine의 deserialization 로그와 rebuild 부재를 확인해야 한다. Warm nvinfer state transition의 8–9초 지연은 별도 최적화 과제다.
 - `tests/test_preview.py`는 preview를 직접 import하므로 GI/GStreamer/PyDS와 NVIDIA plugin 환경이 필요하다. 전체 tests discovery를 일반 CPU 검증으로 간주하지 않는다.
 - Backend 테스트는 임시 SQLite DB, FastAPI TestClient, httpx MockTransport와 transaction을 사용한다. 실제 PostgreSQL/GPU/RTSP 검증을 대체하지 않는다.

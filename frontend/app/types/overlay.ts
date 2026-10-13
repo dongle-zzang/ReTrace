@@ -10,15 +10,6 @@ export interface NormalizedBox extends Point {
   height: number
 }
 
-export interface PersonDetection {
-  id: string
-  cameraId: string
-  // NvDCF track IDs can exceed JavaScript's safe integer range.
-  trackId: string | null
-  bbox: NormalizedBox
-  highlighted?: boolean
-}
-
 export interface CameraLine {
   id: string
   cameraId: string
@@ -43,17 +34,16 @@ export interface ParkingZone {
 }
 
 export interface CameraOverlayData {
-  persons: PersonDetection[]
   lines: CameraLine[]
   polygons: CameraPolygon[]
   parkingZones: ParkingZone[]
 }
 
 export type OverlaySelection = {
-  kind: 'person' | 'line' | 'polygon' | 'parking'
+  kind: 'line' | 'polygon' | 'parking'
   id: string
 } | null
 
 export function emptyCameraOverlay(): CameraOverlayData {
-  return { persons: [], lines: [], polygons: [], parkingZones: [] }
+  return { lines: [], polygons: [], parkingZones: [] }
 }

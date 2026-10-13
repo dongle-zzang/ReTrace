@@ -1,14 +1,29 @@
 # 차량 탐지와 주차 점유
 
-이 기능은 기본 비활성이다. 카메라 선택과 로컬 모델을 준비한 뒤 활성화한다.
-실제 실행 경로는 `preview.py`이며, PeopleNet·RTSP source·mux·공유 NvDCF·demux·
-기존 MJPEG/WebSocket 영상을 유지한다. 저장소의 WebRTC 경로는 이전 작업에서 제거됐다.
-프론트엔드 변경이나 알림 발송은 포함하지 않는다.
+`VEHICLE_CAMERA_IDS`가 비어 있으면 비활성이다. 주차장 카메라 선택과 로컬 모델을 준비한 뒤 활성화한다.
+실제 실행 경로는 `preview.py`이며, RTSP source·mux·공유 NvDCF·demux·기존 MJPEG/WebSocket 영상을 유지한다.
+PeopleNet 사람 검출/추적은 2026-10-13에 제거했으므로 차량 detector가 pipeline의 유일한 추론 단계다.
+저장소의 WebRTC 경로는 이전 작업에서 제거됐다. 알림 발송은 포함하지 않는다.
+
+## 주차장 카메라 선택 기준 (2026-10-13)
+
+카메라 YAML/DB에는 유형·그룹·태그 필드가 없다. 기존 기준은 프론트의 `isParkingCamera`(카메라 이름에
+`주차장` 포함, `frontend/app/lib/parking.ts`)이며, 운영 DB의 주차 zone도 정확히 같은 5대에만 있다.
+선택은 기존 private `.env`의 `VEHICLE_CAMERA_IDS`로 한다(새 YAML/DB 필드 없음).
+
+| camera_id | 이름 | 판정 |
+| --- | --- | --- |
+| `b1_parking_entrance`, `b1_parking_overview`, `b1_parking_gate`, `b1_parking_inner`, `1f_outdoor_parking` | 이름에 `주차장`, zone 있음 | 주차장 (5대) |
+| `b1_parking_tower` | 주차타워 안; id에 `parking`이 있으나 이름에 `주차장` 없음, zone 없음 | **운영자 확인 필요** — 기본 제외 |
+
+추가·제거: YAML에서 카메라를 빼거나 `enabled: false`로 바꾸면 해당 ID는 로그(`Vehicle camera skipped`)만 남기고
+건너뛰며 나머지 주차장 카메라의 차량 탐지는 유지한다. 새 주차장 카메라는 YAML 추가 후 `VEHICLE_CAMERA_IDS`에 ID를
+더하고 retrace를 재생성한다. 주차장 카메라 수가 바뀌면 engine batch가 바뀌어 첫 시작에 engine을 새로 만든다.
 
 ## 모델과 pipeline
 
 [TrafficCamNet](https://docs.nvidia.com/tao/tao-toolkit-archive/tao-30-2202/text/model_zoo/cv_models/trafficcamnet.html)은
-DetectNet_v2/ResNet18 기반이며 주 용도는 car 탐지다. PeopleNet은 사람 전용으로 유지한다.
+DetectNet_v2/ResNet18 기반이며 주 용도는 car 탐지다. 현재 운영 모델은 아래 평가에 따라 YOLO11m이다.
 [DashCamNet](https://docs.nvidia.com/tao/tao-toolkit-archive/tao-40/text/model_zoo/cv_models/dashcamnet.html)은
 이동 카메라에서 car 탐지를 주 용도로 하므로 고정 CCTV에서는 우선 선택하지 않았다.
 YOLO 계열은 현장 학습 선택지가 있지만 별도 parser/build 검증이 필요하다. 현재 adapter는
@@ -16,34 +31,34 @@ YOLO 계열은 현장 학습 선택지가 있지만 별도 parser/build 검증�
 TrafficCamNet의 car가 모든 트럭·이륜차를 포함한다고 가정하지 않는다. 현장 평가가 필요하다.
 
 ```text
-nvurisrcbin (기존 다중 입력) → mux → PeopleNet
-  → 선택 카메라에만 전체 영상 ROI metadata 추가
-  → synchronous vehicle nvinfer (secondary detector, ROI crop)
-  → ROI 부모 제거 / 차량 class 분리 → 기존 NvDCF → demux → 기존 OSD/JPEG
-                                            └─ detached people + vehicles metadata
+nvurisrcbin (기존 다중 입력, 카메라당 RTSP 1개) → mux(batch=전체 카메라)
+  → 주차장 카메라 frame에만 전체 영상 ROI metadata 추가
+  → synchronous vehicle nvinfer (secondary detector, YOLO11m 1개, batch=주차장 카메라 수)
+  → ROI 부모 제거 / 차량 class 분리 → 공유 NvDCF → demux → 기존 OSD/JPEG
+                                            └─ detached vehicles metadata (persons는 항상 [])
                                                  → Backend poller → 점유/이벤트 DB
 ```
 
 [nvinfer의 secondary mode](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_plugin_gst-nvinfer.html)는
-upstream object 영역을 입력으로 받는다. 이 기능은 사람 bbox를 차량 입력으로 쓰지 않고,
-선택 카메라에 전체 mux 영상(1920×1080)의 synthetic ROI 한 개를 만든다. 따라서 다른
-카메라에는 차량 추론 ROI가 없으며 차량 모델 batch 크기는 선택 카메라 수다.
+upstream object 영역을 입력으로 받는다. 이 기능은 선택 카메라에 전체 mux 영상(1920×1080)의
+synthetic ROI 한 개를 만든다. 따라서 다른 카메라는 추론 없이 영상/상태만 처리되며 차량 모델 batch 크기는
+선택 카메라 수다. primary detector 없이도 secondary nvinfer가 ROI만으로 동작한다(카메라별 모델 로드 없음).
 ROI의 좌상단이 (0,0)이므로 차량 output bbox는 기존 전체 영상 좌표다.
 
-- PeopleNet component ID=1, 차량 detector ID=2, synthetic ROI ID=90.
+- 차량 detector ID=2, synthetic ROI ID=90 (구 PeopleNet ID=1은 더 이상 생성되지 않으며 tracker probe가 다른 object를 제거).
 - ROI는 untracked이며 async classifier cache를 사용하지 않는다. 추론 interval=0,
   secondary reinfer interval=0이다. `bInferDone`을 ROI 준비에서 reset하고, detector가
-  빈 결과를 포함해 처리 완료 시 설정한 값을 `vehicle_inference_done`으로 복사한다.
-  PeopleNet의 원래 inference flag는 별도로 보존한다.
+  빈 결과를 포함해 처리 완료 시 설정한 값을 `vehicle_inference_done`과 `inference_done`으로 복사한다
+  (주차장 외 카메라는 둘 다 false).
 - 차량 child metadata의 parent를 제거한 뒤 ROI를 반환한다. labels의 car/truck/bus(있는 것만)를
-  모두 내부 tracker class 100으로 바꾸어 person class 0과 분리한다. 같은 차량이 car↔truck으로
+  모두 내부 tracker class 100으로 바꾼다. 같은 차량이 car↔truck으로
   흔들려도 track이 끊기지 않게 하나의 class로 추적한다. NvDCF의 기존 `checkClassMatch=1`을
   확인하며 tuning은 변경하지 않는다. 외부 차량 metadata의 class_id는 모델의 car class ID다
   (truck/bus도 car ID로 보고하며 TrafficCamNet=0, COCO YOLO=2).
 - `VehicleMetadata`는 native 참조 없는 immutable bbox/track ID/confidence 복사다.
   source/generation/session 라우팅과 실패 시 metadata 비우기는 기존 경계를 따른다.
 - 모델/config 준비 실패는 안전한 고정 메시지를 출력하고 차량 기능을 비활성화한다.
-  PeopleNet 실행은 계속하며 점유는 unknown이다. native 차량 plugin의 실행/협상 오류는
+  영상/상태는 계속 제공되며 점유는 unknown이다. native 차량 plugin의 실행/협상 오류는
   기존 공유 pipeline 오류 경계를 사용하므로 GPU 서버에서 반드시 확인해야 한다.
 
 ## 활성화와 DB
@@ -53,8 +68,8 @@ private `.env`에 아래 **이름과 역할**의 설정을 추가한다. 실제 
 
 | 설정 | 역할 / 기본값 |
 | --- | --- |
-| `VEHICLE_CAMERA_IDS` | 차량 탐지를 적용할 enabled camera ID의 쉼표 목록; 빈 값이면 비활성 |
-| `VEHICLE_INFER_CONFIG` | 로컬 TrafficCamNet/native nvinfer config 경로 |
+| `VEHICLE_CAMERA_IDS` | 차량 탐지를 적용할 주차장 camera ID의 쉼표 목록; 빈 값이면 비활성. enabled가 아닌 ID는 건너뜀 |
+| `VEHICLE_INFER_CONFIG` | 로컬 native nvinfer config 경로 (운영: `models/yolo11m/vehicle_infer.txt`) |
 | `VEHICLE_MIN_CONFIDENCE` | 차량 class detector pre-cluster-threshold override; 미설정 시 config의 class/`class-attrs-all` 값(없으면 0.4) |
 | `PARKING_POLICY` | Backend 판정 설정 JSON object; 기본 `{}` |
 
@@ -77,7 +92,7 @@ curl -fL -o resnet18_trafficcamnet_pruned.onnx \
 
 labels는 `car;bicycle;person;road_sign`(car=0)이다. NGC `nvinfer_config.txt`는 `[property]`가 없는
 조각이므로 같은 디렉터리에 `vehicle_infer.txt`를 둔다. ONNX 출력 tensor 이름은 파일에서 확인했다.
-V100은 INT8 tensor core가 없어 PeopleNet과 같은 FP16을 쓴다.
+V100은 INT8 tensor core가 없어 FP16을 쓴다.
 
 ```ini
 [property]
@@ -155,7 +170,7 @@ sudo docker compose run --rm --no-deps --name retrace-yolo-check \
 sudo docker exec retrace-yolo-check python3 -c "import json,urllib.request as u; f=json.load(u.urlopen('http://127.0.0.1:40226/metadata.json'))['frames']; print([(x['camera_id'], x['vehicle_inference_done'], [(v['class_id'], round(v['confidence'], 2)) for v in x['vehicles']]) for x in f])"
 ```
 
-`Vehicle detector unavailable`가 나오면 library/model 경로 문제이며 PeopleNet은 계속 동작한다.
+`Vehicle detector unavailable`가 나오면 library/model 경로 문제이며 영상은 차량 탐지 없이 계속 동작한다.
 
 **3) 운영 전환(승인 후)** — private `.env`에서 `VEHICLE_INFER_CONFIG=models/yolo11m/vehicle_infer.txt`로 바꾸고
 `sudo docker compose up -d --no-deps --no-build --force-recreate retrace`를 실행한다. 전체 Preview 영상/WS가
@@ -281,8 +296,8 @@ Perspective 보정·차량 segmentation·깊이 추정은 아니다. 가림/카�
 자동 판정 이유는 assessments, 과거 변경 이유는 events로 확인한다.
 
 기존 Preview `/ws`의 `detections`에 `vehicles`, `vehicleDetectionEnabled`,
-`vehicleInferenceDone`을 추가했다. person 필드는 유지하고 차량 bbox도 0~1이며 ID는 문자열이다.
-stale clear는 people/vehicles를 모두 비운다.
+`vehicleInferenceDone`을 추가했다. `persons`는 호환용으로 항상 빈 배열이며 차량 bbox는 0~1, ID는 문자열이다.
+stale clear는 vehicles를 비운다.
 
 `ParkingRelay`가 Backend를 1초마다 읽으며 GPU callback 밖에서 기존 hub에 전달한다.
 poller는 기존 2초 주기로 관찰하므로 전송은 매 추론 frame의 lossless 전달이 아니다.
@@ -377,13 +392,45 @@ full-frame metadata를 polling에서 수집하면 짧은 track/차량을 놓칠 
 검증 영상에는 주간/야간/비스듬한 각도/인접면/출입·통과/정차/가림/장기 누락/장애·복귀를 포함한다.
 assessments의 footprint/anchor/겹침 비율과 영상을 비교해 policy를 보정한다.
 활성화 전후 동일 카메라 구성에서 `/streams.json` FPS, startup timing, MJPEG/JPEG 수신률,
-GPU utilization/memory와 차량 stage arrival gap을 측정한다. 사람 탐지/track 유지와 다른 카메라
-출력도 비교한다. detector 추가는 선택 카메라의 crop/inference와 공유 NvDCF 부하를 증가시키며,
-최대 tracker target 수는 사람·차량이 공유한다. latency/VRAM 변화는 실측해야 한다.
+GPU utilization/memory와 차량 stage arrival gap을 측정한다. 주차장 외 카메라 출력도 비교한다.
+detector는 주차장 카메라의 crop/inference와 공유 NvDCF 부하를 만든다. latency/VRAM 변화는 실측해야 한다.
 
 현재 CPU 테스트는 synthetic bbox·native API fake·SQLite·loopback WebSocket이다.
 실제 차량 model/engine, DeepStream 7 native parent 처리·SGIE→NvDCF 협상, PostgreSQL 행 잠금,
 GPU latency/정확도·브라우저 표시 검증을 대체하지 않는다.
+
+## 주차장 전체 확대 적용 절차 (운영자, sudo 필요)
+
+전환 전 기준값(2026-10-13, PeopleNet b21 + YOLO11m b1, 60초 평균): GPU memory 4934 MiB, util 55%,
+Backend 합계 FPS 263.5(online 18). Preview 코드는 bind mount라 이미지 rebuild가 필요 없다. DB schema 변경은 없다.
+각 단계는 Preview 전체 영상/WS를 잠시 끊는다. 새 batch engine 생성 단계는 수 분간 모든 카메라 영상이 멈춘다.
+
+1. **PeopleNet 제거, 차량 1대 유지** — `.env` 변경 없음, 기존 b1 YOLO11m engine 재사용(새 build 없음).
+   `sudo docker compose restart retrace`
+2. **3대** — `.env` 백업 후 `VEHICLE_CAMERA_IDS=b1_parking_overview,b1_parking_gate,b1_parking_inner`,
+   `sudo docker compose up -d --no-deps --no-build --force-recreate retrace` (b3 engine 생성).
+3. **5대** — `VEHICLE_CAMERA_IDS=b1_parking_entrance,b1_parking_overview,b1_parking_gate,b1_parking_inner,1f_outdoor_parking`,
+   같은 recreate 명령 (b5 engine 생성). `b1_parking_tower`는 운영자 확인 후에만 추가한다.
+
+단계마다 확인(5분 이상 관찰):
+
+```bash
+sudo docker compose logs --since=10m retrace | grep -E 'DeepStream shared pipeline|Vehicle (detector|camera)|Shared pipeline.*ERROR|PGIE detector|state=PLAYING'
+# 기대: "vehicle cameras=M vehicle batch-size=M", state=PLAYING, "PGIE detector=PeopleNet" 없음
+curl -s http://127.0.0.1:8000/api/cameras | python3 -c "import sys,json,urllib.request as u
+for c in json.load(sys.stdin):
+    if c['enabled']:
+        v=json.load(u.urlopen('http://127.0.0.1:8000/api/cameras/%s/vehicles' % c['camera_id']))
+        print(c['camera_id'], v['vehicle_detection_enabled'], v['vehicle_inference_done'], len(v['vehicles']))"
+nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv -l 5   # 60초 이상, 기준값과 비교
+curl -s http://127.0.0.1:8000/api/status | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['counts'], round(sum(c['fps'] for c in d['cameras']),1))"
+```
+
+선택 카메라만 `True True n`, 나머지는 `False False 0`이어야 한다. 중단 기준: 합계 FPS가 기준 대비 10% 이상
+떨어지거나, 주차장 외 카메라가 degraded/offline으로 바뀌거나, `Shared pipeline ERROR`/OOM이 나오면 이전 단계 `.env`로
+되돌리고 recreate한다. 전체 롤백(PeopleNet 복귀)은 Git에서 이 변경을 되돌린 소스 + `restart`다(로컬
+`models/peoplenet/`와 engine은 삭제하지 않았다). Backend의 person 저장 중단/이력 보존은 Backend rebuild 시 적용되며,
+현재 소스 rebuild는 보류 중인 데이터셋 기능도 함께 배포하므로 [AI 데이터셋](datasets.md)의 백업 우선 절차를 따른다.
 
 ## 변경 파일과 CPU 검증 기록
 

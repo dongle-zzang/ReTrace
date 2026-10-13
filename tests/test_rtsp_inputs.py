@@ -25,8 +25,8 @@ def load_parsers():
     import sys
     namespace["sys"] = sys
     parsers = []
+    # app.py's legacy PeopleNet CLI parser was removed; only Preview parses inputs.
     for filename, names in (
-        ("app.py", {"SafeArgumentParser", "resolve_inputs", "parse_args"}),
         ("preview.py", {"SafeParser", "parse_args"}),
     ):
         tree = ast.parse((ROOT / filename).read_text())
@@ -38,40 +38,8 @@ def load_parsers():
 
 
 class RTSPInputTests(unittest.TestCase):
-    def run_parsers(self, environment, arguments, expected=None):
-        for parser in load_parsers()[:1]:
-            with self.subTest(parser=parser.__code__.co_filename):
-                with patch.dict(os.environ, environment, clear=True), \
-                        patch("sys.argv", ["retrace", *arguments]):
-                    if expected is not None:
-                        self.assertEqual(parser().input, expected)
-                    else:
-                        error = io.StringIO()
-                        with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as caught:
-                            parser()
-                        self.assertEqual(caught.exception.code, 2)
-                        for value in environment.values():
-                            if value:
-                                self.assertNotIn(value, error.getvalue())
-
-    def test_environment_inputs_preserve_order_and_skip_empty_values(self):
-        first, second = "rtsp://camera1.example/video", "rtsp://camera2.example/video"
-        self.run_parsers({"RTSP_URL": first, "RTSP_URL_2": second}, [], [first, second])
-        self.run_parsers({"RTSP_URL": "", "RTSP_URL_2": second}, [], [second])
-        self.run_parsers({"RTSP_URL": "  " + first + "  "}, [], [first])
-
-    def test_cli_replaces_environment_even_when_environment_is_invalid(self):
-        first, second = "rtsp://camera1.example/video", "rtsp://camera2.example/video"
-        self.run_parsers({"RTSP_URL": "invalid-private-input"},
-                         ["--input", first, "--input", second], [first, second])
-
-    def test_missing_and_invalid_environment_fail_without_exposing_values(self):
-        self.run_parsers({}, [])
-        self.run_parsers({"RTSP_URL": "invalid-private-input"}, [])
-        self.run_parsers({"RTSP_URL": "rtsp://camera.example:invalid/video"}, [])
-
     def test_preview_cli_overrides_config_and_environment(self):
-        parser = load_parsers()[1]
+        parser = load_parsers()[0]
         with patch.dict(os.environ, {"RTSP_URL": "private-invalid"}, clear=True), \
                 patch("sys.argv", ["preview.py", "--input", "rtsp://camera.example/v", "--diagnostics"]):
             args = parser()
@@ -79,14 +47,14 @@ class RTSPInputTests(unittest.TestCase):
         self.assertEqual(args.input, ["rtsp://camera.example/v"])
 
     def test_preview_drop_on_latency_defaults_to_true_and_can_be_disabled(self):
-        parser = load_parsers()[1]
+        parser = load_parsers()[0]
         for flags, expected in (([], True), (['--rtsp-drop-on-latency'], True),
                                 (['--no-rtsp-drop-on-latency'], False)):
             with patch('sys.argv', ['preview.py', '--input', 'rtsp://camera.example/v', *flags]):
                 self.assertEqual(parser().rtsp_drop_on_latency, expected)
 
     def test_startup_subset_requires_diagnostics_and_preserves_order(self):
-        parser = load_parsers()[1]
+        parser = load_parsers()[0]
         inputs = [item for i in range(4) for item in ('--input', f'rtsp://camera{i}.example/v')]
         with patch('sys.argv', ['preview.py', *inputs, '--diagnostics', '--startup-source-count', '2']):
             args = parser()
@@ -100,7 +68,7 @@ class RTSPInputTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 2)
 
     def test_preview_port_and_diagnostics_accept_environment_inputs(self):
-        preview_parser = load_parsers()[1]
+        preview_parser = load_parsers()[0]
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "cameras.yaml"
             config.write_text("cameras: [{id: second, floor: 2, name: Second, rtsp_env: RTSP_URL_2}]\n")
@@ -120,7 +88,7 @@ class RTSPInputTests(unittest.TestCase):
                     self.assertEqual(args.input, [environment["RTSP_URL_2"]])
 
     def test_preview_missing_input_reports_cause_for_both_commands(self):
-        preview_parser = load_parsers()[1]
+        preview_parser = load_parsers()[0]
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "cameras.yaml"
             config.write_text("cameras: [{id: first, floor: 1, name: First, rtsp_env: FIRST_RTSP}]\n")

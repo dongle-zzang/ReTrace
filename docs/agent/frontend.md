@@ -14,7 +14,7 @@ SPA index로 fallback하며 누락된 asset, 숨김 경로, 상위 경로 및 �
 
 확인 페이지(`web/preview.js`)는 `/streams.json`으로 목록을 받고 WebSocket 하나로 **모든 카메라**의 JPEG와
 `camera_status`를 받아 `<img>`에 표시한다. 브라우저 origin당 HTTP 연결 6개 제한이 있어 카메라별
-`/mjpeg/sourceN`으로는 6대를 넘길 수 없기 때문이다. JPEG에 서버 OSD bbox(사람은 track ID, 차량은 `Vehicle` 라벨만)가 그려져 있으므로
+`/mjpeg/sourceN`으로는 6대를 넘길 수 없기 때문이다. JPEG에 서버 OSD bbox(주차장 카메라 차량, `Vehicle` 라벨만)가 그려져 있으므로
 별도 overlay는 없다. 카메라마다 decode는 한 장씩만 하고 대기 중 프레임은 최신으로 덮어쓰며, 표시가 바뀐 뒤
 이전 object URL을 해제한다. socket이 닫히면 2초 후 재접속한다. `/diagnostics`는 build가 있어도
 확인 페이지를 제공한다.

@@ -19,10 +19,12 @@ def nodes(values):
 
 
 class VehicleTests(unittest.TestCase):
-    def test_disabled_does_not_require_model_and_unknown_camera_rejected(self):
+    def test_disabled_does_not_require_model_and_unknown_camera_is_skipped(self):
         self.assertIsNone(prepare_vehicle_detector([], '.', {}))
-        with self.assertRaises(ValueError):
-            prepare_vehicle_detector([], '.', {'VEHICLE_CAMERA_IDS': 'unknown'})
+        # Removed/disabled parking cameras are skipped; no model is needed when none remain.
+        with patch('builtins.print') as printed:
+            self.assertIsNone(prepare_vehicle_detector([NS(camera_id='lobby')], '.', {'VEHICLE_CAMERA_IDS': 'unknown'}))
+        self.assertIn('camera_id=unknown', printed.call_args.args[0])
 
     def test_config_is_camera_roi_detector_and_reuses_native_cache(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -37,9 +39,9 @@ class VehicleTests(unittest.TestCase):
                 captured['cache_dir'] = str(target)
                 props['model-engine-file'] = str(root / 'vehicle.engine')
                 return root, 'fixture'
-            with patch('vehicle_detection.prepare_engine_cache', cache):
+            with patch('vehicle_detection.prepare_engine_cache', cache), patch('builtins.print'):
                 detector = prepare_vehicle_detector([NS(camera_id='parking'), NS(camera_id='lobby')], root,
-                    {'VEHICLE_CAMERA_IDS': 'parking', 'VEHICLE_INFER_CONFIG': str(path)})
+                    {'VEHICLE_CAMERA_IDS': 'parking,removed_parking', 'VEHICLE_INFER_CONFIG': str(path)})
             self.assertEqual(detector.cameras, frozenset({'parking'}))
             self.assertEqual(captured['process-mode'], '2')
             self.assertEqual(captured['operate-on-gie-id'], '90')
@@ -50,6 +52,28 @@ class VehicleTests(unittest.TestCase):
             parser = configparser.ConfigParser()
             parser.read(detector.config_path)
             self.assertEqual(parser['class-attrs-0']['pre-cluster-threshold'], '0.4')
+
+    def test_all_parking_cameras_share_one_detector_batch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'model.onnx').write_bytes(b'fake model')
+            (root / 'labels.txt').write_text('person\nbicycle\ncar\n')
+            path = root / 'infer.txt'
+            path.write_text('[property]\nonnx-file=model.onnx\nlabelfile-path=labels.txt\nnum-detected-classes=3\n')
+            captured = {}
+            def cache(props, target):
+                captured.update(dict(props))
+                props['model-engine-file'] = str(root / 'vehicle.engine')
+                return root, 'fixture'
+            parking = ['b1_parking_entrance', 'b1_parking_overview', 'b1_parking_gate',
+                       'b1_parking_inner', '1f_outdoor_parking']
+            cameras = [NS(camera_id=c) for c in ['b1_lobby', *parking, '1f_lobby']]
+            with patch('vehicle_detection.prepare_engine_cache', cache):
+                detector = prepare_vehicle_detector(cameras, root, {
+                    'VEHICLE_CAMERA_IDS': ' , '.join(parking), 'VEHICLE_INFER_CONFIG': str(path)})
+            self.assertEqual(detector.cameras, frozenset(parking))
+            self.assertEqual(captured['batch-size'], '5')
+            self.assertEqual(captured['process-mode'], '2')
 
     def test_coco_car_truck_bus_share_tracker_class_and_config_threshold(self):
         with tempfile.TemporaryDirectory() as directory:

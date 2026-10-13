@@ -53,25 +53,33 @@ def tracker_diagnostic_settings(tracker_path):
             for section, values in tracker.items() if isinstance(values, dict)}
 
 
-def log_settings(pgie_path, person_class_id, tracker_path):
+def log_settings(infer_path, class_ids, tracker_path):
     # Diagnostics are optional: their parser must not decide pipeline validity.
     try:
-        _log_settings(pgie_path, person_class_id, tracker_path)
+        _log_settings(infer_path, class_ids, tracker_path)
     except (OSError, UnicodeError, configparser.Error, yaml.YAMLError, ValueError, KeyError) as error:
         print("diagnostics settings unavailable; details hidden", flush=True)
         log_safe_traceback(error)
 
 
-def _log_settings(pgie_path, person_class_id, tracker_path):
-    config = configparser.ConfigParser(interpolation=None)
-    config.read(pgie_path)
-    keys = ("pre-cluster-threshold", "post-cluster-threshold", "nms-iou-threshold", "topk")
-    effective = dict(config["class-attrs-all"]) if config.has_section("class-attrs-all") else {}
-    effective.update(dict(config[f"class-attrs-{person_class_id}"]) if config.has_section(f"class-attrs-{person_class_id}") else {})
-    props = config["property"]
-    print(f"diagnostics PGIE interval={props.get('interval')} batch-size={props.get('batch-size')} "
-          f"cluster-mode={props.get('cluster-mode')} person-class-id={person_class_id} "
-          f"thresholds={ {key: effective.get(key, 'SDK default') for key in keys} }", flush=True)
+def _log_settings(infer_path, class_ids, tracker_path):
+    if infer_path is not None:
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(infer_path)
+        keys = ("pre-cluster-threshold", "post-cluster-threshold", "nms-iou-threshold", "topk")
+        default = dict(config["class-attrs-all"]) if config.has_section("class-attrs-all") else {}
+        thresholds = {}
+        for class_id in class_ids:
+            effective = dict(default)
+            if config.has_section(f"class-attrs-{class_id}"):
+                effective.update(dict(config[f"class-attrs-{class_id}"]))
+            thresholds[class_id] = {key: effective.get(key, "SDK default") for key in keys}
+        props = config["property"]
+        print(f"diagnostics vehicle-detector interval={props.get('interval')} batch-size={props.get('batch-size')} "
+              f"cluster-mode={props.get('cluster-mode')} class-ids={list(class_ids)} "
+              f"thresholds={thresholds}", flush=True)
+    else:
+        print("diagnostics vehicle-detector disabled", flush=True)
     # Print the preset's actual numeric switches/thresholds, excluding paths.
     settings = tracker_diagnostic_settings(tracker_path)
     print(f"diagnostics NvDCF size=640x384 settings={settings}", flush=True)
@@ -100,9 +108,9 @@ class InferenceDiagnostics:
 
     def snapshot(self):
         with self._lock:
-            result = {"pgie_frames": self._frames, "inferred_frames": self._inferred,
+            result = {"frames": self._frames, "inferred_frames": self._inferred,
                       "non_inferred_frames": self._frames - self._inferred,
-                      "person_detections": self._detected, "confidence_count": self._count,
+                      "vehicle_detections": self._detected, "confidence_count": self._count,
                       "confidence_min": self._minimum, "confidence_max": self._maximum}
             self._frames = self._inferred = self._detected = self._count = 0
             self._minimum = self._maximum = None

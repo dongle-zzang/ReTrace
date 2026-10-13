@@ -38,6 +38,7 @@
 | 인증/권한 도입 | backend + frontend + deployment; 현재 인증 구현은 없음 |
 | 테스트 작성/수정, 검증 선택 | [testing](docs/agent/testing.md) |
 | Docker/운영/배포 | [deployment](docs/agent/deployment.md) + architecture |
+| 차량 모델 fine-tuning/평가 (독립 `training/` venv) | [training/README.md](training/README.md) |
 
 ## 구현과 검증
 

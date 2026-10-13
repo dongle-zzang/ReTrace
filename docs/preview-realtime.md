@@ -2,11 +2,11 @@
 
 ## 전송 구조
 
-`preview.py`는 입력·mux(1920×1080)·PeopleNet·NvDCF와 native RTSP reconnect를 공유 pipeline 하나로 실행한다.
+`preview.py`는 입력·mux(1920×1080)·주차장 카메라 전용 YOLO11m 차량 detector·NvDCF와 native RTSP reconnect를 공유 pipeline 하나로 실행한다(PeopleNet은 2026-10-13 제거).
 tracker probe는 PyDS 값을 복사하고 네트워크/DB I/O는 하지 않는다. 영상은 카메라별 OSD/JPEG branch 하나뿐이다.
 
 ```text
-RTSP → nvurisrcbin(NVMM) → nvstreammux → PeopleNet → NvDCF
+RTSP → nvurisrcbin(NVMM) → nvstreammux → 차량 nvinfer(주차장 카메라 ROI만) → NvDCF
   ├─ tracker probe → MetadataStore → /ws JSON, /metadata.json
   └─ nvstreamdemux → 카메라별 queue(leaky) → nvdsosd → nvjpegenc(1280×720) → appsink
       → FrameStore(카메라당 최신 JPEG 1장)
@@ -14,7 +14,7 @@ RTSP → nvurisrcbin(NVMM) → nvstreammux → PeopleNet → NvDCF
           └─ /ws            : 구독한 모든 카메라 JPEG를 binary message로, 연결 1개
 ```
 
-JPEG에는 서버 OSD(bbox, 사람 `Person <track ID>`, 차량 `Vehicle` 라벨만)가 그려져 있다. 차량 track ID는 metadata에만 있다. 같은 정보가 `/ws` detections로도 오므로
+JPEG에는 서버 OSD(주차장 카메라의 차량 bbox와 `Vehicle` 라벨만)가 그려져 있다. 차량 track ID는 metadata에만 있다. 같은 정보가 `/ws` detections로도 오므로
 제품 화면은 JPEG만 표시하거나 별도 overlay를 그릴 수 있다.
 
 브라우저는 HTTP/1.1에서 origin당 동시 연결을 6개로 제한한다. `/mjpeg/sourceN`은 응답을 계속 열어 두므로
@@ -81,12 +81,15 @@ uint64 trackId와 나노초 PTS는 JavaScript 정밀도 보존을 위해 **10진
   "frameNumber": 100,
   "ptsNs": "1234567890",
   "inferenceDone": true,
-  "persons": [{
+  "persons": [],
+  "vehicles": [{
     "trackId": "42",
     "bbox": {"x": 0.12, "y": 0.24, "width": 0.18, "height": 0.46},
     "confidence": 0.93,
     "trackerConfidence": 0.85
-  }]
+  }],
+  "vehicleDetectionEnabled": true,
+  "vehicleInferenceDone": true
 }
 ```
 
@@ -97,9 +100,9 @@ JPEG의 서버 OSD를 사용한다.
 
 | type | payload/역할 |
 | --- | --- |
-| `detections` | persons 및 vehicles, vehicleDetectionEnabled/vehicleInferenceDone; 무효화 시 두 배열을 비우는 `stale:true` clear |
+| `detections` | vehicles, vehicleDetectionEnabled/vehicleInferenceDone; `persons`는 호환용 빈 배열; 무효화 시 배열을 비우는 `stale:true` clear |
 | `camera_status` | `status`에 기존 runtime 필드 포함 |
-| `track_update` | 확장 producer의 `data` (예: personId/Re-ID 결과) |
+| `track_update` | 확장 producer의 `data` (현재 producer 없음) |
 | `parking_status` | 확장 producer의 `data` (예: spaces 배열) |
 | `event` | 확장 producer의 `data` (예: kind=line_crossing/zone, eventId) |
 | `hello` / `subscribed` / `error` | connection/control 응답. error는 안전한 code만 제공 |
@@ -114,7 +117,7 @@ Re-ID/line/zone 계산은 구현하지 않았다. 다른 producer는
 모든 이벤트를 영구 보관하거나 재생하는 전달 보장은 없다. outbox가 넘치거나 metadata write가
 1초 이상 막히면 connection을 종료한다. 주차 transition만 Backend DB에 기본 7일 저장하며 다른 event의 durable 저장은 별도 정책이 필요하다.
 
-`/metadata.json`의 pixel bbox/snake_case 및 person 계약은 유지하며 차량 필드를 추가했다.
+`/metadata.json`의 pixel bbox/snake_case 계약은 유지한다. `persons`는 항상 빈 배열이며 `inference_done`은 차량 추론 여부다.
 `/streams.json` 항목은 `format=mjpeg`, `url=/mjpeg/sourceN`, `metadata_path=/ws`를 제공한다.
 Backend `/api/cameras`의 `preview_path`는 `/mjpeg/sourceN`, `metadata_path`는 `/ws`다.
 

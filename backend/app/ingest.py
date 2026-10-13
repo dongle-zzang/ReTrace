@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import delete, select
 
 from camera_config import load_public_cameras
-from .db import Base, Camera, CameraStatus, ParkingSpace, ParkingEvent, PersonTrack
+from .db import Base, Camera, CameraStatus, ParkingSpace, ParkingEvent
 from .occupancy import OccupancyEvaluator
 from .parking import set_decision
 from .schemas import FrameIn, StatusOut
@@ -218,21 +218,8 @@ class Poller:
                             or not status.runtime_session or metadata_session != status.runtime_session
                             or not -1 <= age <= self.settings.stale_after):
                         continue
+                    # Person detection was removed; person_tracks keeps history only.
                     live_frames[camera.camera_id] = (status.runtime_session, frame)
-                    for person in frame.persons:
-                        if person.track_id is None:
-                            continue
-                        key = (camera.camera_id, status.runtime_session, frame.generation, str(person.track_id))
-                        record = session.get(PersonTrack, key)
-                        if record is None:
-                            session.add(PersonTrack(camera_id=key[0], runtime_session=key[1], generation=key[2],
-                                                    track_id=key[3], first_seen_at=frame.timestamp,
-                                                    last_seen_at=frame.timestamp, max_confidence=person.confidence))
-                            session.flush()
-                        elif frame.timestamp > aware(record.last_seen_at):
-                            record.last_seen_at = frame.timestamp
-                            if person.confidence is not None:
-                                record.max_confidence = max(record.max_confidence or 0.0, person.confidence)
                 spaces = list(session.scalars(select(ParkingSpace).with_for_update()))
                 present_ids = {space.space_id for space in spaces}
                 trial.memory = {key: value for key, value in trial.memory.items() if key in present_ids}
@@ -255,8 +242,8 @@ class Poller:
                         set_decision(session, lookup[decision.space_id], decision.occupancy,
                                      decision.reason, decision.timestamp, evidence)
                 if time.monotonic() - self.last_cleanup >= 60:
-                    session.execute(delete(PersonTrack).where(PersonTrack.last_seen_at <
-                                    now - timedelta(days=self.settings.track_retention_days)))
+                    # person_tracks is frozen history after PeopleNet removal; it is
+                    # no longer written or pruned so past records are preserved.
                     self.last_cleanup = time.monotonic()
                     session.execute(delete(ParkingEvent).where(ParkingEvent.observed_at <
                                     now - timedelta(days=self.settings.track_retention_days)))

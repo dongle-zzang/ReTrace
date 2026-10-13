@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from wsproto import ConnectionType, WSConnection
 from wsproto.events import Request, AcceptConnection, TextMessage, BytesMessage, CloseConnection, Ping, Pong
 
-from person_metadata import BoundingBox, FrameMetadata, PersonMetadata
+from person_metadata import BoundingBox, FrameMetadata, VehicleMetadata
 from preview_mjpeg import FrameStore
 from preview_socket import RealtimeHub, detection_message, video_frame
 
@@ -24,9 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def frame(source=0, camera="first", number=1):
-    person = PersonMetadata(camera, "2026-01-01T00:00:00Z", (1 << 63) + 3, 0, 0.9,
-                            BoundingBox(-192, 108, 576, 1080), None)
-    return FrameMetadata(source, camera, number, person.timestamp, 1234, True, (person,)).to_dict()
+    vehicle = VehicleMetadata(camera, "2026-01-01T00:00:00Z", (1 << 63) + 3, 2, 0.9,
+                              BoundingBox(-192, 108, 576, 1080), None)
+    return FrameMetadata(source, camera, number, vehicle.timestamp, 1234, True, (), vehicles=(vehicle,),
+                         vehicle_detection_enabled=True, vehicle_inference_done=True).to_dict()
 
 
 def parse_video_frame(data):
@@ -61,8 +62,10 @@ class MessageTests(unittest.TestCase):
 
     def test_normalized_clipped_coordinates_and_lossless_identifiers(self):
         message = detection_message(frame(), "session")
-        self.assertEqual(message["persons"][0]["bbox"], {"x": 0, "y": 0.1, "width": 0.2, "height": 0.9})
-        self.assertEqual(message["persons"][0]["trackId"], str((1 << 63) + 3))
+        self.assertEqual(message["vehicles"][0]["bbox"], {"x": 0, "y": 0.1, "width": 0.2, "height": 0.9})
+        self.assertEqual(message["vehicles"][0]["trackId"], str((1 << 63) + 3))
+        self.assertEqual(message["persons"], [])  # Legacy field kept empty after PeopleNet removal.
+        self.assertTrue(message["vehicleDetectionEnabled"] and message["vehicleInferenceDone"])
         self.assertEqual(message["ptsNs"], "1234")
         self.assertEqual((message["cameraId"], message["sourceId"]), ("first", 0))
 
@@ -229,7 +232,7 @@ class SocketTests(unittest.TestCase):
         self.assertIn('runtimeSession', event)
         self.assertIn('timestamp', event)
 
-    def test_parking_batch_order_and_reconnect_with_jpeg_and_people(self):
+    def test_parking_batch_order_and_reconnect_with_jpeg_and_vehicles(self):
         self.send(type='subscribe', cameraIds=['first'], video=True)
         self.until(lambda: any(m['type'] == 'subscribed' for m in self.messages))
         self.hub.publish_messages([
@@ -244,7 +247,7 @@ class SocketTests(unittest.TestCase):
         self.assertEqual([m['type'] for m in parking], ['event', 'parking_status'])
         self.assertEqual(parking[-1]['data']['spaces'][0]['occupancy'], 'empty')
         self.assertEqual(self.videos[-1][-1], b'parking-test-jpeg')
-        self.assertTrue(next(m for m in self.messages if m['type'] == 'detections')['persons'])
+        self.assertTrue(next(m for m in self.messages if m['type'] == 'detections')['vehicles'])
 
         # A new connection receives the final cache, never the pre-event state.
         self.sock.close()

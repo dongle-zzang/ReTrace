@@ -228,6 +228,10 @@ def test_restart_and_camera_sync_preserve_spaces(service):
 
 def test_additive_initialization_preserves_legacy_tables(service):
     _, app, upstream, _, engine = service
+    seen = utcnow()
+    with app.state.sessions.begin() as session:  # Legacy person history must survive.
+        session.add(PersonTrack(camera_id="first", runtime_session="a" * 32, generation=1, track_id="42",
+                                first_seen_at=seen, last_seen_at=seen, max_confidence=.9))
     upstream["metadata"]["frames"] = [frame()]
     app.state.poller.poll_once()
     ParkingSpace.__table__.drop(engine)  # Simulate pre-feature schema in isolated fixture DB.

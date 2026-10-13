@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batched DeepStream person detection/tracking with MJPEG preview over HTTP and WebSocket."""
+"""Batched DeepStream parking-camera vehicle detection/tracking with MJPEG preview over HTTP and WebSocket."""
 
 import argparse
 import json
@@ -24,11 +24,11 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GstRtsp", "1.0")
 from gi.repository import GLib, Gst, GstRtsp
 import pyds
-from app import PGIE_ID, create_source_bin, prepare_pgie_config
+from app import create_source_bin
 from pgie_cache import configure_pgie
 from camera_config import CameraConfigError, load_cameras
 from camera_runtime import CameraRuntime, CameraRuntimeManager
-from person_metadata import FrameMetadata, MetadataStore, person_from_object, vehicle_from_object, utc_timestamp
+from person_metadata import FrameMetadata, MetadataStore, vehicle_from_object, utc_timestamp
 from vehicle_detection import (prepare_vehicle_detector, add_vehicle_rois, prepare_vehicle_tracks,
                                VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS)
 from preview_diagnostics import InferenceDiagnostics, log_safe_traceback, log_settings
@@ -49,7 +49,6 @@ WEB_ROOT = ROOT / "web"
 DEEPSTREAM_ROOT = Path("/opt/nvidia/deepstream/deepstream")
 TRACKER_CONFIG = DEEPSTREAM_ROOT / "samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml"
 TRACKER_LIBRARY = DEEPSTREAM_ROOT / "lib/libnvds_nvmultiobjecttracker.so"
-UNTRACKED_OBJECT_ID = (1 << 64) - 1
 
 
 class SafeParser(argparse.ArgumentParser):
@@ -326,11 +325,11 @@ def create_preview_source_bin(index, uri, latency, fail, drop_on_latency=True, r
 
 
 def make_tracker():
-    """Reuse the SDK's NvDCF perf preset; no Re-ID model is added."""
+    """Reuse the SDK's NvDCF perf preset for vehicle track IDs; no Re-ID model is added."""
     for path in (TRACKER_CONFIG, TRACKER_LIBRARY):
         if not path.is_file():
             raise FileNotFoundError(f"Required DeepStream tracker file missing: {path}")
-    tracker = make_element("nvtracker", "person-tracker")
+    tracker = make_element("nvtracker", "vehicle-tracker")
     tracker.set_property("ll-lib-file", str(TRACKER_LIBRARY))
     tracker.set_property("ll-config-file", str(TRACKER_CONFIG))
     tracker.set_property("gpu-id", 0)
@@ -339,7 +338,7 @@ def make_tracker():
     # Older plugins expose this switch; DS 7.x uses batched tracking by default.
     if tracker.find_property("enable-batch-process") is not None:
         tracker.set_property("enable-batch-process", True)
-    # The output probe formats Person <id> explicitly, avoiding duplicate ID text.
+    # Track IDs stay in metadata for occupancy; the OSD shows the class only.
     tracker.set_property("display-tracking-id", False)
     print(
         f"Tracker=NvDCF config={TRACKER_CONFIG} library={TRACKER_LIBRARY} "
@@ -362,7 +361,7 @@ def build_output(index, args, store, fail):
         osd_convert = make_element("nvvideoconvert", f"osd-convert-{index}")
         rgba_caps = make_element("capsfilter", f"osd-rgba-caps-{index}")
         rgba_caps.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
-        osd = make_element("nvdsosd", f"person-osd-{index}")
+        osd = make_element("nvdsosd", f"osd-{index}")
         osd.set_property("process-mode", 1)
         osd.set_property("display-bbox", True)
         osd.set_property("display-text", True)
@@ -432,9 +431,12 @@ def build_output(index, args, store, fail):
         raise
 
 
-def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
-                        pgie_config, person_class_id):
-    """One mux/PGIE/tracker/demux; source bins own native RTSP reconnection."""
+def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
+    """One mux/vehicle detector/tracker/demux; source bins own native RTSP reconnection.
+
+    Only parking cameras selected by the vehicle detector get a full-frame ROI, so
+    other cameras pass through without inference while sharing RTSP/JPEG output.
+    """
     startup = getattr(args, "startup_timing", None)
     vehicle_detector = getattr(args, "vehicle_detector", None)
     if startup is not None:
@@ -452,16 +454,16 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
     pipeline_stop = threading.Event()
     setup_stage = "shared-elements"
     counts = [0] * len(args.input)
-    persons = [None] * len(args.input)
-    persons_max = [0] * len(args.input)
-    track_ids = [[] for _ in args.input]
+    vehicle_counts = [None] * len(args.input)
+    vehicles_max = [0] * len(args.input)
     previous_counts = [0] * len(args.input)
     counts_lock = threading.Lock()
     previous_time = time.monotonic()
     timings = {}
-    inference_stats = {index: InferenceDiagnostics() for index in cameras_by_source} if args.diagnostics else {}
-    metadata_samples = {}  # At most five people from the latest nonempty frame per report.
-    primary_inference_by_frame = {}
+    inference_stats = ({index: InferenceDiagnostics() for index, camera in cameras_by_source.items()
+                        if camera.camera_id in vehicle_detector.cameras}
+                       if args.diagnostics and vehicle_detector is not None else {})
+    metadata_samples = {}  # At most five vehicles from the latest nonempty frame per report.
 
     def camera_for_frame(frame):
         return manager.camera_for_frame(int(frame.source_id), int(frame.pad_index))
@@ -473,26 +475,26 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
         try:
             batch = pyds.gst_buffer_get_nvds_batch_meta(hash(buffer))
             if batch is None:
-                raise RuntimeError("PGIE output has no batch metadata")
+                raise RuntimeError("Vehicle detector output has no batch metadata")
             frames = batch.frame_meta_list
             while frames is not None:
                 frame = pyds.NvDsFrameMeta.cast(frames.data)
                 camera_for_frame(frame)
+                stats = inference_stats.get(int(frame.pad_index))
                 confidences = []
-                objects = frame.obj_meta_list
+                objects = frame.obj_meta_list if stats is not None else None
                 while objects is not None:
                     obj = pyds.NvDsObjectMeta.cast(objects.data)
-                    if obj.unique_component_id == PGIE_ID and obj.class_id == person_class_id:
+                    if obj.unique_component_id == VEHICLE_GIE_ID and obj.class_id == VEHICLE_TRACKER_CLASS:
                         confidences.append(float(obj.confidence))
                     try:
                         objects = objects.next
                     except StopIteration:
                         break
                 pts = int(frame.buf_pts)
-                inference_stats[int(frame.pad_index)].observe(
-                    bool(frame.bInferDone), confidences,
-                    None if pts == Gst.CLOCK_TIME_NONE else pts,
-                )
+                if stats is not None:
+                    stats.observe(bool(frame.bInferDone), confidences,
+                                  None if pts == Gst.CLOCK_TIME_NONE else pts)
                 try:
                     frames = frames.next
                 except StopIteration:
@@ -519,7 +521,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         camera_for_frame(frame)
                         index = int(frame.pad_index)
                         startup.mark(stage, index, None if frame.buf_pts == Gst.CLOCK_TIME_NONE else frame.buf_pts)
-                        if stage == "first_pgie_output" and frame.bInferDone:
+                        if stage == "first_infer_output" and frame.bInferDone:
                             startup.mark("first_inference_done", index, frame.buf_pts)
                             startup.mark("first_inference_done")
                         try:
@@ -528,7 +530,8 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                             break
                 except Exception:
                     startup.mark("batch_observer_unavailable")
-                if startup.complete(stage) and (stage != "first_pgie_output" or startup.complete("first_inference_done")):
+                # Only parking cameras are inferred, so completion waits for output only.
+                if startup.complete(stage):
                     return Gst.PadProbeReturn.REMOVE
                 return Gst.PadProbeReturn.OK
             return Gst.PadProbeReturn.REMOVE
@@ -599,19 +602,18 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
         elapsed = max(now - previous_time, 1e-9)
         with counts_lock:
             snapshot = counts.copy()
-            person_snapshot = persons.copy()
-            peak_snapshot = persons_max.copy()
-            id_snapshot = [ids.copy() for ids in track_ids]
+            vehicle_snapshot = vehicle_counts.copy()
+            peak_snapshot = vehicles_max.copy()
             samples = dict(metadata_samples)
             metadata_samples.clear()
-            persons_max[:] = [0] * len(args.input)
+            vehicles_max[:] = [0] * len(args.input)
         for index, total in enumerate(snapshot):
-            latest = person_snapshot[index] if person_snapshot[index] is not None else "NA"
+            latest = vehicle_snapshot[index] if vehicle_snapshot[index] is not None else "NA"
             fps = (total - previous_counts[index]) / elapsed
             print(
                 f"{'final' if final else 'stats'} source={cameras_by_source[index].source_id} frames={total} "
-                f"camera_id={cameras_by_source[index].camera_id} fps={fps:.2f} persons={latest} persons_max={peak_snapshot[index]} "
-                f"track_ids={id_snapshot[index]}", flush=True,
+                f"camera_id={cameras_by_source[index].camera_id} fps={fps:.2f} vehicles={latest} "
+                f"vehicles_max={peak_snapshot[index]}", flush=True,
             )
         if args.diagnostics:
             for index, diagnostics in inference_stats.items():
@@ -653,40 +655,18 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         break
                     continue
                 timestamp = utc_timestamp()
-                records = []
                 vehicles = []
-                person_count = 0
-                current_ids = set()
+                vehicle_enabled = vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras
                 object_list = frame.obj_meta_list
                 while object_list is not None:
                     obj = pyds.NvDsObjectMeta.cast(object_list.data)
-                    # Save the next node before removing any non-person metadata.
+                    # Save the next node before removing any non-vehicle metadata.
                     try:
                         next_object = object_list.next
                     except StopIteration:
                         next_object = None
-                    if obj.unique_component_id == PGIE_ID and obj.class_id == person_class_id:
-                        person_count += 1
-                        records.append(person_from_object(camera.camera_id, timestamp, obj))
-                        obj.rect_params.border_width = 3
-                        obj.rect_params.border_color.set(0.0, 1.0, 0.0, 1.0)
-                        obj.rect_params.has_bg_color = 0
-                        track_id = int(obj.object_id)
-                        text = obj.text_params
-                        if track_id != UNTRACKED_OBJECT_ID:
-                            current_ids.add(track_id)
-                            text.display_text = f"Person {track_id}"
-                        else:
-                            text.display_text = "Person pending"
-                        text.x_offset = max(0, int(obj.rect_params.left))
-                        text.y_offset = max(0, int(obj.rect_params.top) - 22)
-                        text.font_params.font_name = "Arial"
-                        text.font_params.font_size = 18
-                        text.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
-                        text.set_bg_clr = 1
-                        text.text_bg_clr.set(0.0, 0.0, 0.0, 0.7)
-                    elif (vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras
-                          and obj.unique_component_id == VEHICLE_GIE_ID and obj.class_id == VEHICLE_TRACKER_CLASS):
+                    if (vehicle_enabled and obj.unique_component_id == VEHICLE_GIE_ID
+                            and obj.class_id == VEHICLE_TRACKER_CLASS):
                         vehicles.append(vehicle_from_object(camera.camera_id, timestamp, obj, vehicle_detector.car_class_id))
                         obj.rect_params.border_width = 3
                         obj.rect_params.border_color.set(1.0, 0.65, 0.0, 1.0)
@@ -696,27 +676,30 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         pyds.nvds_remove_obj_meta_from_frame(frame, obj)
                     object_list = next_object
                 pts = int(frame.buf_pts)
+                # inference_done/persons stay in the public schema; only the vehicle
+                # detector infers now, and person detection is no longer produced.
+                inferred = vehicle_enabled and bool(frame.bInferDone)
                 detached = FrameMetadata(
                     camera.source_id, camera.camera_id, int(frame.frame_num), timestamp,
-                    None if pts == Gst.CLOCK_TIME_NONE else pts,
-                    primary_inference_by_frame.pop((index, int(frame.frame_num), pts), bool(frame.bInferDone)),
-                    tuple(records), generation=generation, pipeline_source_id=int(frame.source_id),
+                    None if pts == Gst.CLOCK_TIME_NONE else pts, inferred, (),
+                    generation=generation, pipeline_source_id=int(frame.source_id),
                     bbox_width=1920, bbox_height=1080,
                     vehicles=tuple(vehicles),
-                    vehicle_detection_enabled=vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras,
-                    vehicle_inference_done=vehicle_detector is not None and camera.camera_id in vehicle_detector.cameras and bool(frame.bInferDone),
+                    vehicle_detection_enabled=vehicle_enabled,
+                    vehicle_inference_done=inferred,
                 )
                 manager.publish(index, pts, lambda: metadata_store.put(detached), generation=generation)
                 with counts_lock:
-                    if args.diagnostics and records:
+                    if args.diagnostics and vehicles:
                         metadata_samples[index] = FrameMetadata(
                             camera.source_id, camera.camera_id, detached.frame_number, timestamp,
-                            detached.pts_ns, detached.inference_done, tuple(records[:5]), generation=generation, pipeline_source_id=int(frame.source_id),
+                            detached.pts_ns, inferred, (), generation=generation, pipeline_source_id=int(frame.source_id),
+                            vehicles=tuple(vehicles[:5]), vehicle_detection_enabled=True, vehicle_inference_done=inferred,
                         )
                     counts[index] += 1
-                    persons[index] = person_count
-                    persons_max[index] = max(persons_max[index], person_count)
-                    track_ids[index] = sorted(current_ids)
+                    if vehicle_enabled:
+                        vehicle_counts[index] = len(vehicles)
+                        vehicles_max[index] = max(vehicles_max[index], len(vehicles))
                 try:
                     frame_list = frame_list.next
                 except StopIteration:
@@ -800,11 +783,10 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
         mux.set_property("nvbuf-memory-type", 0)  # Existing platform-default NVMM memory.
         mux.set_property("sync-inputs", False)  # Partial batches must not wait for offline cameras.
         add_timing_probe(mux.get_static_pad("src"), "mux-batch", "all")
-        pgie = make_element("nvinfer", "primary-inference")
-        configure_pgie(pgie, pgie_config, manager.batch_size)
         tracker = make_tracker()
         demux = make_element("nvstreamdemux", "stream-demuxer")
-        shared = (mux, pgie, tracker, demux)
+        shared = (mux, tracker, demux)
+        vehicle = None
         if vehicle_detector is not None:
             vehicle = make_element("nvinfer", "vehicle-inference")
             configure_pgie(vehicle, vehicle_detector.config_path, len(vehicle_detector.cameras))
@@ -816,12 +798,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
                         batch = pyds.gst_buffer_get_nvds_batch_meta(hash(buffer))
                         if batch is None:
                             raise ValueError("Missing vehicle batch")
-                        original = prepare(batch, vehicle_detector, camera_for_frame, pyds)
-                        if original:
-                            primary_inference_by_frame.update(original)
-                            # Bound bookkeeping even if a native error stops output.
-                            while len(primary_inference_by_frame) > manager.batch_size * 32:
-                                primary_inference_by_frame.pop(next(iter(primary_inference_by_frame)), None)
+                        prepare(batch, vehicle_detector, camera_for_frame, pyds)
                 except Exception:
                     fail("Vehicle metadata preparation failed; details hidden")
                 return Gst.PadProbeReturn.OK
@@ -829,18 +806,21 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
             vehicle.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, vehicle_probe, add_vehicle_rois)
             vehicle.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, vehicle_probe, prepare_vehicle_tracks)
             add_timing_probe(vehicle.get_static_pad("src"), "vehicle-batch", "all")
-            shared = (mux, pgie, vehicle, tracker, demux)
+            shared = (mux, vehicle, tracker, demux)
         for element in shared:
             pipeline.add(element)
         for left, right in zip(shared, shared[1:]):
             if not left.link(right):
                 raise RuntimeError(f"Could not link {left.get_name()} -> {right.get_name()}")
         if args.diagnostics:
-            log_settings(pgie_config, person_class_id, TRACKER_CONFIG)
-            pgie.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_inference)
+            log_settings(vehicle_detector.config_path if vehicle is not None else None,
+                         sorted(vehicle_detector.vehicle_class_ids) if vehicle is not None else (), TRACKER_CONFIG)
+            if vehicle is not None:
+                vehicle.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_inference)
         startup_probe(mux.get_static_pad("src"), "first_mux_output", batched=True)
-        startup_probe(pgie.get_static_pad("sink"), "first_pgie_input", batched=True)
-        startup_probe(pgie.get_static_pad("src"), "first_pgie_output", batched=True)
+        if vehicle is not None:
+            startup_probe(vehicle.get_static_pad("sink"), "first_infer_input", batched=True)
+            startup_probe(vehicle.get_static_pad("src"), "first_infer_output", batched=True)
         startup_probe(tracker.get_static_pad("sink"), "first_tracker_input", batched=True)
         startup_probe(tracker.get_static_pad("src"), "first_tracker_output", batched=True)
         tracker.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_batch)
@@ -898,12 +878,15 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
             startup.mark("all_source_branches_built")
         bus = pipeline.get_bus()
         if startup is not None:
-            bus.set_sync_handler(bus_observer(startup, Gst,
-                                 {"pipeline": pipeline, "pgie": pgie, "tracker": tracker}, message_scope), None)
+            observed = {"pipeline": pipeline, "tracker": tracker}
+            if vehicle is not None:
+                observed["vehicle"] = vehicle
+            bus.set_sync_handler(bus_observer(startup, Gst, observed, message_scope), None)
         previous_time = time.monotonic()
         print(f"DeepStream shared pipeline sources={manager.batch_size} "
               f"streammux batch-size={mux.get_property('batch-size')} "
-              f"pgie batch-size={pgie.get_property('batch-size')} tracker=NvDCF "
+              f"vehicle cameras={len(vehicle_detector.cameras) if vehicle is not None else 0} "
+              f"vehicle batch-size={vehicle.get_property('batch-size') if vehicle is not None else 0} tracker=NvDCF "
               f"demux branches={manager.batch_size} live-source={args.mux_live_source}", flush=True)
         setup_stage = "playing"
         startup_report()
@@ -996,10 +979,9 @@ def run(args, metadata_store=None, runtime_statuses=None):
     if missing:
         print(f"Preview setup ERROR: missing GStreamer elements: {', '.join(missing)}", flush=True)
         return 1
-    # Config and GObject override agree; engines remain cached by batch size.
+    # Vehicle config and GObject override agree; engines remain cached by batch size.
     if startup is not None:
-        startup.mark("pgie_config_start")
-    pgie_config, person_class_id = prepare_pgie_config(str(cache), len(args.cameras))
+        startup.mark("infer_config_start")
     try:
         args.vehicle_detector = prepare_vehicle_detector(args.cameras, cache)
         if args.vehicle_detector is not None:
@@ -1011,7 +993,7 @@ def run(args, metadata_store=None, runtime_statuses=None):
         args.vehicle_detector = None
         print("Vehicle detector unavailable; configuration/model details hidden; parking remains unknown", flush=True)
     if startup is not None:
-        startup.mark("pgie_config_ready")
+        startup.mark("infer_config_ready")
     for camera in args.cameras:
         runtime_statuses[camera.source_id] = CameraRuntime(
             camera.camera_id, args.camera_degraded_after, args.camera_offline_after,
@@ -1077,8 +1059,7 @@ def run(args, metadata_store=None, runtime_statuses=None):
         http_thread.start()
         parking_relay.thread.start()
         print(f"Preview HTTP listening on 0.0.0.0:{args.port}; shared camera pipeline", flush=True)
-        error = run_shared_pipeline(args, metadata_store, stores, manager, shutdown,
-                                    pgie_config, person_class_id)
+        error = run_shared_pipeline(args, metadata_store, stores, manager, shutdown)
         result = int(error is not None)
     finally:
         shutdown.set()

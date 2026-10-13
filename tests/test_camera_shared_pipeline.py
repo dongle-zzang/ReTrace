@@ -161,37 +161,6 @@ class SharedTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertNotIn('private-value', captured.getvalue())
 
-    def test_generated_pgie_batch_and_interval_apply_person_threshold(self):
-        import configparser
-        import tempfile
-        tree = ast.parse((ROOT / 'app.py').read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'prepare_pgie_config')
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'model.onnx').write_bytes(b'mock model')
-            (root / 'labels.txt').write_text('person\nother\n')
-            def config():
-                result = configparser.ConfigParser()
-                result.read_dict({'property': {'onnx-file': 'model.onnx', 'labelfile-path': 'labels.txt',
-                                 'num-detected-classes': '2', 'batch-size': '1', 'interval': '0'},
-                                  'class-attrs-all': {'pre-cluster-threshold': '0.4'}})
-                return root / 'sample.txt', result
-            namespace = {'Path': Path, 'prepare_engine_cache': prepare_engine_cache,
-                         'PRECISIONS': PRECISIONS, 'load_peoplenet_config': config, 'PGIE_ID': 1}
-            exec(compile(ast.Module(body=[function], type_ignores=[]), 'app.py', 'exec'), namespace)
-            for count in (1, 2, 4, 8, 25):
-                with contextlib.redirect_stdout(io.StringIO()), patch(
-                        'pgie_cache.engine_runtime_identity', return_value={'test': 'cpu'}):
-                    path, person_id = namespace['prepare_pgie_config'](root / 'cache', count)
-                generated = configparser.ConfigParser()
-                generated.read(path)
-                self.assertEqual(generated.getint('property', 'batch-size'), count)
-                self.assertEqual(generated.getint('property', 'interval'), 0)
-                self.assertEqual(generated.get('class-attrs-all', 'pre-cluster-threshold'), '0.4')
-                self.assertEqual(generated.get('class-attrs-0', 'pre-cluster-threshold'), '0.2')
-                self.assertIn(f'peoplenet_b{count}_', generated.get('property', 'model-engine-file'))
-                self.assertEqual(person_id, 0)
-
     def test_output_branch_cannot_hold_preroll_and_jpeg_failure_keeps_flow(self):
         elements, received, failures = {}, [], []
         class Element:
@@ -273,6 +242,7 @@ class SharedTests(unittest.TestCase):
     def test_diagnostics_installs_mux_and_gpu_stage_probes_without_source_state_waits(self):
         with patch('startup_timing.gpu_memory', return_value=None):
             self.construct(2, diagnostics=True)
+            self.construct(3, diagnostics=True, vehicle_enabled=True)
 
     def construct(self, count, diagnostics=False, vehicle_enabled=False):
         manager = self.manager(count)
@@ -307,6 +277,7 @@ class SharedTests(unittest.TestCase):
             def add(self, element):
                 pass
             def link(self, element):
+                links.append((self.name, 'src', element.name, 'sink'))
                 return True
             def get_by_name(self, name):
                 return self
@@ -324,7 +295,7 @@ class SharedTests(unittest.TestCase):
                          init=lambda *args: None), 'os': NS(environ={}), 'threading': threading,
                      'time': __import__('time'), 'json': __import__('json'),
                      'configure_pgie': configure_pgie,
-                     'make_element': Element, 'make_tracker': lambda: Element('nvtracker', 'person-tracker'),
+                     'make_element': Element, 'make_tracker': lambda: Element('nvtracker', 'vehicle-tracker'),
                      'create_preview_source_bin': lambda index, *args, **kwargs: Element('source', f'source-bin-{index}'),
                      'build_output': lambda index, *args: Element('output', f'mjpeg-source-{index}')}
         namespace.update(FrameTiming=FrameTiming, source_observer=lambda *args: lambda *args: None,
@@ -348,34 +319,39 @@ class SharedTests(unittest.TestCase):
             engine = str(Path(directory) / 'cached.engine')
             config.write_text(f'[property]\nmodel-engine-file={engine}\n')
             if vehicle_enabled:
-                args.vehicle_detector = NS(cameras=frozenset({'camera_0'}), config_path=str(config), car_class_id=0)
-            error = namespace['run_shared_pipeline'](args, manager.metadata_store, manager.stores, manager,
-                                                     shutdown, str(config), 0)
+                args.vehicle_detector = NS(cameras=frozenset({'camera_0', 'camera_1'}), config_path=str(config),
+                                           car_class_id=0, vehicle_class_ids=frozenset({0}))
+            error = namespace['run_shared_pipeline'](args, manager.metadata_store, manager.stores, manager, shutdown)
         self.assertIsNone(error)
         pipeline = next(e for e in elements if e.factory == 'pipeline')
         self.assertEqual(pipeline.states, ['PLAYING', 'NULL'])
         self.assertTrue(all(not e.states for e in elements if e.factory == 'source'))
         if diagnostics:
-            for owner, pad in (('stream-muxer', 'src'), ('primary-inference', 'sink'),
-                               ('primary-inference', 'src'), ('person-tracker', 'sink'),
-                               ('person-tracker', 'src')):
+            for owner, pad in (('stream-muxer', 'src'), ('vehicle-tracker', 'sink'), ('vehicle-tracker', 'src')):
                 self.assertIn((owner, pad), probes)
             for index in range(count):
                 self.assertIn(('stream-muxer', f'sink_{index}'), probes)
                 self.assertIn(('stream-demuxer', f'src_{index}'), probes)
+        # PeopleNet is gone: the only nvinfer is the shared vehicle detector, if enabled.
         for factory in ('pipeline', 'nvstreammux', 'nvinfer', 'nvtracker', 'nvstreamdemux'):
-            expected = 2 if vehicle_enabled and factory == 'nvinfer' else 1
+            expected = int(vehicle_enabled) if factory == 'nvinfer' else 1
             self.assertEqual(sum(e.factory == factory for e in elements), expected)
+        self.assertFalse(any(e.name == 'primary-inference' for e in elements))
         mux = next(e for e in elements if e.factory == 'nvstreammux')
-        pgie = next(e for e in elements if e.factory == 'nvinfer')
-        self.assertEqual(pgie.props['model-engine-file'], engine)
         demux = next(e for e in elements if e.factory == 'nvstreamdemux')
-        self.assertEqual((mux.props['batch-size'], pgie.props['batch-size']), (count, count))
+        self.assertEqual(mux.props['batch-size'], count)
         if vehicle_enabled:
             vehicle = next(e for e in elements if e.name == 'vehicle-inference')
-            self.assertEqual(vehicle.props['batch-size'], 1)
+            self.assertEqual(vehicle.props['model-engine-file'], engine)
+            self.assertEqual(vehicle.props['batch-size'], 2)
             self.assertIn(('vehicle-inference', 'sink'), probes)
             self.assertIn(('vehicle-inference', 'src'), probes)
+            self.assertIn(('stream-muxer', 'src', 'vehicle-inference', 'sink'), links)
+            self.assertIn(('vehicle-inference', 'src', 'vehicle-tracker', 'sink'), links)
+            self.assertIn(f'vehicle cameras=2 vehicle batch-size=2', captured.getvalue())
+        else:
+            self.assertIn(('stream-muxer', 'src', 'vehicle-tracker', 'sink'), links)
+            self.assertIn('vehicle cameras=0 vehicle batch-size=0', captured.getvalue())
         self.assertEqual(mux.props['batched-push-timeout'], 40000)
         self.assertFalse(mux.props['sync-inputs'])
         self.assertEqual(mux.requests, [f'sink_{i}' for i in range(count)])
@@ -386,7 +362,7 @@ class SharedTests(unittest.TestCase):
         for i in range(count):
             self.assertIn((f'source-bin-{i}', 'src', 'stream-muxer', f'sink_{i}'), links)
             self.assertIn(('stream-demuxer', f'src_{i}', f'mjpeg-source-{i}', 'sink'), links)
-        self.assertIn(f'sources={count} streammux batch-size={count} pgie batch-size={count}', captured.getvalue())
+        self.assertIn(f'sources={count} streammux batch-size={count} vehicle', captured.getvalue())
         self.assertNotIn('private', captured.getvalue())
 
     def test_bus_source_error_and_eos_do_not_stop_shared_pipeline(self):
@@ -418,7 +394,7 @@ class SharedTests(unittest.TestCase):
                          ('1', 'rtsp_error'))
         self.assertEqual(namespace['message_scope'](NS(src=element('encoder', element('mjpeg-source-1')))),
                          ('1', 'pipeline_error'))
-        self.assertEqual(namespace['message_scope'](NS(src=element('person-tracker'))),
+        self.assertEqual(namespace['message_scope'](NS(src=element('vehicle-tracker'))),
                          ('all', 'pipeline_error'))
 
 

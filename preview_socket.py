@@ -34,25 +34,8 @@ def video_frame(camera_id, sequence, jpeg):
 
 def normalized_objects(objects, width, height):
     result = []
-    for person in objects:
-        box = person["bbox"]
-        if not all(math.isfinite(box[key]) for key in ("x", "y", "width", "height")):
-            continue
-        left = max(0.0, min(1.0, box["x"] / width))
-        top = max(0.0, min(1.0, box["y"] / height))
-        right = max(left, min(1.0, (box["x"] + box["width"]) / width))
-        bottom = max(top, min(1.0, (box["y"] + box["height"]) / height))
-        result.append({"trackId": None if person["track_id"] is None else str(person["track_id"]),
-                       "bbox": {"x": left, "y": top, "width": right - left, "height": bottom - top},
-                       "confidence": person["confidence"], "trackerConfidence": person["tracker_confidence"]})
-    return result
-
-
-def detection_message(frame, runtime_session):
-    width, height = frame["bbox_width"], frame["bbox_height"]
-    persons = []
-    for person in frame["persons"]:
-        box = person["bbox"]
+    for item in objects:
+        box = item["bbox"]
         if not all(math.isfinite(box[key]) for key in ("x", "y", "width", "height")):
             continue
         left = max(0.0, min(1.0, box["x"] / width))
@@ -60,14 +43,21 @@ def detection_message(frame, runtime_session):
         right = max(left, min(1.0, (box["x"] + box["width"]) / width))
         bottom = max(top, min(1.0, (box["y"] + box["height"]) / height))
         # NvDCF IDs can exceed JavaScript's safe integer range.
-        persons.append({"trackId": None if person["track_id"] is None else str(person["track_id"]),
-                        "bbox": {"x": left, "y": top, "width": right - left, "height": bottom - top},
-                        "confidence": person["confidence"], "trackerConfidence": person["tracker_confidence"]})
+        result.append({"trackId": None if item["track_id"] is None else str(item["track_id"]),
+                       "bbox": {"x": left, "y": top, "width": right - left, "height": bottom - top},
+                       "confidence": item["confidence"], "trackerConfidence": item["tracker_confidence"]})
+    return result
+
+
+def detection_message(frame, runtime_session):
+    width, height = frame["bbox_width"], frame["bbox_height"]
+    # "persons" is kept as an always-empty field so existing clients keep parsing;
+    # person detection (PeopleNet) was removed and vehicles are the only objects.
     return {"version": 1, "type": "detections", "cameraId": frame["camera_id"],
             "sourceId": frame["source_id"], "runtimeSession": runtime_session,
             "generation": frame["generation"], "timestamp": frame["timestamp"],
             "frameNumber": frame["frame_number"], "ptsNs": None if frame["pts_ns"] is None else str(frame["pts_ns"]),
-            "inferenceDone": frame["inference_done"], "persons": persons,
+            "inferenceDone": frame["inference_done"], "persons": [],
             "vehicles": normalized_objects(frame.get("vehicles", []), width, height),
             "vehicleDetectionEnabled": frame.get("vehicle_detection_enabled", False),
             "vehicleInferenceDone": frame.get("vehicle_inference_done", False)}
@@ -86,7 +76,7 @@ class RealtimeHub:
             "PREVIEW_WS_ORIGINS", "").split(",") if value.strip()}
 
     def publish_message(self, camera_id, message_type, data):
-        """Optional producer boundary for Re-ID/parking/events; no socket I/O.
+        """Optional producer boundary for parking/events; no socket I/O.
 
         Delivery is live and bounded, not durable. Slow consumers disconnect.
         Call with detached JSON data, never with native PyDS objects.

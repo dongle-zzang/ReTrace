@@ -68,7 +68,8 @@ class FrameIn(BaseModel):
     frame_number: int = Field(ge=0)
     bbox_width: int = Field(gt=0)
     bbox_height: int = Field(gt=0)
-    persons: list[PersonIn] = Field(max_length=1000)
+    # Legacy person field: Preview now always sends [], and older senders may omit it.
+    persons: list[PersonIn] = Field(default_factory=list, max_length=1000)
     vehicles: list[VehicleIn] = Field(default_factory=list, max_length=1000)
     vehicle_detection_enabled: bool = False
     vehicle_inference_done: bool = False

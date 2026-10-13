@@ -1,5 +1,17 @@
 # Frontend current work
 
+## Person overlay removed with server PeopleNet removal — not deployed (2026-10-13)
+
+- Removed unused person overlay/types (`PersonDetection`, `RealtimePerson`, `'person'` selection); realtime type now has `vehicles`/`vehicleDetectionEnabled`/`vehicleInferenceDone`, `persons?` legacy. Vehicle boxes stay server-drawn in JPEG. `npm test` 27 + typecheck passed; no generate/deploy. Root `.ai/WORK.md` has the server rollout.
+
+## Dataset server build prepared — coordinated deployment blocked (2026-10-13)
+
+- Server main fast-forwarded to 214e95e including CSR 8b2218c and datasets f840886/214e95e; source and private frontend settings preserved.
+- Installed lockfile dependencies with `npm ci --no-audit --no-fund` (sandbox DNS blocked, authorized outside-sandbox retry succeeded). Server `npm test` outside sandbox: 27 passed; sandbox reported only 3 file wrappers, so that wrapper count is not used as verification. `npm run typecheck` and `npm run generate` passed. Nonfatal sourcemap and >500kB chunk warnings remain.
+- `frontend/.output/public/` prepared: decoded Nuxt serverRendered=false; datasets/index.html exists; all 11 index-referenced assets exist; no RTSP URI occurrences. No frontend source changes or commit/push. No browser rendering verification on this server.
+- Deployment blocked: host Docker socket permission denied even outside sandbox prevents required DB backup/Backend/Preview rollout. Live datasets API returns 404. Per docs/datasets.md Backend-first ordering, frontend-dist remains untouched; do not claim the generated build is deployed. Keep all existing work below.
+- Next: after a Docker-authorized operator completes backup and Backend/clean Preview rollout while preserving the running model/config, copy .output/public contents into frontend-dist (assets before index), then validate actual browser capture/annotation/export and existing CCTV/parking pages. Rebuild if frontend source/settings change before rollout.
+
 ## Dataset management and bounding-box editor — source implemented; native verification pending (2026-10-12)
 
 - Completed source: `/datasets` collection/export and `/datasets/images/:imageId` pixel box editor; opt-in one-frame pre-OSD JPEG on existing decode; persistent image/thumbnail/ZIP volume; additive dataset_images/exports; review/revision/deletion recovery; session-safe YOLO ZIP. Contract/runbook: docs/datasets.md.

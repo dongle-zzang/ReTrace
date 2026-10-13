@@ -141,7 +141,7 @@ TXT 한 줄은 `class_id (x+w/2)/W (y+h/2)/H w/W h/H`이며 8자리 소수로 �
 `data.yaml`은 train/val/test 상대 경로와 0 car만 담는다.
 이동 가능한 ZIP이므로 고정 서버 경로나 `path: .`를 넣지 않고 YAML 부모를 기준으로 한다
 ([Ultralytics 경로 해석 원문](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/data/utils.py)).
-학습은 실행하지 않는다.
+내보낸 ZIP의 검증·학습·평가는 [training/README.md](../training/README.md)의 독립 환경에서 한다.
 
 같은 카메라의 직전 캡처와 간격이 **30분 미만**이면 같은 capture_session을 이어 쓴다.
 고정 시각 bucket이 아니므로 30분 경계 앞뒤의 연속 사진이 다른 그룹이 되지 않는다.
@@ -174,9 +174,9 @@ Mock 모드로 자동 대체하지 않는다.
    운영자가 기존 적용 절차에 따라 retrace만 재생성한다. 이때 영상은 잠시 중단된다.
 4. Frontend에서 `npm run generate` 후 `.output/public/`의 내용물을 `frontend-dist/`에 올린다.
    또는 개발 PC에서 기존 동일 origin 프록시로 접속한다.
-5. 실제 카메라에서 캡처 JPEG에 사람/차량 박스·ID·문구·주차 폴리곤이 없는지 확인하고,
+5. 실제 카메라에서 캡처 JPEG에 차량 박스·ID·문구·주차 폴리곤이 없는지 확인하고,
    저장→라벨→검수→ZIP→재조회 및 Backend 재시작 후 파일/라벨 보존을 확인한다.
-   기존 다중 카메라 MJPEG/WS·사람/차량 추론·주차 판정의 FPS/VRAM/장애 복구를 전후 비교한다.
+   기존 다중 카메라 MJPEG/WS·차량 추론·주차 판정의 FPS/VRAM/장애 복구를 전후 비교한다.
    PostgreSQL 동시 저장 revision 충돌, 캡처 중 재연결, export 중 이미지 삭제도 확인한다.
 
 CPU 명령(저장소 루트, backend test requirements 환경):

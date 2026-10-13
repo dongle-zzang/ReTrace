@@ -2,7 +2,7 @@
 
 `preview.py --diagnostics`에서만 `startup`, `startup_config`, `startup_summary`
 JSON 로그를 추가한다. source/element 생성, 연결, batch 설정, RTSP latency,
-PeopleNet, NvDCF, JPEG/MJPEG, Backend 동작은 바꾸지 않는다.
+차량 detector, NvDCF, JPEG/MJPEG, Backend 동작은 바꾸지 않는다(PeopleNet은 2026-10-13 제거).
 카메라 ID와 숫자만 기록하며 RTSP 주소, SDP, native progress text는 출력하지 않는다.
 streaming callback에서는 최초 timestamp를 메모리에 저장하고 main loop가 로그를 출력한다.
 따라서 로그 줄 순서보다 `elapsed_ms`로 비교한다. 재연결 이후에는 최초 기록을 덮어쓰지 않는다.
@@ -18,12 +18,12 @@ PID 1이 systemd/init이거나 `/proc`을 읽지 못하면 `python_entry`로 fal
 | stage | 실제 관측 |
 | --- | --- |
 | python_entry / run_entered | Python 진입(import 이전) / config parsing 이후 run 진입 |
-| pgie_config_start / pgie_config_ready | 설정 파일 준비 전후; TensorRT engine 초기화 완료를 뜻하지 않음 |
+| infer_config_start / infer_config_ready | 차량 detector 설정 파일 준비 전후; TensorRT engine 초기화 완료를 뜻하지 않음 |
 | source_create_start / source_created | source helper 호출 전후(NULL 상태); 연결 완료를 뜻하지 않음 |
 | all_source_branches_built | 모든 source·입력 정규화·JPEG branch 구성 완료 |
 | playing_requested / playing_call_returned | 공유 pipeline set_state(PLAYING) 호출 전후; return만으로 PLAYING 확정 불가 |
 | pipeline_ready / pipeline_paused / pipeline_playing | native STATE_CHANGED가 bus에 게시되는 시점(sync handler) |
-| pgie_ready / pgie_paused / pgie_playing | 공유 nvinfer의 native 상태 변화; 정확한 CUDA 초기화 시작/끝은 아님 |
+| vehicle_ready / vehicle_paused / vehicle_playing | 공유 차량 nvinfer의 native 상태 변화(차량 탐지 활성 시); 정확한 CUDA 초기화 시작/끝은 아님 |
 | tracker_ready / tracker_paused / tracker_playing | 공유 nvtracker의 native 상태 변화; 내부 per-stream context 초기화는 별도 |
 | pipeline_playing_bus_observed | 기존 main loop가 PLAYING 메시지를 읽은 시점; 위 native timestamp와 구분 |
 | rtsp_source_created | 내부 rtspsrc child 생성 관측 |
@@ -37,8 +37,8 @@ PID 1이 systemd/init이거나 `/proc`을 읽지 못하면 `python_entry`로 fal
 | first_decoder_input / first_decoded_frame | 실제 nvv4l2decoder sink/src의 첫 buffer |
 | first_source_output | source bin ghost src의 첫 buffer |
 | first_mux_input / first_mux_output | camera별 mux sink buffer / mux src batch metadata에 해당 camera 등장 |
-| first_pgie_input / first_pgie_output | nvinfer sink/src batch에 해당 camera 등장 |
-| first_inference_done | PGIE src에서 bInferDone=true인 해당 camera 첫 frame; 검출된 사람이 없어도 기록 |
+| first_infer_input / first_infer_output | 차량 nvinfer sink/src batch에 해당 camera 등장(모든 camera가 통과, 추론은 주차장만) |
+| first_inference_done | 차량 nvinfer src에서 bInferDone=true인 주차장 camera 첫 frame; 검출된 차량이 없어도 기록 |
 | first_tracker_input / first_tracker_output | tracker sink/src batch에 해당 camera 등장 |
 | first_demux_output | 해당 demux request src pad 첫 buffer |
 | first_jpeg / first_appsink_buffer | nvjpegenc src / appsink sink의 첫 encoded buffer |
@@ -65,7 +65,7 @@ buffer가 있는 단계에는 가능한 범위에서 `pts_ns`도 기록한다.
 한 번만 PLAYING을 요청한다. source loop에는 camera별 set_state/get_state/wait가 없다.
 Python element 생성은 순차적이지만 카메라별 RTSP/decoder 준비를 기다리는 구조는 아니다.
 native plugin 내부 초기화가 병렬인지 직렬인지는 실제 timestamp로 확인해야 한다.
-PGIE/PeopleNet, nvtracker/NvDCF는 각각 한 개이며 camera별 재생성하지 않는다.
+차량 nvinfer, nvtracker/NvDCF는 각각 한 개이며 camera별 재생성하지 않는다.
 
 RTSP는 nvurisrcbin, TCP, latency 기본 1000ms, drop-on-latency=false,
 rtsp-reconnect-attempts=-1, reconnect interval은 max(1, int(camera_offline_after))로 기본 10초다.
@@ -126,7 +126,7 @@ GPU memory는 별도 스레드가 약 5초마다 수집한 device 전체 used Mi
 | A RTSP | connect_start → request_start → SDP → open_complete → RTP; 인증/SETUP/첫 keyframe 등의 차이는 추가 관측 없이는 완전히 분리되지 않음 |
 | B decoder 직렬 초기화 | camera별 decoder_created, first_decoder_input, first_decoded_frame 분포; input 자체가 늦으면 decoder만의 지연으로 단정 불가 |
 | C mux 대기 | 빠른 camera의 first_mux_input과 first_mux_output, 느린 camera의 첫 input 비교; 느린 input 전 빠른 camera batch가 출력되면 해당 run에서 전체 대기 가설 배제 |
-| D TensorRT/PeopleNet | pgie READY/PAUSED, playing 호출 구간, first_pgie_input → output/inference_done; engine build/load와 첫 실행을 cold/warm run으로 분리 |
+| D TensorRT/차량 detector | vehicle READY/PAUSED, playing 호출 구간, first_infer_input → output/inference_done; engine build/load와 첫 실행을 cold/warm run으로 분리 |
 | E NvDCF | tracker 상태 전환 및 first_tracker_input → output; 내부 per-stream context 생성 횟수/정확한 초기화 시간은 이 계측만으로 확정 불가 |
 | F HTTP | JPEG → appsink → MJPEG available 및 HTTP request → flush; 요청이 늦었다면 서버 저장 지연과 분리, 브라우저 connection limit/rendering은 별도 확인 |
 | G Python 직렬 대기 | 코드상 per-source wait 없음; source_created 분포와 playing_requested로 구성 loop 비용 확인 |

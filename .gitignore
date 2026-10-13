@@ -69,3 +69,10 @@ compose.override.yml
 # Private dataset images and generated training archives
 /dataset-storage/
 /datasets/
+
+# Isolated YOLO training environment: CCTV datasets, weights, runs and tool settings stay local
+/training/.ultralytics/
+/training/datasets/
+/training/weights/
+/training/runs/
+/training/*.zip

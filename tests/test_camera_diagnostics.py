@@ -38,7 +38,7 @@ class SettingsTests(unittest.TestCase):
     def logs(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            log_settings(self.pgie, 0, self.tracker)
+            log_settings(self.pgie, [0], self.tracker)
         return output.getvalue()
 
     def test_opencv_header_reproduces_scanner_error_and_diagnostics_now_read_it(self):
