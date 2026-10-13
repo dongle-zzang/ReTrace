@@ -8,7 +8,27 @@ const source = fs.readFileSync(path.join(__dirname, '../app/lib/datasetNavigatio
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 const exportsObject = {}
 vm.runInNewContext(compiled, { exports: exportsObject, Set })
-const { collectDatasetIds, datasetNeighbors } = exportsObject
+const { collectDatasetIds, datasetNeighbors, datasetPageSize, remapDatasetPage, clampDatasetPage } = exportsObject
+
+test('responsive pages contain exactly two rows at the grid breakpoints', () => {
+  for (const [width, size] of [[390, 2], [639, 2], [640, 4], [1279, 4], [1280, 8], [1920, 8]]) {
+    assert.equal(datasetPageSize(width), size)
+  }
+})
+
+test('resize and return keep the previous first image in the new page', () => {
+  assert.equal(remapDatasetPage(3, 8, 4), 5)
+  assert.equal(remapDatasetPage(5, 4, 2), 9)
+  assert.equal(remapDatasetPage(4, 2, 8), 1)
+  assert.equal(remapDatasetPage(3, 8, 8), 3)
+  assert.equal(remapDatasetPage(2, 24, 8), 4)
+})
+
+test('deleting the last item on a page returns to a valid page, including an empty list', () => {
+  assert.equal(clampDatasetPage(3, 16, 8), 2)
+  assert.equal(clampDatasetPage(2, 0, 2), 1)
+  assert.equal(clampDatasetPage(3, 17, 8), 3)
+})
 
 test('navigation spans pages in displayed order and retains the viewed filtered page', async () => {
   const current = { items: [{ id: 'camera-b-new' }, { id: 'camera-a-old' }], total: 5, page: 2, page_size: 2 }

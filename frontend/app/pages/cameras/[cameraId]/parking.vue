@@ -19,6 +19,7 @@ import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { useVideoStage } from '~/composables/useVideoStage'
 import { floorLabel } from '~/lib/cameraSort'
 import { compareLabels, countStatuses } from '~/lib/parking'
+import type { TransportState } from '~/composables/realtimePreviewClient'
 
 // Let the layout reserve the actual navigation and footer heights.
 definePageMeta({ viewportWorkspace: true })
@@ -39,7 +40,8 @@ const zones = computed(() => editor.draft.value ?? savedZones.value ?? [])
 const counts = computed(() => countStatuses(zones.value.map((zone) => zone.id), parking.zoneStatuses.value))
 const problemByZone = computed(() => Object.fromEntries(editor.problems.value.map((problem) => [problem.zoneId, problem.message])))
 const invalidIds = computed(() => Object.keys(problemByZone.value))
-const conflictSpaceIds = computed(() => parking.summaries.value.filter((summary) => summary.conflict).map((summary) => summary.space.id))
+const conflictSpaceIds = computed(() => parking.summaries.value.filter((summary) => summary.conflict).flatMap((summary) => summary.spaceIds))
+const videoTransport = ref<TransportState>('waiting')
 const cameraNames = computed(() => Object.fromEntries(cameras.value.map((item) => [item.camera_id, item.name])))
 const zoneScores = computed(() => Object.fromEntries(Object.values(parking.zoneStates.value).map((state) => [state.zoneId, state.score])))
 
@@ -304,8 +306,10 @@ onUnmounted(() => {
               :camera-state="liveStatus ? String(liveStatus.state) : undefined"
               :active="true"
               @dimensions="mediaSize = $event"
+              @transport="videoTransport = $event"
             />
             <ParkingOverlay
+              v-if="videoTransport === 'connected'"
               class="absolute z-10"
               :style="contentStyle"
               :width="content.width"

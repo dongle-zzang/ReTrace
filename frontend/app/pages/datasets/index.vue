@@ -8,6 +8,7 @@ import CameraVideo from '~/components/CameraVideo.vue'
 import { useCameras } from '~/composables/useCameras'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { datasetRequest } from '~/composables/datasetApi'
+import { datasetPageSize, remapDatasetPage, clampDatasetPage } from '~/lib/datasetNavigation'
 import type { DatasetImage, DatasetPage, DatasetExport } from '~/types/dataset'
 import { DATASET_STATUS_LABELS } from '~/types/dataset'
 
@@ -19,13 +20,26 @@ const cameraId = ref('')
 const camera = computed(() => parkingCameras.value.find(c => c.camera_id === cameraId.value))
 watch(parkingCameras, rows => { if (!rows.some(c => c.camera_id === cameraId.value && c.enabled)) cameraId.value = rows.find(c => c.enabled)?.camera_id ?? '' }, { immediate: true })
 const navigation = useDatasetNavigation()
-const { listCamera: filterCamera, listStatus: filterStatus, listPage: page } = navigation
+const { listCamera: filterCamera, listStatus: filterStatus, listPage: page, listPageSize: pageSize } = navigation
+let listReady = false
+let changingQuery = false
+const visibleImages = computed(() => images.value.items.slice(0, pageSize.value))
+const totalPages = computed(() => Math.max(1, Math.ceil(images.value.total / pageSize.value)))
+function resizeList() {
+  const size = datasetPageSize(window.innerWidth)
+  if (size === pageSize.value) return
+  changingQuery = true
+  page.value = remapDatasetPage(page.value, pageSize.value, size)
+  pageSize.value = size
+  changingQuery = false
+  if (listReady) void refresh()
+}
 const openingImage = ref(false)
 let viewAlive = true
 async function openImage(event: MouseEvent, id: string) {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   event.preventDefault()
-  if (openingImage.value) return
+  if (openingImage.value || loading.value) return
   openingImage.value = true
   try {
     await navigation.prepare(images.value, filterCamera.value, filterStatus.value, id)
@@ -33,7 +47,7 @@ async function openImage(event: MouseEvent, id: string) {
   } catch (cause) { error.value = (cause as Error).message }
   finally { openingImage.value = false }
 }
-const images = ref<DatasetPage>({ items: [], total: 0, page: 1, page_size: 24 })
+const images = ref<DatasetPage>({ items: [], total: 0, page: 1, page_size: pageSize.value })
 const exports = ref<DatasetExport[]>([])
 const loading = ref(false), capturing = ref(false), exporting = ref(false), deleting = ref<string | null>(null)
 const error = ref<string | null>(null), message = ref<string | null>(null)
@@ -65,26 +79,38 @@ async function refresh() {
   const version = ++requestVersion
   loading.value = true; error.value = null
   try {
-    const query = new URLSearchParams({ page: String(page.value), page_size: '24' })
+    const query = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) })
     if (filterCamera.value) query.set('camera_id', filterCamera.value)
     if (filterStatus.value) query.set('status', filterStatus.value)
     const data = await datasetRequest<DatasetPage>('/images?' + query)
-    if (version === requestVersion) images.value = data
+    if (version === requestVersion) {
+      const validPage = clampDatasetPage(data.page, data.total, data.page_size)
+      if (validPage !== data.page) {
+        changingQuery = true; page.value = validPage; changingQuery = false
+        await refresh()
+        return
+      }
+      images.value = data
+    }
   } catch (cause) { if (version === requestVersion) error.value = (cause as Error).message }
   finally { if (version === requestVersion) loading.value = false }
 }
 async function refreshExports() {
   try { exports.value = await datasetRequest<DatasetExport[]>('/exports') } catch (cause) { error.value = (cause as Error).message }
 }
-watch([filterCamera, filterStatus], () => { page.value = 1; void refresh() })
-watch(page, () => void refresh())
+watch([filterCamera, filterStatus], () => {
+  changingQuery = true; page.value = 1; changingQuery = false
+  if (listReady) void refresh()
+}, { flush: 'sync' })
+watch(page, () => { if (listReady && !changingQuery) void refresh() }, { flush: 'sync' })
 async function capture() {
   if (!camera.value || capturing.value) return
   capturing.value = true; error.value = null; message.value = null
   try {
     captureResult.value = await datasetRequest<DatasetImage>('/capture', { method: 'POST', body: { camera_id: cameraId.value } })
     message.value = 'Clean frame captured. Open it to label vehicles.'
-    page.value = 1; await refresh()
+    changingQuery = true; page.value = 1; changingQuery = false
+    await refresh()
   } catch (cause) { error.value = (cause as Error).message }
   finally { capturing.value = false }
 }
@@ -105,8 +131,8 @@ async function exportDataset() {
 }
 const cameraName = (id: string) => cameras.value.find(c => c.camera_id === id)?.name ?? id
 const time = (date: string) => new Date(date).toLocaleString()
-onMounted(() => { void refresh(); void refreshExports(); timer = setInterval(() => { if (exports.value.some(job => job.status === 'building')) void refreshExports() }, 2500) })
-onUnmounted(() => { viewAlive = false; requestVersion++; if (timer) clearInterval(timer) })
+onMounted(() => { resizeList(); listReady = true; window.addEventListener('resize', resizeList); void refresh(); void refreshExports(); timer = setInterval(() => { if (exports.value.some(job => job.status === 'building')) void refreshExports() }, 2500) })
+onUnmounted(() => { listReady = false; window.removeEventListener('resize', resizeList); viewAlive = false; requestVersion++; if (timer) clearInterval(timer) })
 </script>
 
 <template>
@@ -146,12 +172,12 @@ onUnmounted(() => { viewAlive = false; requestVersion++; if (timer) clearInterva
       <p v-if="loading && !images.items.length" class="py-8 text-center text-sm text-muted-foreground" role="status">Loading images…</p>
       <p v-else-if="!loading && !images.items.length" class="rounded-2xl border border-dashed border-white/15 py-16 text-center text-sm text-muted-foreground">No captured images here yet.</p>
       <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <article v-for="image in images.items" :key="image.id" class="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] transition-colors hover:border-primary/40">
+        <article v-for="image in visibleImages" :key="image.id" class="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] transition-colors hover:border-primary/40">
           <NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)" class="block"><img :src="image.thumbnail_url" :alt="`Captured frame from ${cameraName(image.camera_id)}`" loading="lazy" class="aspect-video w-full bg-black/30 object-cover"></NuxtLink>
           <div class="space-y-3 p-3"><div class="flex min-w-0 items-center justify-between gap-2"><p class="truncate text-sm font-medium">{{ cameraName(image.camera_id) }}</p><Badge variant="outline" :class="image.status === 'reviewed' ? 'text-primary' : 'text-muted-foreground'">{{ DATASET_STATUS_LABELS[image.status] }}</Badge></div><time class="block text-xs text-muted-foreground">{{ time(image.captured_at) }}</time><div class="flex items-center justify-between gap-2"><Button as-child size="sm" variant="outline"><NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)">{{ image.status === 'pending' ? 'Start labeling' : 'Open image' }}</NuxtLink></Button><Button size="icon-sm" variant="ghost" :disabled="!!deleting" :aria-label="`Delete image captured at ${time(image.captured_at)}`" @click="requestDelete(image)"><Trash2 class="text-muted-foreground" /></Button></div></div>
         </article>
       </div>
-      <nav class="flex items-center justify-center gap-4" aria-label="Image pagination"><Button size="sm" variant="outline" :disabled="page <= 1 || loading" @click="page--">Previous</Button><span class="text-xs tabular-nums text-muted-foreground">{{ page }} / {{ Math.max(1, Math.ceil(images.total / 24)) }}</span><Button size="sm" variant="outline" :disabled="page * 24 >= images.total || loading" @click="page++">Next</Button></nav>
+      <nav v-if="totalPages > 1" class="flex items-center justify-center gap-4" aria-label="Image pagination"><Button size="sm" variant="outline" :disabled="page <= 1 || loading || openingImage" @click="page--">Previous</Button><span class="text-xs tabular-nums text-muted-foreground">{{ page }} / {{ totalPages }}</span><Button size="sm" variant="outline" :disabled="page >= totalPages || loading || openingImage" @click="page++">Next</Button></nav>
     </section>
     <Dialog :open="deleteDialogOpen" @update:open="setDeleteOpen">
       <DialogContent :show-close-button="!deleteBusy" class="border border-white/10 bg-popover/95 shadow-xl backdrop-blur-xl" @escape-key-down="deleting && $event.preventDefault()" @pointer-down-outside="deleting && $event.preventDefault()">

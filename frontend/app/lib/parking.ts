@@ -126,7 +126,7 @@ export function combineSpaceStatus(zones: ParkingZoneState[], verdict?: ParkingS
   return { status: (best('empty') > best('occupied') ? 'empty' : 'occupied') as ParkingStatus, conflict }
 }
 
-/** Summaries of spaces that have at least one zone, sorted by label. */
+/** One summary per registered label, including spots without zones as unknown. */
 export function summarizeSpaces(
   spaces: ParkingSpace[],
   zoneStates: ParkingZoneState[],
@@ -139,11 +139,22 @@ export function summarizeSpaces(
     list.push(state)
     bySpace.set(state.parkingSpaceId, list)
   }
-  return spaces
-    .filter((space) => bySpace.has(space.id))
-    .map((space) => {
-      const zones = bySpace.get(space.id)!.sort((a, b) => a.cameraId.localeCompare(b.cameraId))
-      return { space, zones, ...combineSpaceStatus(zones, verdicts[space.id]) }
+  const labels = new Map<string, ParkingSpace[]>()
+  for (const space of spaces) {
+    const key = labelKey(space.label)
+    const group = labels.get(key) ?? []
+    group.push(space)
+    labels.set(key, group)
+  }
+  return [...labels.values()]
+    .map((group) => {
+      const space = group[0]!
+      const spaceIds = group.map(item => item.id)
+      const zones = spaceIds.flatMap(id => bySpace.get(id) ?? []).sort((a, b) => a.cameraId.localeCompare(b.cameraId))
+      // A server verdict is authoritative for its own ID. Separate IDs sharing a label
+      // need their camera views combined, rather than arbitrarily choosing one verdict.
+      const verdict = zones.length && group.length === 1 ? verdicts[space.id] : undefined
+      return { space, spaceIds, zones, ...combineSpaceStatus(zones, verdict) }
     })
     .sort((a, b) => compareLabels(a.space.label, b.space.label))
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleAlert, RefreshCw, SquareParking, TriangleAlert } from '@lucide/vue'
+import { CircleAlert, RefreshCw, SquareParking } from '@lucide/vue'
 import CameraCard from '~/components/CameraCard.vue'
 import ParkingSpaceBoard from '~/components/ParkingSpaceBoard.vue'
 import ParkingSummary from '~/components/ParkingSummary.vue'
@@ -29,7 +29,8 @@ const parkingCameras = computed(() => cameras.value
   .sort(compareCameras))
 
 const cameraNames = computed(() => Object.fromEntries(cameras.value.map((camera) => [camera.camera_id, camera.name])))
-const conflictSpaceIds = computed(() => parking.summaries.value.filter((summary) => summary.conflict).map((summary) => summary.space.id))
+const conflictSummaries = computed(() => parking.summaries.value.filter((summary) => summary.conflict))
+const conflictSpaceIds = computed(() => conflictSummaries.value.flatMap((summary) => summary.spaceIds))
 const showConflictsOnly = ref(false)
 const boardSummaries = computed(() =>
   showConflictsOnly.value ? parking.summaries.value.filter((summary) => summary.conflict) : parking.summaries.value)
@@ -150,7 +151,7 @@ function enterDelay(index: number, step = 70, base = 0) {
               :aria-pressed="showConflictsOnly"
               @click="showConflictsOnly = !showConflictsOnly"
             >
-              <TriangleAlert /> {{ conflictSpaceIds.length }} to check
+              {{ conflictSummaries.length }} to check
             </Button>
           </div>
           <div v-if="parking.loading.value" class="space-y-2">
@@ -159,7 +160,7 @@ function enterDelay(index: number, step = 70, base = 0) {
           <p v-else-if="!parking.summaries.value.length" class="border-t border-white/10 py-6 text-sm text-muted-foreground">
             No labelled zones yet. Open a camera with the P button to draw zones.
           </p>
-          <div v-else class="max-h-[calc(100dvh-12rem)] overflow-y-auto">
+          <div v-else class="parking-scroll max-h-[calc(100dvh-12rem)] overflow-y-auto pr-2">
             <ParkingSpaceBoard :summaries="boardSummaries" :camera-names="cameraNames" />
           </div>
         </aside>
@@ -167,3 +168,16 @@ function enterDelay(index: number, step = 70, base = 0) {
     </section>
   </main>
 </template>
+
+<style scoped>
+.parking-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.22) transparent;
+  scrollbar-gutter: stable;
+}
+.parking-scroll:hover { scrollbar-color: rgb(255 255 255 / 0.38) transparent; }
+.parking-scroll::-webkit-scrollbar { width: 6px; }
+.parking-scroll::-webkit-scrollbar-track { background: transparent; }
+.parking-scroll::-webkit-scrollbar-thumb { border-radius: 999px; background: rgb(255 255 255 / 0.22); }
+.parking-scroll::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / 0.38); }
+</style>

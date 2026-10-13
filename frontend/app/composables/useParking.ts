@@ -86,7 +86,7 @@ export function useParking(options: UseParkingOptions = {}) {
   })
 
   const summaries = computed<ParkingSpaceSummary[]>(() => summarizeSpaces(spaces.value, currentZoneStates.value, verdicts.value))
-  const summaryBySpace = computed(() => Object.fromEntries(summaries.value.map((summary) => [summary.space.id, summary])))
+  const summaryBySpace = computed(() => Object.fromEntries(summaries.value.flatMap((summary) => summary.spaceIds.map(id => [id, summary]))))
 
   const totals = computed<ParkingCounts>(() => {
     const counts: ParkingCounts = { total: 0, occupied: 0, empty: 0, unknown: 0 }

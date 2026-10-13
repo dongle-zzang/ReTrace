@@ -215,7 +215,7 @@ watch(isDrawing, (drawing) => {
         paint-order="stroke"
         class="pointer-events-none"
       >
-        <tspan :x="shape.label.x" :dy="showStatusText ? '-0.15em' : '0.35em'" font-size="12" font-weight="700">{{ shape.conflict ? '⚠ ' : '' }}{{ shape.name }}</tspan>
+        <tspan :x="shape.label.x" :dy="showStatusText ? '-0.15em' : '0.35em'" font-size="12" font-weight="700">{{ shape.name }}</tspan>
         <tspan v-if="showStatusText" :x="shape.label.x" dy="1.2em" font-size="10" font-weight="500" fill-opacity="0.85">{{ parkingStatusLabel[shape.status] }}</tspan>
       </text>
     </g>

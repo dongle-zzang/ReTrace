@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { ParkingSpaceSummary } from '~/types/parking'
-import { TriangleAlert } from '@lucide/vue'
 import ParkingStatusBadge from '~/components/ParkingStatusBadge.vue'
 import { Badge } from '~/components/ui/badge'
 
@@ -34,7 +33,7 @@ const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
           class="gap-1 border-amber-400/40 text-amber-300"
           title="Cameras report different statuses for this spot. Check the video."
         >
-          <TriangleAlert /> Check
+          Check
         </Badge>
         <span class="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
           Final
@@ -50,6 +49,7 @@ const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
           <ParkingStatusBadge :status="zone.status" :score="zone.score" />
         </li>
       </ul>
+      <p v-if="!summary.zones.length" class="mt-1.5 text-xs text-muted-foreground">No camera zone assigned.</p>
     </li>
   </ul>
 </template>

@@ -1,5 +1,15 @@
 # Frontend current work
 
+## Parking board polish and label totals — deployment pending (2026-10-13)
+
+- Thin translucent Spaces scrollbar; text-only Check labels in board/filter/polygons; overlays gated by CameraVideo transport in cards, zoom and editor. Offline/stale status hides video and resets decoded-frame readiness.
+- Summaries group normalized labels across IDs and include registered labels without zones as Unknown. Existing dataset two-row work preserved. Verified 39 tests, typecheck, generate, diff check; live browser 28 unique label rows (9 unassigned), thin scrollbar and no Check icons/polygon warning symbols. Offline/reconnect/late-frame behavior verified with real CameraVideo setup tests; live camera outage not induced. Static output refreshed; Git handoff requested. Server upload pending.
+
+## Captured images two-row pagination — deployment pending (2026-10-13)
+
+- Responsive page sizes 8/4/2 at 1280/640 px, ordinal-preserving resize/return, persisted page size with legacy 24 migration, valid-page correction after deletion. Keep filtered full-order labeling navigation.
+- Verified: 36 frontend tests, typecheck, generate and diff check passed. Browser: desktop 8 cards, tablet 4 cards/two rows, mobile 2 cards/two rows; page-2 editor return and ordinal-preserving resize verified against live read-only data. Delete/filter/stale-response behavior covered by actual SFC setup tests. Static output at .output/public; Git handoff requested. Server upload pending.
+
 ## HTTP dataset box drawing — deployment pending (2026-10-13)
 
 - DatasetBoxEditor called secure-context-only crypto.randomUUID on pointerdown. Added datasetBoxId using getRandomValues UUID v4 fallback for HTTP LAN deployments; backend requires UUID box IDs.
