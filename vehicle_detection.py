@@ -1,4 +1,4 @@
-"""Opt-in camera-selected full-frame vehicle ROIs; no GI/PyDS imports."""
+"""Parking-camera full-frame vehicle ROIs for one shared detector; no GI/PyDS imports."""
 import configparser
 from dataclasses import dataclass
 import os
@@ -28,11 +28,14 @@ class VehicleDetector:
 
 def prepare_vehicle_detector(cameras, cache_dir, environ=None):
     env = os.environ if environ is None else environ
-    selected = frozenset(v.strip() for v in env.get("VEHICLE_CAMERA_IDS", "").split(",") if v.strip())
+    requested = frozenset(v.strip() for v in env.get("VEHICLE_CAMERA_IDS", "").split(",") if v.strip())
+    # A parking camera removed or disabled in the camera YAML is skipped, not fatal,
+    # so the remaining parking cameras keep vehicle detection. IDs are public.
+    selected = requested & {c.camera_id for c in cameras}
+    for camera_id in sorted(requested - selected):
+        print(f"Vehicle camera skipped: camera_id={camera_id} is not an enabled runtime camera", flush=True)
     if not selected:
         return None
-    if not selected <= {c.camera_id for c in cameras}:
-        raise ValueError("Vehicle cameras must be enabled runtime cameras")
     path = Path(env.get("VEHICLE_INFER_CONFIG", ""))
     if not path.is_file():
         raise ValueError("Vehicle detector requires a local native nvinfer model config")
@@ -58,7 +61,7 @@ def prepare_vehicle_detector(cameras, cache_dir, environ=None):
     # class/all value. Backend min_confidence stays separate, so weaker
     # candidates reach occupancy as uncertain evidence instead of vanishing.
     default = config.get("class-attrs-all", "pre-cluster-threshold", fallback="0.4")
-    # Only synthetic full-frame ROIs are inferred; persons are never car-detector crops.
+    # Only synthetic full-frame ROIs of selected cameras are inferred, in one batch.
     props.update({"gpu-id": "0", "batch-size": str(len(selected)), "process-mode": "2",
                   "network-type": "0", "gie-unique-id": str(VEHICLE_GIE_ID),
                   "operate-on-gie-id": str(VEHICLE_ROI_ID), "operate-on-class-ids": "0",
@@ -94,7 +97,6 @@ def metadata_nodes(node, cast):
 
 
 def add_vehicle_rois(batch, detector, camera_for_frame, pyds):
-    original_inference = {}
     for frame in metadata_nodes(batch.frame_meta_list, pyds.NvDsFrameMeta.cast):
         if camera_for_frame(frame).camera_id not in detector.cameras:
             continue
@@ -105,11 +107,9 @@ def add_vehicle_rois(batch, detector, camera_for_frame, pyds):
         rect.left, rect.top, rect.width, rect.height = 0.0, 0.0, 1920.0, 1080.0
         rect.border_width = 0
         pyds.nvds_add_obj_meta_to_frame(frame, roi, None)
-        original_inference[(int(frame.pad_index), int(frame.frame_num), int(frame.buf_pts))] = bool(frame.bInferDone)
-        # Secondary detector sets this even for an empty result. Diagnostics for
-        # PeopleNet run before this reset. Missing vehicle inference is unknown.
+        # Secondary detector sets this even for an empty result. Missing vehicle
+        # inference is unknown.
         frame.bInferDone = False
-    return original_inference
 
 
 def prepare_vehicle_tracks(batch, detector, camera_for_frame, pyds):

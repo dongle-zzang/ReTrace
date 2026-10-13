@@ -31,7 +31,7 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 - 화면에 보이는(IntersectionObserver, 120px 여유) 카드 또는 전체 화면 카드만 `subscribe`합니다. 필터·검색·스크롤로 카드가 바뀌면 구독 목록 전체를 다시 보냅니다: `{"version":1,"type":"subscribe","cameraIds":[...],"video":true,"videoFps":10}`.
 - 영상은 binary 메시지(`u8 version`, `u8 id 길이`, cameraId, `u32 BE sequence`, JPEG)입니다. `CameraVideo.vue`는 `JpegFrameView`로 Blob → object URL → `<img>`를 한 장씩 decode하고, decode 중 도착한 프레임은 대기 슬롯 하나에 덮어씁니다. 이전 URL은 새 이미지 load 뒤, 나머지는 unmount·구독 해제·연결 단절 시 revoke합니다.
 - `camera_status`가 있으면 카드 상태/FPS는 API 스냅샷 대신 실시간 값을 표시합니다. 연결이 끊기면 "서버 연결 중"을 표시하고 2초 뒤 재접속해 구독을 다시 보냅니다. unmount·`pagehide`에서는 소켓을 닫고 재접속하지 않습니다(bfcache 복원 시 다시 연결).
-- 사람 bbox와 Track ID는 서버가 JPEG에 그려 보내므로 `detections`로 클라이언트 박스를 다시 그리지 않습니다. `CameraOverlay.vue`는 선·영역 표시용으로 남아 있습니다.
+- 차량 bbox는 서버가 주차장 카메라 JPEG에 그려 보내므로(사람 검출은 서버에서 제거) `detections`로 클라이언트 박스를 다시 그리지 않습니다. `CameraOverlay.vue`는 선·영역 표시용으로 남아 있습니다.
 - 대역폭은 대략 `보이는 카메라 수 × videoFps × 약 127KB`입니다(21대 × 10fps ≈ 130Mbps). 필요하면 `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`를 낮춥니다.
 
 서버 계약은 서버 저장소의 `docs/preview-realtime.md`와 참조 구현 `web/preview.js`를 따릅니다.

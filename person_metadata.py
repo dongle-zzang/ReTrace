@@ -1,4 +1,8 @@
-"""Detached person/frame records and bounded latest-frame handoff storage."""
+"""Detached vehicle/frame records and bounded latest-frame handoff storage.
+
+PersonMetadata is kept as the shared detection record base and persons as an
+always-empty legacy field; person detection (PeopleNet) was removed.
+"""
 
 from __future__ import annotations
 
@@ -98,7 +102,7 @@ class MetadataStore:
     """One immutable frame per source. Consumers poll outside the GPU probe.
 
     This is a latest snapshot, not a lossless event queue. An empty frame clears
-    previous people. No I/O or backend calls run on streaming threads.
+    previous vehicles. No I/O or backend calls run on streaming threads.
     """
     def __init__(self):
         self._lock = threading.Lock()

@@ -14,7 +14,12 @@ export type RealtimeMessage =
       frameNumber: number
       ptsNs: string | null
       inferenceDone: boolean
-      persons: RealtimePerson[]
+      /** Legacy field; person detection was removed and the server always sends []. */
+      persons?: []
+      /** Vehicle boxes for parking cameras; also drawn into the JPEG frames by the server. */
+      vehicles: RealtimeVehicle[]
+      vehicleDetectionEnabled: boolean
+      vehicleInferenceDone: boolean
     }
   | {
       version: 1
@@ -22,7 +27,9 @@ export type RealtimeMessage =
       cameraId: string
       runtimeSession: string
       timestamp: string
-      persons: []
+      persons?: []
+      vehicles: []
+      vehicleInferenceDone: false
       stale: true
     }
   | {
@@ -54,7 +61,7 @@ export interface RealtimeCameraStatus {
   [key: string]: unknown
 }
 
-export interface RealtimePerson {
+export interface RealtimeVehicle {
   trackId: string | null
   bbox: { x: number; y: number; width: number; height: number }
   confidence: number | null

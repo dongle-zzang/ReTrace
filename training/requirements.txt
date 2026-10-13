@@ -1,0 +1,10 @@
+# Isolated YOLO11m fine-tuning environment (Python 3.11 venv; never installed into the
+# DeepStream image or backend). Tesla V100 = sm_70, host driver 550 (CUDA 12.4):
+# cu124 wheels of torch 2.6 still ship sm_70 kernels. Exact resolved set: requirements-lock.txt.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+ultralytics==8.4.176
+# DeepStream-Yolo utils/export_yolo11.py (ONNX opset 17, --simplify)
+onnx==1.17.0
+onnxslim==0.1.98

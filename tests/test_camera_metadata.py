@@ -120,10 +120,10 @@ class MetadataTests(unittest.TestCase):
         result = diagnostics.snapshot()
         self.assertEqual(result['inferred_frames'], 2)
         self.assertEqual(result['non_inferred_frames'], 1)
-        self.assertEqual(result['person_detections'], 2)
+        self.assertEqual(result['vehicle_detections'], 2)
         self.assertEqual(result['confidence_min'], .5)
         self.assertEqual(result['confidence_max'], .91)
-        self.assertEqual(diagnostics.snapshot()['person_detections'], 0)
+        self.assertEqual(diagnostics.snapshot()['vehicle_detections'], 0)
 
 
 class ProbeIntegrationTests(unittest.TestCase):
@@ -134,6 +134,8 @@ class ProbeIntegrationTests(unittest.TestCase):
         from camera_config import Camera
         from camera_runtime import CameraRuntime, CameraRuntimeManager
         from preview_mjpeg import FrameStore
+        from person_metadata import vehicle_from_object
+        from vehicle_detection import VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
         root = Path(__file__).resolve().parents[1]
         tree = ast.parse((root / 'preview.py').read_text())
         run = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run_shared_pipeline')
@@ -142,14 +144,17 @@ class ProbeIntegrationTests(unittest.TestCase):
         store = MetadataStore()
         frames = [NS(source_id=i, pad_index=i, frame_num=10, buf_pts=100, bInferDone=True,
                      obj_meta_list=None) for i in range(2)]
-        obj = MetadataTests().object()
-        obj.unique_component_id = 1
+        # Leftover non-vehicle metadata (e.g. a former person detector) is removed, never published.
+        stray = MetadataTests().object()
+        stray.unique_component_id = 1
         color = NS(set=lambda *args: None)
-        obj.rect_params.border_color = color
-        obj.text_params = NS(font_params=NS(font_color=color), text_bg_clr=color)
-        frames[1].obj_meta_list = NS(data=obj, next=None)
+        car = MetadataTests().object()
+        car.unique_component_id, car.class_id = VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
+        car.rect_params.border_color = color
+        car.text_params = NS()
+        frames[1].obj_meta_list = NS(data=stray, next=NS(data=car, next=None))
         batch = NS(frame_meta_list=NS(data=frames[0], next=NS(data=frames[1], next=None)))
-        failures = []
+        failures, removed = [], []
         cameras = [Camera(i + 7, f'camera_{i}', i, f'Camera {i}', 'rtsp://camera.example/v') for i in range(2)]
         runtimes = {c.source_id: CameraRuntime(c.camera_id) for c in cameras}
         manager = CameraRuntimeManager(cameras, runtimes, {c.source_id: FrameStore() for c in cameras}, store)
@@ -162,55 +167,46 @@ class ProbeIntegrationTests(unittest.TestCase):
             'Gst': NS(PadProbeReturn=NS(OK='OK'), CLOCK_TIME_NONE=(1 << 64) - 1),
             'pyds': NS(gst_buffer_get_nvds_batch_meta=lambda key: batch,
                        NvDsFrameMeta=NS(cast=lambda value: value),
-                       NvDsObjectMeta=NS(cast=lambda value: value)),
+                       NvDsObjectMeta=NS(cast=lambda value: value),
+                       nvds_remove_obj_meta_from_frame=lambda frame, obj: removed.append(obj)),
             'cameras_by_source': {i: Camera(i + 7, f'camera_{i}', i, f'Camera {i}', 'rtsp://camera.example/v')
                                   for i in range(2)},
-            'person_from_object': person_from_object, 'utc_timestamp': utc_timestamp,
+            'utc_timestamp': utc_timestamp, 'vehicle_from_object': vehicle_from_object,
             'FrameMetadata': FrameMetadata, 'metadata_store': store,
-            'PGIE_ID': 1, 'person_class_id': 0, 'UNTRACKED_OBJECT_ID': UNTRACKED_OBJECT_ID,
-            'counts': [0, 0], 'persons': [None, None], 'persons_max': [0, 0], 'track_ids': [[], []],
+            'VEHICLE_GIE_ID': VEHICLE_GIE_ID, 'VEHICLE_TRACKER_CLASS': VEHICLE_TRACKER_CLASS,
+            'counts': [0, 0], 'vehicle_counts': [None, None], 'vehicles_max': [0, 0],
             'counts_lock': threading.Lock(), 'metadata_samples': {}, 'args': NS(diagnostics=True),
-            'server': NS(streams=[{}, {}]), 'stopping': False,
             'pipeline_stop': threading.Event(), 'manager': manager,
-            'vehicle_detector': None, 'primary_inference_by_frame': {},
+            'vehicle_detector': NS(cameras={'camera_1'}, car_class_id=0),
             'fail': lambda *args: failures.append(args),
         }
         exec(compile(ast.Module(body=functions, type_ignores=[]), 'preview.py', 'exec'), namespace)
         namespace['on_batch'](None, NS(get_buffer=lambda: 100))
         self.assertEqual(failures, [])
         self.assertEqual(namespace['counts'], [1, 1])
-        self.assertEqual(namespace['track_ids'], [[], [17]])
-        self.assertEqual(store.snapshot()[8].persons[0].camera_id, 'camera_1')
-        self.assertEqual(store.snapshot()[7].persons, ())
-        self.assertEqual(obj.text_params.display_text, 'Person 17')
+        self.assertEqual(namespace['vehicle_counts'], [None, 1])
+        self.assertEqual(removed, [stray])
+        self.assertEqual(store.snapshot()[8].persons, ())
         self.assertEqual(store.snapshot()[8].generation, 3)
-        from person_metadata import vehicle_from_object
-        from vehicle_detection import VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
-        car = MetadataTests().object()
-        car.unique_component_id, car.class_id = VEHICLE_GIE_ID, VEHICLE_TRACKER_CLASS
-        car.rect_params.border_color = color
-        car.text_params = NS()
-        frames[1].obj_meta_list.next = NS(data=car, next=None)
-        namespace.update(vehicle_detector=NS(cameras={'camera_1'}, car_class_id=0),
-                         vehicle_from_object=vehicle_from_object, VEHICLE_GIE_ID=VEHICLE_GIE_ID,
-                         VEHICLE_TRACKER_CLASS=VEHICLE_TRACKER_CLASS)
-        namespace['primary_inference_by_frame'][(1, 10, 100)] = True
-        namespace['on_batch'](None, NS(get_buffer=lambda: 100))
-        self.assertEqual(failures, [])
-        self.assertEqual(len(store.snapshot()[8].persons), 1)
         self.assertEqual(len(store.snapshot()[8].vehicles), 1)
+        self.assertEqual(store.snapshot()[8].vehicles[0].camera_id, 'camera_1')
         self.assertEqual(store.snapshot()[8].vehicles[0].class_id, 0)
         self.assertEqual(car.text_params.display_text, 'Vehicle')
         self.assertIsNotNone(store.snapshot()[8].vehicles[0].track_id)
         self.assertTrue(store.snapshot()[8].vehicle_inference_done)
+        self.assertTrue(store.snapshot()[8].inference_done)
+        # Non-parking camera: no detector, so no inference is reported for it.
         self.assertFalse(store.snapshot()[7].vehicle_detection_enabled)
+        self.assertFalse(store.snapshot()[7].inference_done)
+        self.assertEqual(store.snapshot()[7].vehicles, ())
+        self.assertEqual(namespace['metadata_samples'][1].vehicles[0].camera_id, 'camera_1')
         frames[1].pad_index = 0
         with self.assertRaises(RuntimeError):
             namespace['camera_for_frame'](frames[1])
         frames[1].pad_index = 1
         frames[1].obj_meta_list = None
         namespace['on_batch'](None, NS(get_buffer=lambda: 100))
-        self.assertEqual(store.snapshot()[8].persons, ())
+        self.assertEqual(store.snapshot()[8].vehicles, ())
 
 
 if __name__ == '__main__':

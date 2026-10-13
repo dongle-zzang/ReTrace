@@ -1,6 +1,6 @@
 # 색상 기반 폴리곤 주차 MVP
 
-색상 감지는 딥러닝 모델/차량 metadata를 사용하지 않는다. 기존 사람·차량 detector와
+색상 감지는 딥러닝 모델/차량 metadata를 사용하지 않는다. 기존 차량 detector와
 카메라별 `parking_spaces` API는 유지하며, 신규 논리 공간 API와 독립적으로 동작한다.
 기존 영역을 자동 변환하거나 동일 label로 병합하지 않는다.
 

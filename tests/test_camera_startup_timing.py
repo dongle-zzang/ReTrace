@@ -112,17 +112,19 @@ class StartupTests(unittest.TestCase):
                      'pyds': NS(gst_buffer_get_nvds_batch_meta=lambda _: NS(frame_meta_list=NS(data=frames[0], next=None)),
                                 NvDsFrameMeta=NS(cast=lambda frame: frame))}
         exec(compile(ast.Module(body=[probe], type_ignores=[]), 'preview.py', 'exec'), namespace)
-        namespace['startup_probe'](NS(add_probe=lambda _type, cb: callbacks.append(cb)), 'first_pgie_output', batched=True)
+        namespace['startup_probe'](NS(add_probe=lambda _type, cb: callbacks.append(cb)), 'first_infer_output', batched=True)
         buffer = object()
         info = NS(get_buffer=lambda: buffer)
         self.assertEqual(callbacks[0](None, info), 'ok')
-        self.assertFalse(self.timing.complete('first_pgie_output'))
+        self.assertFalse(self.timing.complete('first_infer_output'))
         self.assertNotIn('first_inference_done', self.timing.summary()['cameras_ms']['b'])
         frames[0].bInferDone = True
         callbacks[0](None, info)
-        frames[0] = NS(pad_index=0, buf_pts=50, bInferDone=True)
+        self.assertIn('first_inference_done', self.timing.summary()['cameras_ms']['b'])
+        # Non-parking cameras are never inferred; output from every camera ends the probe.
+        frames[0] = NS(pad_index=0, buf_pts=50, bInferDone=False)
         self.assertEqual(callbacks[0](None, info), 'remove')
-        self.assertTrue(self.timing.complete('first_inference_done'))
+        self.assertFalse(self.timing.complete('first_inference_done'))
 
     def test_bus_timestamps_and_progress_do_not_emit_private_text(self):
         pipeline = object()

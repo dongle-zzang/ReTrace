@@ -33,7 +33,7 @@ class CanonicalStartupTests(unittest.TestCase):
         self.assertIn("/streams.json", service['healthcheck']['test'][-1])
 
     def test_default_preview_uses_only_enabled_cctv_keys_from_file(self):
-        parser = load_parsers()[1]
+        parser = load_parsers()[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'configs').mkdir()

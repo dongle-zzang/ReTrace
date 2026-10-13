@@ -14,11 +14,11 @@ Backend에는 GPU·GI·PyDS 또는 RTSP 비밀값이 필요하지 않다. Nuxt/R
   (source_id), `format`, `status` (기존 UI 호환), `url` (상대 MJPEG 경로),
   `metadata_path` (`/ws`), `runtime`, `runtime_session`을 포함한다. Backend는 runtime의 state를 사용한다.
 - `CameraRuntime`은 카메라별 상태를 메모리에 보관한다. `MetadataStore`는
-  source별 최신 immutable FrameMetadata만 보관한다. PersonMetadata는
+  source별 최신 immutable FrameMetadata만 보관한다. VehicleMetadata는
   camera_id/timestamp/track_id/class_id/class/confidence/tracker_confidence/bbox이다.
 - 새 `/metadata.json`은 `{runtime_session, frames: [...]}`이다.
-  frame은 source_id/camera_id/generation/timestamp/frame_number/좌표 크기/persons
-  등을 포함한다. 실패·이전 generation의 frame은 제외한다. JSON snapshot만
+  frame은 source_id/camera_id/generation/timestamp/frame_number/좌표 크기/vehicles
+  등을 포함한다. `persons`는 PeopleNet 제거 후 항상 빈 배열이며 Backend는 생략도 허용한다. 실패·이전 generation의 frame은 제외한다. JSON snapshot만
   제공하며 worker에서 네트워크나 DB I/O를 수행하지 않는다.
 - Backend 단일 background thread가 2초 간격으로 두 JSON endpoint를 순서대로
   polling한다. HTTP timeout은 1.5초, 응답 크기 제한은 8 MiB다.
@@ -45,7 +45,7 @@ Backend 시작 시 YAML -> DB로 동기화하며 비활성 카메라도 유지�
 변경은 migration이 필요하며 `create_all`은 기존 테이블 구조를 수정하지 않는다.
 주차 기능은 기존 세 테이블을 수정하지 않고 `parking_spaces`, `parking_events` 테이블 및 index/check
 constraint를 추가한다. 기존 DB에서도 Backend 초기화의 `create_all`로 추가되며
-재실행은 멱등적이다. 기존 카메라·사람 track·PostgreSQL volume은 보존한다.
+재실행은 멱등적이다. 기존 카메라·과거 사람 track·PostgreSQL volume은 보존한다.
 향후 주차면 테이블의 컬럼 변경에는 명시적 migration이 필요하다.
 PostgreSQL 데이터는 `postgres_data` named volume에 유지한다.
 DB URL은 SQLAlchemy URL 객체로 구성하여 비밀번호의 특수문자를 지원한다.
@@ -58,14 +58,16 @@ DB statement/lock/connect timeout과 parameter masking을 적용한다.
   이번 단계에서 소비하는 기능이 없어 만들지 않았다. 동일 상태를 반복하거나
   state가 변경되어도 행 수는 증가하지 않는다.
 - 실시간 bbox/confidence: Backend의 `LiveStore`에 camera별 최신 frame을 교체한다.
-  빈 frame은 기존 사람을 제거하며 frame timestamp TTL은 10초다. DB에는 bbox가 없다.
-- `person_tracks`: polling에서 관찰된 tracked person만
-  `(camera_id, runtime_session, generation, track_id)` 단위로 INSERT/UPDATE한다.
+  빈 frame은 기존 차량을 제거하며 frame timestamp TTL은 10초다. DB에는 bbox가 없다.
+- `person_tracks`: PeopleNet 제거(2026-10-13) 후 **동결된 과거 기록**이다. 새 행을 쓰지 않고
+  retention 삭제도 하지 않으며 `/api/cameras/{id}/tracks`의 `recent`로만 조회한다(`current`는 빈 배열).
+  아래는 제거 전 동작이다. polling에서 관찰된 tracked person만
+  `(camera_id, runtime_session, generation, track_id)` 단위로 INSERT/UPDATE했다.
   first_seen_at/last_seen_at/max_confidence만 저장한다. 같은 frame 재조회는 UPDATE도
   생략한다. 매 frame 저장이 아니며 polling에서 놓친 짧은 track은 수집되지 않는다.
 - track_id는 uint64이므로 DB/API에서 10진 문자열로 표현한다. PostgreSQL signed
   BIGINT overflow와 JavaScript 정밀도 손실을 피한다.
-- track 요약은 기본 최근 7일만 유지하며 60초마다 오래된 last_seen_at 행을 삭제한다.
+- (제거 전) track 요약은 기본 최근 7일만 유지하며 60초마다 오래된 last_seen_at 행을 삭제했다. `parking_events`의 7일 retention은 유지한다.
   DB 장애 중에는 정리가 지연될 수 있다. 이 단계에서는 Re-ID 영구 이동 이력을
   보장하지 않는다. last_seen_at은 마지막 관찰 시각이며 track 종료를 뜻하지 않는다.
 - timestamp는 기존 pipeline 처리 시각이다. 카메라 capture/NTP 시각은 아니다.

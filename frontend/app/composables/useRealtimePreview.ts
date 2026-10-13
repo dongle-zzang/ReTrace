@@ -13,8 +13,8 @@ function clampFps(value: unknown) {
 
 /**
  * Owns the page's single /ws connection. Created only after mount (client side) and closed on
- * unmount or page exit without reconnecting. Person boxes and track IDs are already drawn into
- * the JPEG frames by the server, so detections are not re-rendered here.
+ * unmount or page exit without reconnecting. Vehicle boxes are already drawn into the JPEG
+ * frames of parking cameras by the server, so detections are not re-rendered here.
  */
 export function useRealtimePreview(videoFps: unknown) {
   const fps = clampFps(videoFps)

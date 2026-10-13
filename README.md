@@ -1,29 +1,31 @@
 # ReTrace
 
-ReTrace는 RTSP 영상에서 사람을 검출하고 추적하는 개인 토이 프로젝트입니다.
+ReTrace는 주차장 CCTV RTSP 영상에서 차량을 검출·추적하고 주차 상태를 판단하는 개인 토이 프로젝트입니다.
 Python과 NVIDIA DeepStream을 사용하며, GPU 실행은 Linux 서버에서 수행합니다.
 MacBook에서는 코드를 작성하고 GitHub의 `main` 브랜치로 작업을 이어갑니다.
 
 ## 현재 기능
 
 - 여러 RTSP 입력을 하나의 공유 DeepStream pipeline에서 batch 처리
-- NVIDIA TAO PeopleNet으로 사람 검출
-- `preview.py`: NvDCF로 카메라별 사람 추적, Bounding Box와 Track ID 표시
+- 주차장 카메라(`VEHICLE_CAMERA_IDS`)만 YOLO11m 하나로 batch 차량 검출, 다른 카메라는 추론 없이 영상만 처리
+- `preview.py`: NvDCF로 카메라별 차량 추적(track ID는 metadata/점유 판단용), 영상에는 `Vehicle` Bounding Box 표시
 - source별 OSD 포함 MJPEG 미리보기: 카메라별 HTTP 또는 WebSocket 하나로 전체 카메라
 - WebSocket metadata/status 및 프레임/FPS/검출 통계
 - 선택적 pipeline 단계별 타이밍 진단
-- `app.py`: 미리보기와 tracker 없이 검출 metadata만 확인하는 실행 경로
+- `app.py`: Preview가 재사용하는 RTSP source bin helper (기존 PeopleNet 전용 CLI는 제거)
 
-카메라 runtime 상태 감지와 자동 재연결을 지원합니다. 카메라 간 동일 인물 매칭(Re-ID)은 아직 구현하지 않았습니다. Backend는 관찰된 track 요약을 DB에 보관합니다.
-Track ID는 camera_id와 재연결 generation을 함께 사용해 해석합니다. 향후 Re-ID와 카메라 간 이동 분석을 추가할 계획입니다.
+카메라 runtime 상태 감지와 자동 재연결을 지원합니다. PeopleNet 사람 검출/추적은 2026-10-13에 제거했습니다(Re-ID는 구현된 적이 없음).
+Backend의 기존 `person_tracks` 기록은 삭제하지 않고 조회만 가능하며 새 사람 track은 저장하지 않습니다.
+차량 Track ID는 camera_id와 재연결 generation을 함께 사용해 해석합니다. 차량/점유 구조는 [차량/점유](docs/parking-occupancy.md)를 따릅니다.
 
 ## Pipeline
 
 ```text
 N개의 enabled CCTV / RTSP
   → source별 nvurisrcbin / NVIDIA NVMM
-  → 공유 nvstreammux(batch=N) → PeopleNet nvinfer(batch=N) → NvDCF nvtracker
-  ├─ PersonMetadata → 최신 snapshot → /ws JSON, /metadata.json
+  → 공유 nvstreammux(batch=N) → 주차장 카메라 frame에만 full-frame ROI
+  → YOLO11m nvinfer(secondary, batch=주차장 카메라 수) → NvDCF nvtracker
+  ├─ VehicleMetadata → 최신 snapshot → /ws JSON, /metadata.json
   └─ nvstreamdemux → source별 queue → nvvideoconvert → nvdsosd → nvvideoconvert → nvjpegenc → appsink
      → 최신 JPEG 한 장 ─┬─ /mjpeg/sourceN HTTP multipart → 브라우저 <img> (카메라당 연결 1개)
                          └─ /ws binary message → 브라우저 <img> (모든 카메라 연결 1개)
@@ -46,7 +48,7 @@ MJPEG는 source별 최신 프레임만 보관합니다. 느린 클라이언트�
 - Linux, NVIDIA GPU 및 호환 드라이버
 - Docker Compose와 NVIDIA Container Toolkit
 - DeepStream 7.0, Python 3.10, PyDS 1.1.11, PyGObject/GStreamer
-- PeopleNet ONNX와 labels; TensorRT engine은 실행 환경에서 생성
+- 차량 모델(YOLO11m ONNX, DeepStream-Yolo parser); TensorRT engine은 실행 환경에서 생성
 
 이미지는 `nvcr.io/nvidia/deepstream:7.0-triton-multiarch`를 기반으로 합니다.
 모델, engine, 캐시, 영상 및 로컬 설정은 Git에 포함하지 않습니다.
@@ -99,8 +101,7 @@ Preview API는 `http://<서버 IP>:40225/streams.json`으로 확인합니다. Co
 컨테이너의 HTTP bind는 `0.0.0.0:40225`이며 호스트 공개 범위는 로컬 override의 ports로 정합니다.
 Dockerfile CMD와 Compose command는 모두 `/workspace/ReTrace/preview.py`를 실행하고
 `--cameras /workspace/ReTrace/configs/cameras.yaml --env-file /workspace/ReTrace/.env`를 명시합니다.
-기본 서비스에 RTSP_URL/RTSP_URL_2는 필요하지 않습니다. app.py의 legacy parser는 app.py를
-직접 실행할 때만 사용되며 preview의 import에서는 호출되지 않습니다.
+기본 서비스에 RTSP_URL/RTSP_URL_2는 필요하지 않습니다. app.py는 source bin helper만 제공하며 직접 실행하지 않습니다.
 이전 컨테이너의 command/image/mount 설정은 소스 수정만으로 바뀌지 않으므로 교체 시 재생성합니다.
 원문 command/inspect/Compose config에는 비밀 값이 있을 수 있으므로 공유하지 마세요.
 컨테이너 실행 경로 확인은 다음처럼 비밀 값을 제거하는 도구를 사용합니다(첫 번째/두 번째 입력 순서).
@@ -129,41 +130,26 @@ docker compose exec -T retrace python3 tools/check_preview.py
 `--cameras <파일>`과 `--env-file <파일>`로 설정 경로를 지정할 수 있습니다.
 기본값은 프로젝트 루트의 `configs/cameras.yaml`, `.env`입니다.
 활성 카메라 순서로 연속 source_id를 부여하며 `.env` 누락 시 활성 카메라 id와 변수명을 안내합니다.
-`app.py`의 기존 metadata 전용 실행 경로는 `RTSP_URL` / `RTSP_URL_2` 환경변수를 계속 사용합니다.
 
-## PeopleNet 모델 준비
+## 차량 모델 준비
 
-컨테이너에 완전한 PeopleNet sample config와 모델/labels가 있으면 우선 재사용합니다.
-없으면 `configs/pgie_peoplenet.txt`와 로컬 `models/peoplenet/` 파일을 사용합니다.
-모델 파일은 자동 다운로드하지 않습니다. 필요한 경우 공식 NVIDIA NGC에서 다운로드합니다.
-
-```bash
-docker compose exec -T retrace sh -lc '
-  cd /workspace/ReTrace || exit 1
-  mkdir -p models/peoplenet || exit 1
-  ngc_base=https://api.ngc.nvidia.com/v2/models/nvidia/tao/peoplenet/versions/deployable_quantized_onnx_v2.6.2/files
-  for file in resnet34_peoplenet.onnx labels.txt nvinfer_config.txt; do
-    curl --fail --location --retry 3 "$ngc_base/$file" -o "models/peoplenet/$file.part" || exit 1
-    mv "models/peoplenet/$file.part" "models/peoplenet/$file" || exit 1
-  done
-'
-```
-
-NGC 파일: [PeopleNet deployable_quantized_onnx_v2.6.2](https://catalog.ngc.nvidia.com/orgs/nvidia/tao/models/peoplenet/deployable_quantized_onnx_v2.6.2/file-browser).
-기본 config는 FP16(`network-mode=2`)이며 선택된 sample config의 precision을 존중합니다.
-`person` class ID는 labels에서 찾습니다. 실행용 config와 TensorRT engine은 `.cache/pgie/`에 생성합니다.
+PeopleNet은 제거했습니다(`configs/pgie_peoplenet.txt`, PeopleNet 로딩/추론 코드 삭제). 로컬
+`models/peoplenet/` 파일과 기존 engine은 롤백 참고용으로 남아 있을 수 있으나 더 이상 읽지 않습니다.
+차량 모델 config(`VEHICLE_INFER_CONFIG`, 현재 `models/yolo11m/vehicle_infer.txt`), 주차장 카메라 선택
+(`VEHICLE_CAMERA_IDS`)과 적용 절차는 [차량/점유](docs/parking-occupancy.md)를 따릅니다.
+모델 파일은 자동 다운로드하지 않습니다. 실행용 config와 TensorRT engine은 `.cache/vehicle/pgie/`에 생성합니다.
 캐시 키는 모델/부속 build 파일의 SHA-256, batch, precision, 입력 차원/순서,
 출력 binding/format, workspace, implicit batch, GPU/DLA 및 layer precision 설정과
 GPU 종류/compute capability, TensorRT 버전, DeepStream infer 라이브러리 내용으로 결정됩니다.
 threshold/NMS/class filter/interval/전처리/labels 변경은 engine을 무효화하지 않으며,
-generated config는 매 실행 시 최신 runtime 설정으로 다시 씁니다. 사람 threshold는 기존 0.2를 유지합니다.
+generated config는 매 실행 시 최신 runtime 설정으로 다시 씁니다. engine batch는 선택된 주차장 카메라 수입니다.
 
 DeepStream의 기본 빌더는 로드용 `model-engine-file`과 별도로 모델 경로에서 저장 파일명을 만듭니다.
-`pgie_cache.py`는 `.cache/pgie/`에 build key별 모델 하드링크(다른 파일시스템이면 복사본)를 두고
+`pgie_cache.py`는 차량 cache 디렉터리의 `pgie/`(`.cache/vehicle/pgie/`)에 build key별 모델 하드링크(다른 파일시스템이면 복사본)를 두고
 `<모델>_bN_gpuN_<precision>.engine`을 config와 GObject 속성 양쪽에 지정합니다.
 심볼릭 링크는 nvinfer의 `realpath()`가 원본 경로로 되돌리므로 사용하지 않습니다.
 native precision fallback이 발생하면 같은 build key 안의 FP16/FP32 engine만 다음 실행에서 찾습니다.
-대상은 현재 PeopleNet의 자체 포함 ONNX 및 기본 모델 파서입니다. 별도 custom engine builder는
+대상은 nvinfer 기본 ONNX 빌더입니다(파일 stem `peoplenet_`은 기존 cache 호환용 이름). 별도 custom engine builder는
 임의 config와 출력 경로를 쓸 수 있어 이 정책으로 조용히 재사용하지 않고 오류로 알립니다.
 기존 모델 옆 engine과 구 digest engine은 build/runtime 호환성을 입증할 정보가 없어 자동 이관하지 않습니다.
 새 정책의 첫 실행은 engine 생성 시간이 필요할 수 있고, 이후 동일 조건에서 재사용합니다.
@@ -176,8 +162,7 @@ RTSP TCP/latency 1000ms/drop-on-latency=true, NvDCF 640×384, JPEG 1280×720/qua
 `--port`, `--jpeg-quality`, `--rtsp-latency`, `--rtsp-drop-on-latency`,
 `--mux-live-source`, `--diagnostics`로 필요한 설정을 조정합니다.
 
-통계의 `persons`는 마지막 프레임의 검출/추적 사람 수입니다.
-고유 방문자 수나 카메라 간 동일 인물 수가 아닙니다.
+통계의 `vehicles`는 주차장 카메라의 마지막 프레임 차량 수입니다(다른 카메라는 `NA`).
 RTSP 오류/EOS/프레임 timeout은 해당 카메라 상태와 공개 데이터를 무효화합니다. source bin은 native 재연결을 수행하며 공유 inference를 다시 생성하지 않습니다. Ctrl+C/SIGTERM으로 전체 정상 종료할 수 있습니다.
 애플리케이션 오류/진단은 입력 주소와 GStreamer 원문을 출력하지 않고 GST 디버그를 끕니다.
 외부 라이브러리나 Docker 로그도 공유 전 확인하세요.
@@ -237,12 +222,13 @@ source 번호별 CameraRuntime이 등록되므로 별도 소비자는 snapshot()
 공유 pipeline의 legacy mux는 live-source=1, batched-push-timeout=40000µs,
 sync-inputs=false, gpu-id=0, nvbuf-memory-type=0을 사용합니다. frame이 있는 source로 partial batch를
 내보내므로 offline source를 무한히 기다리지 않습니다. 모든 source가 offline이면 내보낼 frame도 없습니다.
-PGIE 생성 config와 runtime property 모두 batch=N이며 interval=0과 모델 threshold는 유지합니다.
-engine cache는 기존 batch별 fingerprint 경로를 사용하므로 N이 바뀌면 첫 engine 생성 시간이 필요할 수 있습니다.
+차량 detector config와 runtime property의 batch는 선택된 주차장 카메라 수이며 interval=0과 모델 threshold는 유지합니다.
+engine cache는 batch별 fingerprint 경로를 사용하므로 주차장 카메라 수가 바뀌면 첫 engine 생성 시간이 필요하며,
+그동안 pipeline이 PLAYING 전이라 모든 카메라 영상이 멈춥니다.
 새 mux로 교체하지 않습니다. legacy width/height/live-source 속성이 없는 plugin 선택은 setup 오류입니다.
 
 Demux branch는 leaky queue(최대 1 frame)와 appsink sync=false/async=false를 사용해 느린 JPEG
-branch의 대기와 offline branch의 preroll을 제한합니다. 출력은 기존 OSD/bbox/Track ID 및 1280×720 JPEG입니다.
+branch의 대기와 offline branch의 preroll을 제한합니다. 출력은 차량 OSD bbox(`Vehicle`) 및 1280×720 JPEG입니다.
 하나의 batch buffer를 여러 branch가 공유하므로 네이티브 JPEG/OSD plugin 자체가 멈추는 경우까지
 완전한 장애 격리를 보장하지 않습니다. 공유 inference/tracker 오류는 모든 카메라를 실패 처리하고
 exit-code=1로 종료합니다. source 오류/timeout만으로 전체 restart하지 않으며, native RTSP reconnect가
@@ -268,7 +254,7 @@ docker compose exec -T retrace gst-inspect-1.0 nvurisrcbin
 # enabled/.env 변경마다 retrace만 재생성; Backend/PostgreSQL은 유지
 docker compose up -d --no-deps --force-recreate retrace
 # 앱의 안전한 구조/상태 로그만 확인
-docker compose logs --since=10m retrace | rg 'DeepStream shared pipeline|Shared pipeline.*ERROR|PGIE detector=|Tracker=NvDCF|camera_status '
+docker compose logs --since=10m retrace | rg 'DeepStream shared pipeline|Shared pipeline.*ERROR|Vehicle (detector|camera)|Tracker=NvDCF|camera_status '
 docker compose exec -T retrace python3 tools/check_preview.py
 docker compose exec -T retrace python3 tools/check_backend.py
 curl -fsS http://127.0.0.1:8000/api/cameras
@@ -276,9 +262,9 @@ curl -fsS http://127.0.0.1:8000/api/status
 nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu,utilization.memory --format=csv -l 2
 ```
 
-각 단계에서 `sources=N streammux batch-size=N pgie batch-size=N demux branches=N`과
+각 단계에서 `sources=N streammux batch-size=N vehicle cameras=M vehicle batch-size=M ... demux branches=N`과
 `state=PLAYING` 로그를 확인하세요. Backend 호스트 포트를 변경했다면 curl 포트도 맞추세요.
-브라우저 `/diagnostics`에서 **모든 source**의 MJPEG/bbox/Track ID를 확인하고
+브라우저 `/diagnostics`에서 **모든 source**의 MJPEG와 주차장 카메라의 차량 bbox를 확인하고
 `/streams.json`의 runtime online/FPS와 Backend camera status가 일치하는지 확인합니다.
 GPU memory/utilization을 관측하며 첫 engine 생성과 정상 운전을 구분하세요.
 2대 이상 단계에서는 한 카메라만 네트워크를 끊었다 복구해 그 카메라의 degraded/offline/reconnecting/online,
@@ -362,13 +348,13 @@ GStreamer error domain/code와 원문을 메모리에서만 검사하고 고정 
 ### 구조화된 metadata와 탐지 진단
 
 `camera_config.py`는 카메라 설정과 source_id 매핑을 관리하고, `person_metadata.py`는
-PyDS 객체를 immutable `PersonMetadata` / `FrameMetadata`로 복사합니다.
+PyDS 객체를 immutable `VehicleMetadata` / `FrameMetadata`로 복사합니다.
 `preview.run(args, metadata_store=MetadataStore())`에 저장소를 전달하면 별도 스레드에서
-`snapshot()`을 읽을 수 있습니다. source별 최신 프레임 한 개만 보관하며 사람이 없는 프레임은
-빈 persons로 갱신합니다. 모든 이벤트를 보존하는 큐는 아닙니다. Backend snapshot polling과 실시간 WebSocket 전송은 각각 별도로 수행합니다.
+`snapshot()`을 읽을 수 있습니다. source별 최신 프레임 한 개만 보관하며 차량이 없는 프레임은
+빈 vehicles로 갱신합니다. 기존 계약 호환을 위해 `persons`는 항상 빈 배열이며 `inference_done`은 차량 추론 여부입니다. 모든 이벤트를 보존하는 큐는 아닙니다. Backend snapshot polling과 실시간 WebSocket 전송은 각각 별도로 수행합니다.
 `/streams.json`은 숫자 id/runtime/session과 공개 camera_id/floor/name을 유지하며 mode별 영상 경로를 제공합니다.
 
-`PersonMetadata.to_dict()`는 camera_id, timestamp, track_id, class_id, class=person,
+`VehicleMetadata.to_dict()`는 camera_id, timestamp, track_id, class_id(모델 원래 car class), class=vehicle,
 confidence, bbox, tracker_confidence를 제공합니다. timestamp는 UTC 처리 시각입니다.
 track_id 미할당 및 detector/tracker confidence 미제공 값은 null로 표현합니다.
 confidence는 detector 점수이며 tracker_confidence와 별개입니다.
@@ -382,25 +368,23 @@ stream별 상위 32bit가 추가될 수 있습니다([NVIDIA ID 정책](https://
 숫자만으로 카메라 간 identity를 해석하지 않습니다. Backend는 이미 camera_id/runtime_session/generation/track_id
 복합 키를 사용하므로 수정하지 않습니다. HTTP /mjpeg/sourceN과 /streams.json, /metadata.json schema는 유지합니다.
 
-`--diagnostics`는 실제 생성된 PGIE 설정의 interval/사람 threshold와 NvDCF preset의
-수치 설정을 시작 시 출력합니다. `prepare_pgie_config`는 interval=0을 유지합니다.
+`--diagnostics`는 실제 생성된 차량 detector 설정의 interval/class별 threshold와 NvDCF preset의
+수치 설정을 시작 시 출력합니다.
 NvDCF sample의 `%YAML:1.0`은 OpenCV 형식의 헤더로 PyYAML이 그대로 읽을 수 없습니다.
 진단용 읽기에서만 첫 줄을 메모리 안에서 비우며, `nvtracker`에는 원본 파일 경로를 그대로 전달합니다.
-PGIE/tracker 진단 파싱 실패는 `diagnostics settings unavailable`과 안전한 traceback을 출력하고
+detector/tracker 진단 파싱 실패는 `diagnostics settings unavailable`과 안전한 traceback을 출력하고
 pipeline 설정을 계속합니다. 실제 모델/tracker 설정의 유효성은 DeepStream plugin이 판단합니다.
 `--diagnostics`를 켜면 Python setup 예외의 파일/함수/라인과 YAML parser의 행/열도 확인할 수 있습니다.
 예외 메시지·설정 내용·source code·locals·config 파일명은 traceback에 출력하지 않습니다.
-사람 클래스의 pre-cluster-threshold는 0.2로 설정하며, 설치된 sample을 선택해도 실행 설정 생성 시 적용합니다.
 source caps의 negotiated FPS를 최초 프레임에서 한 번 표시합니다. 값이 없으면 unknown입니다.
 5초마다 decoded(수신 후 디코딩된 source FPS), mux-batch(프레임이 아닌 batch FPS),
-demux, encoded-mjpeg FPS/PTS/gap 통계와 PGIE 직후 source별 bInferDone 기반
-inference frame FPS, 추론 누락 프레임 수, 검출 수/confidence 최소·최대를 출력합니다.
+demux, encoded-mjpeg FPS/PTS/gap 통계와 차량 detector 직후 주차장 카메라별 bInferDone 기반
+inference frame FPS, 추론 누락 프레임 수, 차량 검출 수/confidence 최소·최대를 출력합니다.
 이는 실제 파이프라인 처리율이며 GPU 커널 시간/모델 단독 benchmark는 아닙니다.
 카메라의 설정된 송신 FPS 자체는 카메라 설정에서 확인해야 합니다.
-tracker 이후 metadata 예제는 카메라별 5초당 최대 5명, 최신 nonempty 프레임만 출력합니다.
-잠깐 지나간 사람이 보고 시점에 사라져도 해당 구간의 검출 수와 예제를 확인할 수 있습니다.
+tracker 이후 metadata 예제는 카메라별 5초당 최대 5대, 최신 nonempty 프레임만 출력합니다.
 NvDCF의 probationAge/minDetectorConfidence/minTrackerConfidence 등도 확인해
-PGIE 검출과 tracker 출력 사이의 차이를 진단하세요. 모델/threshold/preset은 변경하지 않았습니다.
+detector 검출과 tracker 출력 사이의 차이를 진단하세요.
 
 Metadata 필드 의미는 [NVIDIA NvDsFrameMeta 문서](https://docs.nvidia.com/metropolis/deepstream/7.1/python-api/PYTHON_API/NvDsMeta/NvDsFrameMeta.html)와
 [NvDsObjectMeta 문서](https://docs.nvidia.com/metropolis/deepstream/7.1/python-api/PYTHON_API/NvDsMeta/NvDsObjectMeta.html)를 참고합니다.

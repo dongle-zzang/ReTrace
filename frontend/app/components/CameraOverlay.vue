@@ -269,41 +269,6 @@ function endDrag(event: PointerEvent) {
       >{{ line.label }}</text>
     </g>
 
-    <g
-      v-for="person in annotations.persons"
-      :key="'person-' + person.id"
-      class="pointer-events-auto cursor-pointer"
-      role="button"
-      tabindex="0"
-      :aria-label="'Person track ' + (person.trackId ?? 'pending')"
-      @click.stop="select('person', person.id)"
-      @keydown.enter.stop="select('person', person.id)"
-      @keydown.space.prevent.stop="select('person', person.id)"
-    >
-      <rect
-        :x="xCoord(person.bbox.x)"
-        :y="yCoord(person.bbox.y)"
-        :width="xCoord(person.bbox.width)"
-        :height="yCoord(person.bbox.height)"
-        :stroke="isSelected('person', person.id) || person.highlighted ? '#facc15' : '#4ade80'"
-        stroke-width="3"
-        fill="#facc15"
-        fill-opacity="0.06"
-        vector-effect="non-scaling-stroke"
-      />
-      <text
-        :x="xCoord(person.bbox.x) + 8"
-        :y="Math.max(28, yCoord(person.bbox.y) - 12)"
-        fill="white"
-        font-size="28"
-        font-weight="700"
-        stroke="#111827"
-        stroke-width="5"
-        paint-order="stroke"
-        class="pointer-events-none"
-      >{{ person.trackId === null ? 'Tracking' : 'ID ' + person.trackId }}</text>
-    </g>
-
     <circle
       v-for="handle in handles"
       :key="'handle-' + handle.kind + '-' + handle.id + '-' + handle.index"

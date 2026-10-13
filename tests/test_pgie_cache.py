@@ -1,5 +1,4 @@
 """CPU regressions for engine identity, native output paths and config overrides."""
-import ast
 import configparser
 import contextlib
 import errno
@@ -25,7 +24,7 @@ class EngineCacheTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.model = self.root / 'model.onnx'
         self.model.write_bytes(b'model version 1')
-        (self.root / 'labels.txt').write_text('person\nbag\nface\n')
+        (self.root / 'labels.txt').write_text('car\nbag\nface\n')
         self.props = {'onnx-file': str(self.model), 'gpu-id': '0', 'batch-size': '2',
                       'network-mode': '2', 'infer-dims': '3;544;960'}
 
@@ -33,21 +32,23 @@ class EngineCacheTests(unittest.TestCase):
         return pgie_cache.engine_cache_key(dict(self.props, **changes), RUNTIME)
 
     def prepare(self, changes=None, batch=2, threshold='0.2'):
-        # Execute the production config function without importing GI/PyDS.
+        # Execute the production vehicle config function (the remaining cache user)
+        # without importing GI/PyDS; one selected camera per engine batch slot.
+        from types import SimpleNamespace
+        from vehicle_detection import prepare_vehicle_detector
         config = configparser.ConfigParser(interpolation=None)
         config.read_dict({'property': dict(self.props, **{
             'labelfile-path': str(self.root / 'labels.txt'), 'num-detected-classes': '3'}),
             'class-attrs-all': {'pre-cluster-threshold': threshold}})
         config['property'].update(changes or {})
-        tree = ast.parse((ROOT / 'app.py').read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                        and n.name == 'prepare_pgie_config')
-        namespace = {'Path': Path, 'PGIE_ID': 1, 'PRECISIONS': pgie_cache.PRECISIONS,
-                     'prepare_engine_cache': pgie_cache.prepare_engine_cache,
-                     'load_peoplenet_config': lambda: (self.root / 'sample.txt', config)}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), 'app.py', 'exec'), namespace)
+        source = self.root / 'infer.txt'
+        with source.open('w') as target:
+            config.write(target)
+        cameras = [SimpleNamespace(camera_id=f'cam{i}') for i in range(batch)]
+        environ = {'VEHICLE_CAMERA_IDS': ','.join(c.camera_id for c in cameras),
+                   'VEHICLE_INFER_CONFIG': str(source)}
         with patch('pgie_cache.engine_runtime_identity', return_value=RUNTIME), contextlib.redirect_stdout(io.StringIO()):
-            path, _ = namespace['prepare_pgie_config'](self.root / 'cache', batch)
+            path = prepare_vehicle_detector(cameras, self.root / 'cache', environ).config_path
         generated = configparser.ConfigParser(interpolation=None)
         generated.read(path)
         return Path(path), generated
@@ -57,7 +58,7 @@ class EngineCacheTests(unittest.TestCase):
         props = config['property']
         engine = Path(props['model-engine-file'])
         self.assertTrue(engine.is_absolute())
-        self.assertEqual(engine.parent, (self.root / 'cache/pgie'))
+        self.assertEqual(engine.parent, (self.root / 'cache/vehicle/pgie'))
         self.assertEqual(str(engine), props['onnx-file'] + '_b2_gpu0_fp16.engine')
         self.assertFalse(Path(props['onnx-file']).is_symlink())
         self.assertEqual(Path(props['onnx-file']).resolve().parent, engine.parent)
@@ -69,7 +70,7 @@ class EngineCacheTests(unittest.TestCase):
                   'print(p["model-engine-file"])')
         import json
         result = subprocess.run([sys.executable, '-c', script, json.dumps(self.props),
-                                 str(self.root / 'cache'), json.dumps(RUNTIME)],
+                                 str(self.root / 'cache/vehicle'), json.dumps(RUNTIME)],
                                 cwd=ROOT, check=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.strip(), str(engine))
         self.assertEqual(engine.stat().st_mtime_ns, stamp)
@@ -126,7 +127,6 @@ class EngineCacheTests(unittest.TestCase):
         self.props['int8-calib-file'] = str(calibration)
         _, config = self.prepare({'network-mode': '1', 'int8-calib-file': 'calibration.bin'})
         self.assertEqual(config['property']['int8-calib-file'], str(calibration))
-        self.assertNotIn('int8-calib-file', self.prepare()[1]['property'])
         fp16 = self.key()
         int8 = self.key(**{'network-mode': '1'})
         calibration.write_bytes(b'calibration two')

@@ -187,6 +187,7 @@ def test_status_normalization():
 
 def test_unreachable_preview_clears_current_keeps_summary_and_recovers(service):
     client, app, upstream, _, _ = service
+    add_history(app)
     upstream["metadata"]["frames"] = [frame()]
     app.state.poller.poll_once()
     assert len(client.get("/api/cameras/first/tracks").json()["current"]) == 1
@@ -223,56 +224,34 @@ def test_status_row_count_does_not_grow(service):
     assert set(inspect(engine).get_table_names()) == {"cameras", "camera_status", "person_tracks", "parking_spaces", "parking_events", "color_parking_spaces", "parking_zones", "dataset_images", "dataset_exports"}
 
 
-def test_track_summary_upsert_not_frame_insert_and_uint64(service):
+def add_history(app, track_id="77", days_ago=0):
+    seen = utcnow() - timedelta(days=days_ago)
+    with app.state.sessions.begin() as session:
+        session.add(PersonTrack(camera_id="first", runtime_session=SESSION, generation=1, track_id=track_id,
+                                first_seen_at=seen, last_seen_at=seen, max_confidence=.8))
+
+
+def test_person_metadata_not_ingested_and_history_still_listed(service):
     client, app, upstream, _, engine = service
-    track_id = (1 << 63) + 77
-    started = utcnow() - timedelta(seconds=1)
-    for i in range(10):
-        upstream["metadata"]["frames"] = [frame(track_id, confidence=.5 + i / 20,
-                                                at=started + timedelta(milliseconds=i))]
-        app.state.poller.poll_once()
-    result = client.get("/api/cameras/first/tracks").json()
-    assert len(result["recent"]) == 1
-    assert result["recent"][0]["track_id"] == str(track_id)
-    assert result["recent"][0]["max_confidence"] == .95
-    assert result["recent"][0]["first_seen_at"] != result["recent"][0]["last_seen_at"]
-    assert result["current"][0]["bbox"]["x"] == 10
-    assert result["current"][0]["class"] == "person"
-    assert not any("bbox" in c["name"] for c in inspect(engine).get_columns("person_tracks"))
+    add_history(app, str((1 << 63) + 77))
     statements = []
     def capture(conn, cursor, statement, parameters, context, executemany):
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
-    app.state.poller.poll_once()  # Same frame yields no track INSERT/UPDATE.
+    upstream["metadata"]["frames"] = [frame(track_id=42)]  # Legacy sender with persons.
+    app.state.poller.poll_once()
+    legacy = frame()
+    legacy.pop("persons")  # Current Preview may omit or empty the field.
+    upstream["metadata"]["frames"] = [legacy]
+    app.state.poller.poll_once()
     event.remove(engine, "before_cursor_execute", capture)
     assert not any(s.startswith(("INSERT INTO person_tracks", "UPDATE person_tracks")) for s in statements)
-
-
-def test_generation_and_process_restart_split_track_identity(service):
-    client, app, upstream, _, _ = service
-    upstream["metadata"]["frames"] = [frame()]
-    app.state.poller.poll_once()
-    upstream["streams"][0]["runtime"]["generation"] = 2
-    upstream["metadata"]["frames"] = [frame(generation=2)]
-    app.state.poller.poll_once()
-    upstream["streams"][0]["runtime_session"] = "b" * 32
-    upstream["metadata"]["runtime_session"] = "b" * 32
-    app.state.poller.poll_once()
-    assert len(client.get("/api/cameras/first/tracks").json()["recent"]) == 3
-
-
-def test_same_numeric_track_id_is_independent_per_camera(service):
-    client, app, upstream, _, engine = service
-    first = frame(track_id=42)
-    second = {**frame(track_id=42), "camera_id": "second", "source_id": 1}
-    upstream["metadata"]["frames"] = [first, second]
-    app.state.poller.poll_once()
-    for camera_id in ("first", "second"):
-        tracks = client.get(f"/api/cameras/{camera_id}/tracks").json()
-        assert tracks["current"][0]["track_id"] == "42"
-        assert tracks["recent"][0]["camera_id"] == camera_id
+    result = client.get("/api/cameras/first/tracks").json()
+    assert [row["track_id"] for row in result["recent"]] == [str((1 << 63) + 77)]
+    assert result["current"] == []
+    assert client.get("/api/cameras/first/status").json()["state"] == "online"
     with app.state.sessions() as session:
-        assert session.scalar(select(func.count()).select_from(PersonTrack)) == 2
+        assert session.scalar(select(func.count()).select_from(PersonTrack)) == 1
 
 
 @pytest.mark.parametrize("bad_frame", ["expired", "generation", "session", "source", "no_session"])
@@ -316,18 +295,14 @@ def test_status_and_live_expire_without_polling(service):
     assert app.state.live.get("first", SESSION, 1, utcnow() + timedelta(seconds=20)) is None
 
 
-def test_retention_cleanup(service):
+def test_person_history_is_not_pruned(service):
     _, app, upstream, _, _ = service
-    upstream["metadata"]["frames"] = [frame()]
-    app.state.poller.poll_once()
-    with app.state.sessions.begin() as session:
-        row = session.scalar(select(PersonTrack))
-        row.last_seen_at = utcnow() - timedelta(days=8)
+    add_history(app, days_ago=8)
     upstream["metadata"]["frames"] = []
     app.state.poller.last_cleanup = 0
     app.state.poller.poll_once()
     with app.state.sessions() as session:
-        assert session.scalar(select(func.count()).select_from(PersonTrack)) == 0
+        assert session.scalar(select(func.count()).select_from(PersonTrack)) == 1
 
 
 def test_api_and_db_whitelist_sensitive_upstream_fields(service):
