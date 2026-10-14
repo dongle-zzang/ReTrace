@@ -1,5 +1,10 @@
 # Current work
 
+## Parking label management API — deployment pending (2026-10-14)
+
+- User approved six parking operations improvements. Add PATCH/DELETE /api/parking/spaces/{id}: rename preserves zones/baselines; delete rejects attached zones with 409. Parent locking shared with zone create; Preview UUID-item write allowlist extended. No schema/data migration or live data writes.
+- Source backup branch codex/backup-before-parking-tools-20261013 at 50d920c; prior static output archived in .cache/backups/frontend-before-parking-tools-50d920c.zip. Backend 141 tests passed; registered-baseline/revision preservation additionally verified; Preview write proxy 13 passed. Frontend 44 tests/typecheck/generate and read-only browser verification passed. New routes documented in docs/color-parking.md. Git handoff and main merge requested; not deployed. Deployment requires Backend rebuild + Preview restart for new allowlist, then frontend-dist upload. Existing server/training tasks below preserved.
+
 ## Dataset car-only/export-delete (344428e/369ed49) — applied and verified live (2026-10-13)
 
 - Live Backend image was built from clean worktree `/home/ohjoo/ReTrace-dataset-369ed49` (369ed49) via ignored `.cache/dataset-369ed49/backend-build.yaml`, so it does NOT include the later committed person-write removal (ingest/schemas). Preview restarted from main tree incl. export DELETE proxy.
