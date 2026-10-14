@@ -76,6 +76,30 @@ def test_crud_duplicates_validation_and_multi_camera(service):
     assert client.get('/api/parking/zones').json() == [second]
 
 
+def test_label_rename_preserves_zones_and_delete_requires_unused_space(service, monkeypatch):
+    client, app, _, _, _ = service
+    zone = create(client)
+    monkeypatch.setattr(app.state.color_parking, 'fetch_frame', lambda camera: (np.full((100, 100, 3), 100, np.uint8), 'session:1:1', 0))
+    zone = client.post('/api/parking/zones/' + zone['id'] + '/calibrate', json={}).json()
+    assert zone['calibrated'] is True
+    space_url = '/api/parking/spaces/' + zone['parkingSpaceId']
+    response = client.patch(space_url, json={'label': ' Renamed '})
+    assert response.status_code == 200
+    assert response.json() == {'id': zone['parkingSpaceId'], 'label': 'Renamed'}
+    assert client.get('/api/parking/zones').json() == [zone]
+    assert client.delete(space_url).status_code == 409
+    other = client.post('/api/parking/spaces', json={'label': 'Other'}).json()
+    assert client.patch(space_url, json={'label': ' other '}).status_code == 409
+    for body in ({}, {'label': ''}, {'label': 'New', 'extra': True}):
+        assert client.patch(space_url, json=body).status_code == 422
+    assert client.get('/api/parking/status').json()['spaces'][1]['label'] == 'Renamed'
+    assert client.delete('/api/parking/zones/' + zone['id']).status_code == 204
+    assert client.delete(space_url).status_code == 204
+    assert client.delete(space_url).status_code == 404
+    assert client.patch(space_url, json={'label': 'Missing'}).status_code == 404
+    assert client.get('/api/parking/spaces').json() == [other]
+
+
 def test_worker_calibration_freshness_and_revision(service, monkeypatch):
     client, app, _, _, engine = service
     zone = create(client)

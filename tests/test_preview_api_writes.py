@@ -93,6 +93,14 @@ class ParkingProxyTests(unittest.TestCase):
         self.assertEqual(self.request('PATCH', path, b'{"enabled":false}')[0], 200)
         self.assertEqual(self.request('DELETE', path)[0], 204)
 
+    def test_label_management_proxy_is_limited_to_uuid_items(self):
+        self.spaces.append({'label': 'Original'})
+        path = '/api/parking/spaces/11111111-1111-4111-8111-111111111111'
+        self.assertEqual(self.request('PATCH', path, b'{"label":"Renamed"}')[0], 200)
+        self.assertEqual(self.requests[-1][1], path)
+        self.assertEqual(self.request('DELETE', path)[0], 204)
+        self.assertNotIn('PATCH', self.proxy.parking_methods('/api/parking/spaces/not-a-uuid'))
+
     def tearDown(self):
         for server in (self.backend, self.server):
             server.shutdown()

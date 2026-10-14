@@ -96,6 +96,36 @@ def create_space(body: SpaceCreate, request: Request):
         raise HTTPException(409, 'Parking label already exists') from None
 
 
+@router.patch('/spaces/{space_id}')
+def rename_space(space_id: UUID, body: SpaceCreate, request: Request):
+    try:
+        with request.app.state.sessions.begin() as session:
+            space = session.get(ColorParkingSpace, str(space_id), with_for_update=True)
+            if space is None:
+                raise HTTPException(404, 'Parking space not found')
+            key = ' '.join(body.label.split()).upper()
+            if any(other.id != space.id and ' '.join(other.label.split()).upper() == key
+                   for other in session.scalars(select(ColorParkingSpace))):
+                raise HTTPException(409, 'Parking label already exists')
+            space.label = body.label
+            session.flush()
+            return {'id': space.id, 'label': space.label}
+    except IntegrityError:
+        raise HTTPException(409, 'Parking label already exists') from None
+
+
+@router.delete('/spaces/{space_id}', status_code=204)
+def delete_space(space_id: UUID, request: Request):
+    with request.app.state.sessions.begin() as session:
+        space = session.get(ColorParkingSpace, str(space_id), with_for_update=True)
+        if space is None:
+            raise HTTPException(404, 'Parking space not found')
+        if session.scalar(select(ParkingZone.id).where(ParkingZone.parking_space_id == space.id).limit(1)):
+            raise HTTPException(409, 'Parking space is still used by camera zones')
+        session.delete(space)
+    return Response(status_code=204)
+
+
 @router.get('/zones')
 def zones(request: Request, cameraId: str | None = Query(default=None)):
     with request.app.state.sessions() as session:
@@ -108,7 +138,7 @@ def zones(request: Request, cameraId: str | None = Query(default=None)):
 @router.post('/zones', status_code=201)
 def create_zone(body: ZoneCreate, request: Request):
     with request.app.state.sessions.begin() as session:
-        if session.get(Camera, body.cameraId) is None or session.get(ColorParkingSpace, str(body.parkingSpaceId)) is None:
+        if session.get(Camera, body.cameraId) is None or session.get(ColorParkingSpace, str(body.parkingSpaceId), with_for_update=True) is None:
             raise HTTPException(404, 'Camera or parking space not found')
         zone = ParkingZone(camera_id=body.cameraId, parking_space_id=str(body.parkingSpaceId),
                            polygon=[p.model_dump() for p in body.polygon], enabled=body.enabled,

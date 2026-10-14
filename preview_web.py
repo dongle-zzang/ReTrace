@@ -91,6 +91,8 @@ class BackendAPIProxy:
             return ('PUT',)
         if path in ('/api/parking/spaces', '/api/parking/zones'):
             return ('GET', 'HEAD', 'POST')
+        if re.fullmatch('/api/parking/spaces/' + dataset_id, path):
+            return ('PATCH', 'DELETE')
         zone = r'/api/parking/zones/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
         if re.fullmatch(zone, path):
             return ('GET', 'HEAD', 'PATCH', 'DELETE')

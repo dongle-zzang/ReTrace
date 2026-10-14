@@ -58,6 +58,8 @@
 | --- | --- |
 | GET /api/parking/spaces | `[{"id":"UUID","label":"A-01"}]` |
 | POST /api/parking/spaces | `{"label":"A-01"}` → 201, `{id,label}`; 중복 409 |
+| PATCH /api/parking/spaces/{id} | `{"label":"A-02"}` → `{id,label}`; 공백/대소문자 정규화 기준 중복 409, 없는 ID 404. 영역·revision·baseline 유지 |
+| DELETE /api/parking/spaces/{id} | 영역이 없는 라벨만 삭제 → 204; 연결된 영역이 하나라도 있으면 409(비활성 영역 포함), 없는 ID 404 |
 | GET /api/parking/zones?cameraId=first | zone 배열; cameraId 생략 시 전체 |
 | POST /api/parking/zones | 아래 생성 예제 → 201, zone |
 | PATCH /api/parking/zones/{id} | polygon/enabled/threshold/hysteresis/confirmFrames 중 일부 → zone |
@@ -67,6 +69,7 @@
 | GET /api/parking/status | 아래 통합 상태 |
 
 공간/카메라 연결은 생성 시 결정한다. 변경하려면 zone 삭제 후 생성한다.
+라벨 삭제와 영역 생성은 같은 공간 row lock으로 직렬화한다. 새 테이블/컬럼이나 데이터 migration은 없다.
 설정 수정 시 null/빈 PATCH/알 수 없는 필드/잘못된 단순 polygon은 422,
 없는 공간·카메라·zone은 404다. threshold±hysteresis는 0~1에 들어와야 한다.
 캘리브레이션은 enabled zone/카메라의 최신 프레임을 새로 조회한다. 프레임이 없으면 409,
