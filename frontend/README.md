@@ -88,6 +88,14 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 토큰은 sessionStorage에만 둡니다. 계약은 [웹 fine-tuning](../docs/training.md), 구현은 `pages/training.vue`,
 `components/Training*.vue`, `composables/trainingApi.ts`, `lib/training.ts`입니다.
 
+## 화면 언어 (한국어 / English)
+
+상단 바 오른쪽(휴대폰은 바 아래)의 `한 | EN` 토글로 UI 문구를 바꿉니다. 선택은 `localStorage`의 `retrace.locale`에 저장되고,
+저장된 값이 없으면 브라우저 언어가 한국어일 때 한국어, 그 밖에는 영어로 시작합니다. 새 dependency 없이 `composables/useI18n.ts`의
+`t('English text', { name })`를 씁니다. 영어 원문이 key이고 한국어는 `lib/i18n.ko.ts`에 있으며, 사전에 없는 문구(서버가 보낸 오류·경고,
+카메라 이름 등)는 받은 그대로 보입니다. 화면 문구를 추가하면 `lib/i18n.ko.ts`에도 넣습니다. `tests/i18n.test.cjs`가 문자열 리터럴로 쓴
+`t('…')` key의 번역 누락과 `{placeholder}` 불일치를 잡습니다(변수로 넘기는 lib/API 메시지는 직접 확인).
+
 ## 정적 배포
 
 ```powershell

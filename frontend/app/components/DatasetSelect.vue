@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ChevronDown } from '@lucide/vue'
 import { SelectContent, SelectItem, SelectItemText, SelectPortal, SelectRoot, SelectTrigger, SelectViewport } from 'reka-ui'
+import { useI18n } from '~/composables/useI18n'
 defineOptions({ inheritAttrs: false })
 const props = withDefaults(defineProps<{
   modelValue: string; options: { value: string; label: string; disabled?: boolean }[]
   label: string; placeholder?: string; disabled?: boolean
-}>(), { placeholder: 'Select an option', disabled: false })
+}>(), { disabled: false })
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
-const selectedLabel = computed(() => props.options.find(item => item.value === props.modelValue)?.label ?? props.placeholder)
+const { t } = useI18n()
+const selectedLabel = computed(() => props.options.find(item => item.value === props.modelValue)?.label ?? props.placeholder ?? t('Select an option'))
 </script>
 
 <template>
@@ -22,7 +24,7 @@ const selectedLabel = computed(() => props.options.find(item => item.value === p
           <SelectItem v-for="item in options" :key="item.value" :value="item.value" :text-value="item.label" :disabled="item.disabled" class="flex min-h-10 cursor-default select-none items-center rounded-lg px-2.5 py-2 text-sm outline-none transition-colors data-[highlighted]:bg-white/[0.07] data-[state=checked]:bg-primary/[0.08] data-[disabled]:pointer-events-none data-[disabled]:opacity-40">
             <SelectItemText class="truncate font-medium">{{ item.label }}</SelectItemText>
           </SelectItem>
-          <p v-if="!options.length" class="px-3 py-6 text-center text-xs text-muted-foreground">No options are available.</p>
+          <p v-if="!options.length" class="px-3 py-6 text-center text-xs text-muted-foreground">{{ t('No options are available.') }}</p>
         </SelectViewport>
       </SelectContent>
     </SelectPortal>

@@ -2,6 +2,7 @@
 import type { Point } from '~/types/overlay'
 import type { ParkingStatus, ParkingZone } from '~/types/parking'
 import { parkingStatusLabel } from '~/lib/parking'
+import { useI18n } from '~/composables/useI18n'
 import { clientToNormalized, distance, normalizedToPixels, polygonCentroid } from '~/lib/videoGeometry'
 
 /**
@@ -38,6 +39,7 @@ const props = withDefaults(defineProps<{
   labels: true,
 })
 
+const { t } = useI18n()
 const emit = defineEmits<{
   select: [zoneId: string | null]
   'add-point': [point: Point]
@@ -81,7 +83,7 @@ const shapes = computed(() => props.zones.map((zone) => {
   return {
     zone,
     status,
-    name: props.spaceLabels[zone.parkingSpaceId] ?? (zone.parkingSpaceId ? '?' : 'No label'),
+    name: props.spaceLabels[zone.parkingSpaceId] ?? (zone.parkingSpaceId ? '?' : t('No label')),
     points: pointList(zone.polygon),
     label: px(polygonCentroid(zone.polygon)),
     selected: zone.id === props.selectedId,
@@ -172,7 +174,7 @@ watch(isDrawing, (drawing) => {
     :viewBox="`0 0 ${size.width} ${size.height}`"
     preserveAspectRatio="none"
     role="group"
-    aria-label="Parking zones"
+    :aria-label="t('Parking zones')"
     :style="{ touchAction: editing ? 'none' : 'auto' }"
     @pointerdown="onBackgroundPointerDown"
     @pointermove="onPointerMove"
@@ -187,7 +189,7 @@ watch(isDrawing, (drawing) => {
       :class="['outline-none', canSelect && !isDrawing ? 'cursor-pointer' : 'pointer-events-none']"
       :role="canSelect ? 'button' : 'img'"
       :tabindex="canSelect && !isDrawing ? 0 : undefined"
-      :aria-label="shape.name + ' ' + parkingStatusLabel[shape.status] + (shape.conflict ? ', cameras disagree' : '')"
+      :aria-label="shape.name + ' ' + t(parkingStatusLabel[shape.status]) + (shape.conflict ? t(', cameras disagree') : '')"
       :aria-pressed="canSelect ? shape.selected : undefined"
       @pointerdown="onZonePointerDown(shape.zone.id, $event)"
       @keydown.enter.prevent="canSelect && !isDrawing && emit('select', shape.zone.id)"
@@ -216,7 +218,7 @@ watch(isDrawing, (drawing) => {
         class="pointer-events-none"
       >
         <tspan :x="shape.label.x" :dy="showStatusText ? '-0.15em' : '0.35em'" font-size="12" font-weight="700">{{ shape.name }}</tspan>
-        <tspan v-if="showStatusText" :x="shape.label.x" dy="1.2em" font-size="10" font-weight="500" fill-opacity="0.85">{{ parkingStatusLabel[shape.status] }}</tspan>
+        <tspan v-if="showStatusText" :x="shape.label.x" dy="1.2em" font-size="10" font-weight="500" fill-opacity="0.85">{{ t(parkingStatusLabel[shape.status]) }}</tspan>
       </text>
     </g>
 
@@ -234,7 +236,7 @@ watch(isDrawing, (drawing) => {
         class="cursor-copy"
         @pointerdown.stop.prevent="onMidpointPointerDown(selectedZone.id, mid.index, mid.point, $event)"
       >
-        <title>Drag to add a point</title>
+        <title>{{ t('Drag to add a point') }}</title>
       </circle>
       <circle
         v-for="(point, index) in selectedZone.polygon"
@@ -250,7 +252,7 @@ watch(isDrawing, (drawing) => {
         @dblclick.stop="emit('remove-vertex', selectedZone.id, index)"
         @contextmenu.stop.prevent="emit('remove-vertex', selectedZone.id, index)"
       >
-        <title>Drag to move · double-click or right-click to delete</title>
+        <title>{{ t('Drag to move · double-click or right-click to delete') }}</title>
       </circle>
     </g>
 
