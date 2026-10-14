@@ -1,5 +1,10 @@
 # Frontend current work
 
+## Korean / English UI toggle — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
+
+- `LocaleToggle.vue` in AppNav (beside the menu from sm; below the bar on phones because 4 tabs already fill 360px; clock now from lg). `useI18n` + `lib/i18n.ts` + `lib/i18n.ko.ts`, English text as key, choice in localStorage `retrace.locale`, browser language fallback. All pages/components incl. /training translated; server-sent text stays as sent. README "화면 언어" section.
+- Verified: npm test (51, incl. new i18n coverage test), typecheck, generate; headless Chromium against a static build + mock /api/cameras: toggle switches h1/nav/title/html lang, persists across reload, ko-KR browser defaults to Korean, no horizontal overflow at 360/390/640/768/1024/1440, no console errors. Not verified against the real server.
+
 ## AI Training page (/training) — branch claude/web-yolo-finetuning-k5jypr, not deployed (2026-10-14)
 
 - New `pages/training.vue`, `TrainingJobPanel/TrainingChart/TrainingComparison.vue`, `composables/trainingApi.ts` (admin token in sessionStorage only), `lib/training.ts`, `types/training.ts`; nav item `AI Training`/`Train` (mobile nav text-xs, gap-0.5 so 4 items fit 360px). Server contract: root docs/training.md.

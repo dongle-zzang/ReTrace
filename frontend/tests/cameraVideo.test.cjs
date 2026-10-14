@@ -6,6 +6,7 @@ const vm = require('node:vm')
 const ts = require('typescript')
 const vue = require('vue')
 const { parse, compileScript } = require('vue/compiler-sfc')
+const i18n = require('./i18nStub.cjs')
 const filename = path.join(__dirname, '../app/components/CameraVideo.vue')
 const { descriptor } = parse(fs.readFileSync(filename, 'utf8'), { filename })
 const source = compileScript(descriptor, { id: 'camera-video-test' }).content
@@ -17,7 +18,7 @@ const renderer = vue.createRenderer({
 function mount() {
   const exports = {}
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, {
-    ...vue, exports, require: name => name === 'vue' ? vue : {},
+    ...vue, exports, require: name => name === 'vue' ? vue : name.endsWith('/useI18n') ? i18n : {},
   })
   const component = exports.default
   let state

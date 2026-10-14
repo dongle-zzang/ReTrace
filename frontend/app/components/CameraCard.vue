@@ -11,6 +11,7 @@ import ParkingOverlay from '~/components/ParkingOverlay.vue'
 import ParkingSummary from '~/components/ParkingSummary.vue'
 import CameraZoomDialog from '~/components/CameraZoomDialog.vue'
 import { useVideoStage } from '~/composables/useVideoStage'
+import { useI18n } from '~/composables/useI18n'
 import { countStatuses } from '~/lib/parking'
 import { floorLabel } from '~/lib/cameraSort'
 import { SquareParking, ZoomIn } from '@lucide/vue'
@@ -35,6 +36,7 @@ const props = defineProps<{
   manageParking?: boolean
 }>()
 
+const { t } = useI18n()
 const stageElement = ref<HTMLElement | null>(null)
 const isVisible = ref(false)
 const videoTransport = ref<TransportState>('waiting')
@@ -61,11 +63,14 @@ const status = computed(() => {
   }
 })
 
+// Server camera states; unknown ones are shown as sent.
+const cameraStateLabels: Record<string, string> = { online: 'Online', offline: 'Offline', degraded: 'Degraded', connecting: 'Connecting', reconnecting: 'Reconnecting' }
+const cameraStateLabel = (state: string) => cameraStateLabels[state] ?? state
+
 const statusLabel = computed(() => {
-  if (!props.camera.enabled) return 'Disabled'
-  if (status.value.stale) return 'Stale'
-  if (status.value.state === 'online') return 'Online'
-  return status.value.state
+  if (!props.camera.enabled) return t('Disabled')
+  if (status.value.stale) return t('Stale')
+  return t(cameraStateLabel(status.value.state))
 })
 
 const statusDotClass = computed(() => {
@@ -146,7 +151,7 @@ onUnmounted(() => {
         variant="ghost"
         class="absolute top-3 right-12 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
       >
-        <NuxtLink :to="'/cameras/' + encodeURIComponent(camera.camera_id) + '/parking'" :aria-label="camera.name + ' parking zones'">
+        <NuxtLink :to="'/cameras/' + encodeURIComponent(camera.camera_id) + '/parking'" :aria-label="t('{camera} parking zones', { camera: camera.name })">
           <SquareParking />
         </NuxtLink>
       </Button>
@@ -156,7 +161,7 @@ onUnmounted(() => {
         size="icon-sm"
         variant="ghost"
         class="absolute top-3 right-3 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover:opacity-100 hover:bg-black/70 hover:text-white"
-        :aria-label="'Zoom ' + camera.name"
+        :aria-label="t('Zoom {camera}', { camera: camera.name })"
         @click="zoomOpen = true"
       >
         <ZoomIn />
@@ -170,7 +175,7 @@ onUnmounted(() => {
           <TooltipTrigger as-child>
             <div
               tabindex="0"
-              :aria-label="'Status: ' + statusLabel + (status.last_error ? ', recent error' : '')"
+              :aria-label="t(status.last_error ? 'Status: {status}, recent error' : 'Status: {status}', { status: statusLabel })"
               class="flex shrink-0 cursor-default items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <span :class="['size-2 rounded-full transition-colors duration-500', statusDotClass]" />

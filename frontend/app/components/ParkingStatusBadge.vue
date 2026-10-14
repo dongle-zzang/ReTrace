@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ParkingStatus } from '~/types/parking'
 import { parkingStatusLabel } from '~/lib/parking'
+import { useI18n } from '~/composables/useI18n'
 
 /** Status as a colored dot plus text (never color alone), optionally with the detection score. */
 withDefaults(defineProps<{
@@ -9,6 +10,8 @@ withDefaults(defineProps<{
   size?: 'sm' | 'md'
   dot?: boolean
 }>(), { score: null, size: 'sm', dot: true })
+
+const { t } = useI18n()
 
 const dotClass: Record<ParkingStatus, string> = {
   occupied: 'bg-red-500 shadow-[0_0_6px_var(--color-red-500)]',
@@ -26,7 +29,7 @@ const text: Record<ParkingStatus, string> = {
 <template>
   <span :class="['inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap', size === 'md' ? 'text-sm font-medium' : 'text-xs']">
     <span v-if="dot" :class="['size-1.5 shrink-0 rounded-full', dotClass[status]]" aria-hidden="true" />
-    <span :class="text[status]">{{ parkingStatusLabel[status] }}</span>
-    <span v-if="score !== null" class="font-mono text-muted-foreground tabular-nums" :aria-label="'score ' + score.toFixed(2)">{{ score.toFixed(2) }}</span>
+    <span :class="text[status]">{{ t(parkingStatusLabel[status]) }}</span>
+    <span v-if="score !== null" class="font-mono text-muted-foreground tabular-nums" :aria-label="t('score {score}', { score: score.toFixed(2) })">{{ score.toFixed(2) }}</span>
   </span>
 </template>
