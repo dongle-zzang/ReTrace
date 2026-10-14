@@ -6,6 +6,7 @@ const vm = require('node:vm')
 const ts = require('typescript')
 const vue = require('vue')
 const { parse, compileScript } = require('vue/compiler-sfc')
+const i18n = require('./i18nStub.cjs')
 
 const appDir = path.join(__dirname, '../app')
 function loadModule(specifier) {
@@ -17,7 +18,7 @@ function evaluate(source) {
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   vm.runInNewContext(compiled, {
     ...vue, exports, Error,
-    require: specifier => specifier === 'vue' ? vue : specifier.startsWith('~/lib/') ? loadModule(specifier) : {},
+    require: specifier => specifier === 'vue' ? vue : specifier.endsWith('/useI18n') ? i18n : specifier.startsWith('~/lib/') ? loadModule(specifier) : {},
   })
   return exports
 }

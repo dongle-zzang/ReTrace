@@ -8,6 +8,7 @@ import CameraVideo from '~/components/CameraVideo.vue'
 import ParkingOverlay from '~/components/ParkingOverlay.vue'
 import { Button } from '~/components/ui/button'
 import { useVideoStage } from '~/composables/useVideoStage'
+import { useI18n } from '~/composables/useI18n'
 
 /** Enlarged video for the zoom dialog. Mounted only while the dialog is open. */
 defineProps<{
@@ -25,6 +26,7 @@ defineProps<{
   selectedZoneId?: string | null
 }>()
 
+const { t } = useI18n()
 const stageElement = ref<HTMLElement | null>(null)
 const mediaSize = ref({ width: 1280, height: 720 })
 const videoTransport = ref<TransportState>('waiting')
@@ -61,7 +63,7 @@ const { content, contentStyle, isFullscreen, toggleFullscreen } = useVideoStage(
       size="icon-sm"
       variant="ghost"
       class="absolute top-3 right-3 z-20 border border-white/15 bg-black/45 text-white opacity-80 backdrop-blur-md transition-opacity group-hover/zoom:opacity-100 hover:bg-black/70 hover:text-white"
-      :aria-label="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+      :aria-label="isFullscreen ? t('Exit fullscreen') : t('Fullscreen')"
       @click="toggleFullscreen"
     >
       <Minimize2 v-if="isFullscreen" />

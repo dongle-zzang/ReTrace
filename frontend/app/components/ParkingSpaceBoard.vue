@@ -2,6 +2,7 @@
 import type { ParkingSpaceSummary } from '~/types/parking'
 import ParkingStatusBadge from '~/components/ParkingStatusBadge.vue'
 import { Badge } from '~/components/ui/badge'
+import { useI18n } from '~/composables/useI18n'
 
 /**
  * Logical parking spaces with their final status and what each camera sees. One row per label:
@@ -17,43 +18,44 @@ const props = withDefaults(defineProps<{
   selectable?: boolean
 }>(), { currentCameraId: null })
 const emit = defineEmits<{ select: [spaceId: string] }>()
+const { t } = useI18n()
 
 const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
 </script>
 
 <template>
-  <ul class="divide-y divide-white/10 border-y border-white/10" aria-label="Parking spaces across cameras">
+  <ul class="divide-y divide-white/10 border-y border-white/10" :aria-label="t('Parking spaces across cameras')">
     <li
       v-for="summary in summaries"
       :key="summary.space.id"
       :class="['py-3 pr-1', summary.conflict ? 'border-l-2 border-l-amber-400/70 pl-3' : 'pl-1']"
     >
       <div class="flex items-center gap-2.5">
-        <button v-if="selectable" type="button" class="min-w-0 truncate rounded font-mono text-sm font-semibold underline-offset-4 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring" :aria-label="`Compare cameras for ${summary.space.label}`" @click="emit('select', summary.space.id)">{{ summary.space.label }}</button>
+        <button v-if="selectable" type="button" class="min-w-0 truncate rounded font-mono text-sm font-semibold underline-offset-4 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring" :aria-label="t('Compare cameras for {label}', { label: summary.space.label })" @click="emit('select', summary.space.id)">{{ summary.space.label }}</button>
         <span v-else class="min-w-0 truncate font-mono text-sm font-semibold">{{ summary.space.label }}</span>
         <Badge
           v-if="summary.conflict"
           variant="outline"
           class="gap-1 border-amber-400/40 text-amber-300"
-          title="Cameras report different statuses for this spot. Check the video."
+          :title="t('Cameras report different statuses for this spot. Check the video.')"
         >
-          Check
+          {{ t('Check') }}
         </Badge>
         <span class="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          Final
+          {{ t('Final') }}
           <ParkingStatusBadge :status="summary.status" size="md" />
         </span>
       </div>
-      <p v-if="summary.conflict" class="mt-1 text-xs text-amber-300">Cameras disagree on this spot. Check the video.</p>
-      <ul class="mt-1.5 space-y-0.5 border-l border-white/10 pl-3" :aria-label="summary.space.label + ' by camera'">
+      <p v-if="summary.conflict" class="mt-1 text-xs text-amber-300">{{ t('Cameras disagree on this spot. Check the video.') }}</p>
+      <ul class="mt-1.5 space-y-0.5 border-l border-white/10 pl-3" :aria-label="t('{label} by camera', { label: summary.space.label })">
         <li v-for="zone in summary.zones" :key="zone.zoneId" class="flex items-center gap-2 text-xs">
           <span :class="['min-w-0 flex-1 truncate', zone.cameraId === currentCameraId ? 'text-foreground' : 'text-muted-foreground']">
-            {{ cameraName(zone.cameraId) }}<span v-if="zone.cameraId === currentCameraId" class="text-muted-foreground"> (this camera)</span>
+            {{ cameraName(zone.cameraId) }}<span v-if="zone.cameraId === currentCameraId" class="text-muted-foreground"> {{ t('(this camera)') }}</span>
           </span>
           <ParkingStatusBadge :status="zone.status" :score="zone.score" />
         </li>
       </ul>
-      <p v-if="reasons?.[summary.space.id] || !summary.zones.length" class="mt-1.5 text-xs text-muted-foreground">{{ reasons?.[summary.space.id] ?? 'No camera zone assigned' }}</p>
+      <p v-if="reasons?.[summary.space.id] || !summary.zones.length" class="mt-1.5 text-xs text-muted-foreground">{{ t(reasons?.[summary.space.id] ?? 'No camera zone assigned') }}</p>
     </li>
   </ul>
 </template>

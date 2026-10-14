@@ -5,6 +5,7 @@ import ParkingStatusBadge from '~/components/ParkingStatusBadge.vue'
 import { Alert, AlertDescription } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
+import { useI18n } from '~/composables/useI18n'
 
 /**
  * Empty-spot baseline for one zone. The color detector compares the live view against this
@@ -26,22 +27,23 @@ const error = ref<string | null>(null)
 const done = ref<string | null>(null)
 
 const { confirm } = useConfirmDialog()
+const { t } = useI18n()
 
 async function run(register: boolean) {
   if (busy.value) return
   const requestedLabel = props.label
   if (register && props.status === 'occupied'
-    && !await confirm({ title: 'Register empty baseline?', description: `${props.label} currently reads as occupied. Continue only if the spot is actually empty.`, confirmLabel: 'Register baseline' })) return
-  if (!register && !await confirm({ title: 'Reset empty baseline?', description: `Reset the empty baseline of ${props.label}?`, confirmLabel: 'Reset baseline', destructive: true })) return
+    && !await confirm({ title: t('Register empty baseline?'), description: t('{label} currently reads as occupied. Continue only if the spot is actually empty.', { label: props.label }), confirmLabel: t('Register baseline') })) return
+  if (!register && !await confirm({ title: t('Reset empty baseline?'), description: t('Reset the empty baseline of {label}?', { label: props.label }), confirmLabel: t('Reset baseline'), destructive: true })) return
   if (props.label !== requestedLabel || busy.value) return
   busy.value = register ? 'register' : 'reset'
   error.value = null
   done.value = null
   try {
     await props.calibrate(register)
-    done.value = register ? 'Empty baseline registered.' : 'Baseline reset.'
+    done.value = register ? t('Empty baseline registered.') : t('Baseline reset.')
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Request failed.'
+    error.value = t(cause instanceof Error ? cause.message : 'Request failed.')
   } finally {
     busy.value = null
   }
@@ -54,37 +56,36 @@ watch(() => props.label, () => {
 </script>
 
 <template>
-  <section class="space-y-3 rounded-xl border border-primary/30 bg-primary/[0.05] p-3.5" :aria-label="'Calibration of ' + label">
+  <section class="space-y-3 rounded-xl border border-primary/30 bg-primary/[0.05] p-3.5" :aria-label="t('Calibration of {label}', { label })">
     <div class="flex items-center gap-2">
       <Crosshair class="size-4 text-primary" />
       <h3 class="font-mono text-sm font-semibold">{{ label }}</h3>
-      <Button size="icon-sm" variant="ghost" class="ml-auto" aria-label="Close calibration" @click="emit('close')">
+      <Button size="icon-sm" variant="ghost" class="ml-auto" :aria-label="t('Close calibration')" @click="emit('close')">
         <X />
       </Button>
     </div>
 
     <dl class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-xs">
-      <dt class="text-muted-foreground">Status (this camera)</dt>
+      <dt class="text-muted-foreground">{{ t('Status (this camera)') }}</dt>
       <dd class="justify-self-end"><ParkingStatusBadge :status="status" :score="score" /></dd>
-      <dt class="text-muted-foreground">Empty baseline</dt>
+      <dt class="text-muted-foreground">{{ t('Empty baseline') }}</dt>
       <dd class="justify-self-end">
-        <Badge v-if="calibrated === true" class="bg-green-500/15 text-green-300">Registered</Badge>
-        <Badge v-else-if="calibrated === false" variant="outline" class="text-muted-foreground">Not registered</Badge>
-        <span v-else class="text-muted-foreground">Not reported by the server</span>
+        <Badge v-if="calibrated === true" class="bg-green-500/15 text-green-300">{{ t('Registered') }}</Badge>
+        <Badge v-else-if="calibrated === false" variant="outline" class="text-muted-foreground">{{ t('Not registered') }}</Badge>
+        <span v-else class="text-muted-foreground">{{ t('Not reported by the server') }}</span>
       </dd>
     </dl>
 
     <p class="text-xs leading-relaxed text-amber-200/90">
-      Register the baseline only while this spot is actually empty — no car, nothing parked on the lines.
-      The current camera view becomes the reference for “empty”.
+      {{ t('Register the baseline only while this spot is actually empty — no car, nothing parked on the lines. The current camera view becomes the reference for “empty”.') }}
     </p>
 
     <div class="flex flex-wrap gap-2">
       <Button size="sm" :disabled="!!busy" @click="run(true)">
-        <Crosshair /> {{ busy === 'register' ? 'Registering…' : 'Register empty baseline' }}
+        <Crosshair /> {{ busy === 'register' ? t('Registering…') : t('Register empty baseline') }}
       </Button>
       <Button size="sm" variant="outline" :disabled="!!busy" @click="run(false)">
-        <RotateCcw /> {{ busy === 'reset' ? 'Resetting…' : 'Reset baseline' }}
+        <RotateCcw /> {{ busy === 'reset' ? t('Resetting…') : t('Reset baseline') }}
       </Button>
     </div>
 

@@ -11,11 +11,13 @@ import { Separator } from '~/components/ui/separator'
 import { Skeleton } from '~/components/ui/skeleton'
 import { tabsListVariants } from '~/components/ui/tabs'
 import { useCameras } from '~/composables/useCameras'
+import { useI18n } from '~/composables/useI18n'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { compareCameras, floorLabel } from '~/lib/cameraSort'
 import { cn } from '~/lib/utils'
 
-useHead({ title: 'ReTrace · CCTV Monitoring' })
+const { t } = useI18n()
+useHead({ title: () => `ReTrace · ${t('CCTV Monitoring')}` })
 
 const config = useRuntimeConfig()
 const { cameras: allCameras, loading, refreshing, error, refresh } = useCameras()
@@ -66,7 +68,7 @@ function enterDelay(index: number, step = 70, base = 0) {
 }
 
 const floorButtons = computed(() => [
-  { value: null, label: 'All', count: cameras.value.length, active: !selectedFloors.value.length },
+  { value: null, label: t('All'), count: cameras.value.length, active: !selectedFloors.value.length },
   ...floors.value.map((floor) => ({
     value: floor,
     label: floorLabel(floor),
@@ -91,16 +93,16 @@ function resetFilters() {
     <div class="mx-auto max-w-[1500px] px-5 pt-10 sm:px-8 sm:pt-12 lg:px-10">
       <div class="flex flex-col gap-5 md:flex-row md:items-end md:justify-between motion-safe:animate-fade-up">
         <div class="min-w-0">
-          <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">CCTV Monitoring</h1>
-          <p class="mt-2 text-sm text-muted-foreground">Live video from every camera, grouped by floor.</p>
+          <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">{{ t('CCTV Monitoring') }}</h1>
+          <p class="mt-2 text-sm text-muted-foreground">{{ t('Live video from every camera, grouped by floor.') }}</p>
         </div>
         <InputGroup class="h-9 transition-[border-color,box-shadow] duration-200 md:w-72 has-[[data-slot=input-group-control]:focus-visible]:border-white/25 has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-white/[0.06]">
           <InputGroupAddon>
             <Search />
           </InputGroupAddon>
-          <InputGroupInput v-model="query" placeholder="Search cameras" aria-label="Search cameras" />
+          <InputGroupInput v-model="query" :placeholder="t('Search cameras')" :aria-label="t('Search cameras')" />
           <InputGroupAddon v-if="query" align="inline-end">
-            <InputGroupButton size="icon-xs" aria-label="Clear search" @click="query = ''">
+            <InputGroupButton size="icon-xs" :aria-label="t('Clear search')" @click="query = ''">
               <X />
             </InputGroupButton>
           </InputGroupAddon>
@@ -108,7 +110,7 @@ function resetFilters() {
       </div>
 
       <div class="-mx-1 mt-6 min-w-0 overflow-x-auto px-1 [scrollbar-width:none]">
-        <div role="group" aria-label="Floors" :class="cn(tabsListVariants(), 'h-9 gap-0.5 border border-white/[0.08] bg-white/[0.04] backdrop-blur-xl')">
+        <div role="group" :aria-label="t('Floors')" :class="cn(tabsListVariants(), 'h-9 gap-0.5 border border-white/[0.08] bg-white/[0.04] backdrop-blur-xl')">
           <button
             v-for="(item, index) in floorButtons"
             :key="item.value ?? 'all'"
@@ -126,17 +128,17 @@ function resetFilters() {
       </div>
     </div>
 
-    <section aria-label="Cameras" class="mx-auto max-w-[1500px] px-5 pt-6 pb-16 sm:px-8 lg:px-10">
+    <section :aria-label="t('Cameras')" class="mx-auto max-w-[1500px] px-5 pt-6 pb-16 sm:px-8 lg:px-10">
       <Alert v-if="error" variant="destructive" class="motion-safe:animate-fade-up mb-8 border-destructive/30 bg-destructive/10 px-4 py-3">
         <CircleAlert />
-        <AlertTitle>Couldn't load cameras</AlertTitle>
-        <AlertDescription>{{ error }}</AlertDescription>
+        <AlertTitle>{{ t("Couldn't load cameras") }}</AlertTitle>
+        <AlertDescription>{{ t(error) }}</AlertDescription>
         <AlertAction class="top-1/2 -translate-y-1/2">
-          <Button size="sm" variant="outline" :disabled="refreshing" @click="refresh">Retry</Button>
+          <Button size="sm" variant="outline" :disabled="refreshing" @click="refresh">{{ t('Retry') }}</Button>
         </AlertAction>
       </Alert>
 
-      <div v-if="loading" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" aria-label="Loading cameras">
+      <div v-if="loading" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" :aria-label="t('Loading cameras')">
         <Card v-for="item in 6" :key="item" :style="enterDelay(item - 1)" class="gap-0 py-0 motion-safe:animate-fade-up">
           <Skeleton class="aspect-video w-full rounded-none" />
           <CardContent class="space-y-3 px-5 py-5">
@@ -151,13 +153,13 @@ function resetFilters() {
           <EmptyMedia variant="icon" class="size-12 rounded-xl">
             <Cctv class="size-6" />
           </EmptyMedia>
-          <EmptyTitle class="text-base">No cameras yet</EmptyTitle>
-          <EmptyDescription>Previews appear here once cameras are connected.</EmptyDescription>
+          <EmptyTitle class="text-base">{{ t('No cameras yet') }}</EmptyTitle>
+          <EmptyDescription>{{ t('Previews appear here once cameras are connected.') }}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button variant="outline" :disabled="refreshing" @click="refresh">
             <RefreshCw :class="{ 'animate-spin': refreshing }" />
-            Refresh
+            {{ t('Refresh') }}
           </Button>
         </EmptyContent>
       </Empty>
@@ -167,11 +169,11 @@ function resetFilters() {
           <EmptyMedia variant="icon" class="size-12 rounded-xl">
             <SearchX class="size-6" />
           </EmptyMedia>
-          <EmptyTitle class="text-base">No matching cameras</EmptyTitle>
-          <EmptyDescription>Try another floor or search term.</EmptyDescription>
+          <EmptyTitle class="text-base">{{ t('No matching cameras') }}</EmptyTitle>
+          <EmptyDescription>{{ t('Try another floor or search term.') }}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          <Button variant="outline" @click="resetFilters">Reset filters</Button>
+          <Button variant="outline" @click="resetFilters">{{ t('Reset filters') }}</Button>
         </EmptyContent>
       </Empty>
 
@@ -199,7 +201,7 @@ function resetFilters() {
           </div>
         </section>
         <p v-if="isFiltered" class="text-center text-xs text-muted-foreground">
-          Showing {{ filteredCameras.length }} of {{ cameras.length }} cameras
+          {{ t('Showing {shown} of {total} cameras', { shown: filteredCameras.length, total: cameras.length }) }}
         </p>
       </div>
     </section>
