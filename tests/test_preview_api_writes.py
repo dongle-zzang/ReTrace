@@ -27,9 +27,9 @@ class ParkingProxyTests(unittest.TestCase):
             def serve(self):
                 body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 owner.requests.append((self.command, self.path, dict(self.headers), body))
-                if self.path.endswith('/download') and hasattr(owner, 'archive'):
+                if (self.path.endswith('/download') or '/files/' in self.path) and hasattr(owner, 'archive'):
                     self.send_response(200)
-                    self.send_header('Content-Type', 'application/zip')
+                    self.send_header('Content-Type', 'application/zip' if self.path.endswith('/download') else 'application/octet-stream')
                     self.send_header('Content-Length', str(len(owner.archive)))
                     self.send_header('Content-Disposition', 'attachment; filename="dataset_fixture.zip"')
                     self.end_headers()
@@ -274,6 +274,27 @@ class ParkingProxyTests(unittest.TestCase):
         connection.getresponse.return_value = response
         with patch.object(self.proxy, 'connection_class', return_value=connection):
             self.assertEqual(self.request('GET', '/api/datasets/exports/11111111-1111-4111-8111-111111111111/download')[0], 502)
+
+    def test_training_control_routes_forward_authorization_and_block_worker_api(self):
+        job = '/api/training/jobs/11111111-1111-4111-8111-111111111111'
+        for path in ('/api/training/jobs', '/api/training/auth', job + '/stop'):
+            self.assertEqual(self.request('POST', path, b'{}', {'Authorization': 'Bearer token'})[0], 201)
+            self.assertEqual(self.requests[-1][2]['Authorization'], 'Bearer token')
+        self.assertEqual(self.request('DELETE', job)[0], 405)
+        self.assertEqual(self.request('POST', job + '/artifacts/best.pt', b'{}')[0], 405)
+        count = len(self.requests)
+        for path in ('/api/training/worker/heartbeat', '/api/training/worker/claim',
+                     '/api/training/%77orker/claim', '/api/training/worker'):
+            self.assertEqual(self.request('POST', path, b'{}')[0], 404)
+            self.assertEqual(self.request('GET', path)[0], 404)
+        self.assertEqual(len(self.requests), count)
+
+    def test_training_model_download_is_streamed(self):
+        self.archive = bytes(range(256)) * 20000  # larger than the 4 MiB JSON cap once repeated below
+        self.archive *= 2
+        status, headers, body = self.request('GET', '/api/training/models/11111111-1111-4111-8111-111111111111/files/best')
+        self.assertEqual((status, body), (200, self.archive))
+        self.assertEqual(headers['Content-Type'], 'application/octet-stream')
 
 
 if __name__ == '__main__':

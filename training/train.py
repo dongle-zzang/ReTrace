@@ -43,6 +43,46 @@ def configure_ultralytics():
                      "runs_dir": str(ROOT / "runs")})
 
 
+def add_worker_callbacks(model, progress_file, stop_file, index):
+    """Progress for training/worker.py and a cooperative stop.
+
+    Ultralytics checks trainer.stop after every batch (8.4.x): the run then validates, saves
+    last.pt/best.pt and exits normally, so a stopped run still keeps its checkpoints.
+    """
+    import torch
+    state = {"batch": 0, "written": 0.0}
+
+    def write(trainer, final=False):
+        if not progress_file:
+            return
+        now = time.time()
+        if not final and now - state["written"] < 1.0:
+            return
+        state["written"] = now
+        loss = trainer.label_loss_items(trainer.tloss, prefix="train") if trainer.tloss is not None else {}
+        data = {"epoch": trainer.epoch + 1, "epochs": trainer.epochs, "batch": state["batch"],
+                "batches": len(trainer.train_loader) if getattr(trainer, "train_loader", None) else None,
+                "batch_size": trainer.batch_size, "train_loss": {k: float(v) for k, v in loss.items()},
+                "torch_reserved_mib": torch.cuda.memory_reserved(index) // 2**20, "time": now}
+        tmp = progress_file.with_name(progress_file.name + ".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(progress_file)
+
+    def epoch_start(trainer):
+        state["batch"] = 0
+
+    def batch_end(trainer):
+        state["batch"] += 1
+        write(trainer)
+        if stop_file and stop_file.exists() and not trainer.stop:
+            print("Stop requested: finishing this batch, validating and saving checkpoints.", flush=True)
+            trainer.stop = True
+
+    model.add_callback("on_train_epoch_start", epoch_start)
+    model.add_callback("on_train_batch_end", batch_end)
+    model.add_callback("on_fit_epoch_end", lambda trainer: write(trainer, final=True))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data", type=Path, required=True, help="extracted dataset dir or its data.yaml")
@@ -62,6 +102,8 @@ def main(argv=None):
     p.add_argument("--allow-no-val", action="store_true",
                    help="smoke only: permit a dataset without val images (never for a real run)")
     p.add_argument("--skip-check", action="store_true", help="do not re-run check_dataset.py (e.g. public smoke data)")
+    p.add_argument("--progress-file", type=Path, help="JSON progress written for worker.py (epoch/batch/losses)")
+    p.add_argument("--stop-file", type=Path, help="graceful stop between batches once this file exists")
     args = p.parse_args(argv)
 
     data_yaml = args.data if args.data.suffix in (".yaml", ".yml") else args.data / "data.yaml"
@@ -95,6 +137,8 @@ def main(argv=None):
     epochs = 1 if args.smoke else args.epochs
     name = args.name or f"{'smoke' if args.smoke else 'ft'}_{classes}_{args.imgsz}_{time.strftime('%Y%m%d_%H%M%S')}"
     model = YOLO(args.model)
+    if args.progress_file or args.stop_file:
+        add_worker_callbacks(model, args.progress_file, args.stop_file, index)
     train_yaml = data_yaml
     if classes == "coco80":
         train_yaml = dataset_views.coco80_view(data_dir, model.names) / "data.yaml"
@@ -122,6 +166,9 @@ def main(argv=None):
         "gpu_mib_before": used, "torch_peak_reserved_mib": peak,
         "dataset_counts": report["info"]["images"] if report else None,
         "dataset_warnings": report["warnings"] if report else None,
+        "stopped_early": bool(args.stop_file and args.stop_file.exists()),
+        "final_batch": model.trainer.batch_size,  # Ultralytics halves it on a first-epoch CUDA OOM
+        "names": {int(k): str(v) for k, v in model.names.items()},
     }
     (save_dir / "run_info.json").write_text(json.dumps(info, indent=2, ensure_ascii=False))
     print(json.dumps(info, indent=2, ensure_ascii=False))
