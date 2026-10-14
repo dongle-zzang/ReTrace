@@ -24,7 +24,7 @@
 | 점유 기하/정차·통과/누락·재연결/이벤트·재생 평가 | `python -m pytest -q backend/tests/test_occupancy.py` |
 | 주차장 카메라 선택(비활성 ID skip)/공유 batch/ROI/모델 config/차량 metadata | `python -m unittest discover -s tests -p 'test_vehicle_detection.py'` |
 | 상태/이벤트 cursor 경계·페이지 backlog·원자적 발행 실패·장애 unknown | `python -m unittest discover -s tests -p 'test_parking_relay.py'` |
-| 학습 데이터셋 검사/coco80 view (training venv) | `cd training && .venv/bin/python -m unittest discover -s tests` |
+| 학습 데이터셋 검사/coco80 view/웹 worker (training venv) | `cd training && .venv/bin/python -m unittest discover -s tests` (worker 통합 테스트는 backend 의존성이 있는 Python에서만 실행되고 없으면 skip) |
 | DeepStream HTTP/element link 포함 전체 Python 회귀 | `docker compose exec -T retrace python3 -m unittest discover -s tests -p 'test_*.py'` |
 
 더 작은 변경은 관련 unittest 모듈이나 pytest 파일/테스트만 선택한다. Backend CPU 환경 준비 방법은 [backend README의 CPU 테스트](../../backend/README.md#cpu-테스트)를 따른다. dependency 설치가 필요한지 먼저 확인한다.

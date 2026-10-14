@@ -39,6 +39,7 @@
 | 테스트 작성/수정, 검증 선택 | [testing](docs/agent/testing.md) |
 | Docker/운영/배포 | [deployment](docs/agent/deployment.md) + architecture |
 | 차량 모델 fine-tuning/평가 (독립 `training/` venv) | [training/README.md](training/README.md) |
+| 웹 fine-tuning (`/training`, `/api/training`, host worker) | [docs/training.md](docs/training.md) + backend |
 
 ## 구현과 검증
 

@@ -1,5 +1,13 @@
 # Current work
 
+## Web YOLO11m fine-tuning (/training) — implemented on branch claude/web-yolo-finetuning-k5jypr, not deployed (2026-10-14)
+
+- Goal: start/monitor/stop vehicle fine-tuning from the web; training runs only in host `training/worker.py` (existing training/.venv, no new installs), never in the browser/API; production YOLO11m never auto-replaced. Contract/runbook: docs/training.md.
+- Done: Backend `/api/training` + additive tables training_jobs/training_models (one active job via active_slot unique), frozen dataset snapshots with sha256, admin/worker Bearer tokens (empty = disabled), Preview proxy allowlist (worker paths 404), GPU/Preview-FPS guard, stale/restart recovery, graceful stop; worker with safe extraction and failure classification; train.py progress/stop callbacks; evaluate.py per-image predictions; check_dataset/coco80 view accept car-only exports; frontend `/training` page.
+- Verified in the cloud sandbox only (no GPU server access): backend 152 tests, training unittests incl. worker↔real Backend integration with fake nvidia-smi/train/evaluate, Preview proxy tests, frontend tests/typecheck/generate, browser check against a demo backend (desktop + 360/390px).
+- Not verified: real GPU training via worker, PostgreSQL table creation on the live DB, Preview proxy on the server, real FPS guard thresholds under load.
+- Next (operator, sudo): set TRAINING_ADMIN_TOKEN/TRAINING_WORKER_TOKEN in private .env → `sudo docker compose up -d --build --no-deps backend` → `sudo docker compose restart retrace` (briefly interrupts video; agree timing) → upload frontend-dist → start worker per docs/training.md §5 → UI smoke (1 epoch, 640/b4) while watching Preview FPS before any full run.
+
 ## Parking label management API — deployment pending (2026-10-14)
 
 - User approved six parking operations improvements. Add PATCH/DELETE /api/parking/spaces/{id}: rename preserves zones/baselines; delete rejects attached zones with 409. Parent locking shared with zone create; Preview UUID-item write allowlist extended. No schema/data migration or live data writes.

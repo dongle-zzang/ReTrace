@@ -229,6 +229,8 @@ def main(argv=None):
     p.add_argument("--max-images", type=int, default=40, help="comparison images to save")
     p.add_argument("--no-ultralytics-val", action="store_true")
     p.add_argument("--out", type=Path)
+    p.add_argument("--predictions-json", type=Path,
+                   help="also write per-image GT/TP/FP/missed boxes (pixel xyxy) per model for the web comparison")
     args = p.parse_args(argv)
 
     root = check_dataset.find_dataset_root(args.data.resolve())
@@ -246,7 +248,8 @@ def main(argv=None):
     for q in paths:
         with Image.open(q) as im:
             w, h = im.size
-        items.append({"id": q.stem, "split": args.split, "image": q, "gt": load_gt(lbl_dir / f"{q.stem}.txt", w, h)})
+        items.append({"id": q.stem, "split": args.split, "image": q, "size": (w, h),
+                      "gt": load_gt(lbl_dir / f"{q.stem}.txt", w, h)})
 
     models = {"baseline": args.baseline}
     for spec in args.model:
@@ -268,6 +271,16 @@ def main(argv=None):
             writer.writerow([item["id"], len(item["gt"][0])] +
                             [per_model[m][item["id"]][k] for m in models for k in ("tp", "fp", "fn")])
     saved = draw(items, per_model, args.out / "images", args.max_images)
+    if args.predictions_json:
+        rounded = lambda boxes: [[round(float(v), 1) for v in box] for box in boxes]  # noqa: E731
+        args.predictions_json.write_text(json.dumps({
+            "split": args.split, "imgsz": args.imgsz, "conf": args.conf, "nms_iou": args.nms_iou,
+            "images": [{"id": item["id"], "width": item["size"][0], "height": item["size"][1],
+                        "gt": rounded(item["gt"][0].tolist()),
+                        "models": {m: {"tp": r["tp"], "fp": r["fp"], "fn": r["fn"], "pred_tp": rounded(r["pred_tp"]),
+                                       "pred_fp": rounded(r["pred_fp"]), "gt_fn": rounded(r["gt_fn"])}
+                                   for m in models for r in [per_model[m][item["id"]]]}}
+                       for item in items]}))
     split_warn = [w for w in report["warnings"] if args.split in w or "near-identical" in w]
     summary = {"dataset": str(root), "split": args.split, "images": len(items),
                "gt_boxes": int(sum(len(i["gt"][0]) for i in items)), "imgsz": args.imgsz, "conf": args.conf,

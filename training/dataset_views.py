@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from check_dataset import CLASSES, SPLITS
+from check_dataset import SPLITS
 
 
 def coco80_view(root, model_names):
@@ -16,7 +16,10 @@ def coco80_view(root, model_names):
     root = Path(root).resolve()
     names = {int(k): str(v) for k, v in model_names.items()}
     lookup = {v.lower(): k for k, v in names.items()}
-    remap = {cid: lookup[name] for cid, name in CLASSES.items()}  # KeyError -> model lacks the class
+    data_names = yaml.safe_load((root / "data.yaml").read_text())["names"]
+    data_names = dict(enumerate(data_names)) if isinstance(data_names, list) else data_names
+    # Mapped by class NAME (dataset 0 car != COCO 0 person); KeyError -> model lacks the class.
+    remap = {int(cid): lookup[str(name).lower()] for cid, name in data_names.items()}
     view = root.parent / f"{root.name}__coco80"
     tmp = view.with_name(view.name + ".partial")
     shutil.rmtree(tmp, ignore_errors=True)

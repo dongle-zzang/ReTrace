@@ -11,7 +11,8 @@ training/
   dataset_views.py   # 원본을 건드리지 않는 파생 view (coco80 라벨 재매핑)
   train.py           # GPU 전용 학습 (검증·VRAM 가드 포함)
   evaluate.py        # 기존 모델 vs 새 모델 비교 표/이미지
-  tests/             # CPU unittest (합성 이미지)
+  worker.py          # 웹(/training) job 실행 worker (host, stdlib만 사용): docs/training.md
+  tests/             # CPU unittest (합성 이미지, worker 통합 테스트)
   .venv/ .ultralytics/ weights/ datasets/ runs/        # Git 제외: 환경·CCTV 데이터·가중치·결과
 ```
 
@@ -70,7 +71,8 @@ CPU fallback은 없다. CUDA가 없으면 종료한다.
 
 ZIP 구조는 `backend/app/dataset.py`가 만든다(루트에 `data.yaml`, `manifest.json`,
 `images|labels/{train,val,test}`. 상위 `dataset/` 폴더 하나로 감싼 ZIP도 허용).
-클래스는 데이터셋 전용 `0 car / 1 truck / 2 bus`이다(COCO ID 아님). 세부 계약은 [docs/datasets.md](../docs/datasets.md).
+클래스는 데이터셋 전용 `0 car / 1 truck / 2 bus`이다(COCO ID 아님). 현재 exporter는 `0 car`만 내보내며(car-only),
+`check_dataset.py`는 두 형식을 모두 받는다. coco80 view는 data.yaml의 이름으로 COCO ID를 찾는다(car→2). 세부 계약은 [docs/datasets.md](../docs/datasets.md).
 
 ```bash
 cd training
@@ -108,6 +110,9 @@ single을 둘 다 학습해 `evaluate.py`로 비교하는 것을 권장한다. m
 이상이고 val에도 있을 때 검토한다. 어느 전략도 원본 ZIP/라벨을 바꾸지 않는다(view는 `datasets/<name>__coco80/`, 이미지 symlink).
 
 ## 5. 학습 실행
+
+웹 UI(`/training`)에서 시작하면 host의 `worker.py`가 아래와 같은 인자로 `train.py`/`evaluate.py`를 실행한다
+(진행률·중지 파일 `--progress-file`/`--stop-file`, 평가 `--predictions-json` 추가). 절차는 [웹 fine-tuning](../docs/training.md).
 
 ```bash
 cd training

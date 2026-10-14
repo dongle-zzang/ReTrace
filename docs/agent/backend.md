@@ -21,7 +21,7 @@ Preview가 소유하고 Backend는 기존 JSON snapshot을 polling한다. browse
 
 API/DB 수정 전 backend README의 “저장 정책”을 확인한다. track 식별 범위와 문자열 표현, bbox 보관 위치, polling 관찰의 한계, timestamp 의미를 단순화하지 않는다. 삭제된 YAML 카메라와 기존 track 참조 처리도 “YAML과 DB”의 정책을 따른다. Schema 변경에는 기존 데이터용 migration 계획이 필요하다.
 
-인증/인가, session/token, route protection은 아직 없다. 공개 운영을 위한 인증 체계가 있다고 가정하지 않는다. 현재 네트워크 경계와 worker 수 제약은 [deployment](deployment.md)를 확인한다.
+인증/인가, session/token, route protection은 아직 없다(예외: `/api/training`의 admin/worker 공유 토큰). 공개 운영을 위한 인증 체계가 있다고 가정하지 않는다. 현재 네트워크 경계와 worker 수 제약은 [deployment](deployment.md)를 확인한다.
 
 계약 검증은 `backend/tests/`의 API/polling/보안 테스트와 preview AST 계약 테스트를 먼저 찾는다. 명령은 [testing](testing.md)에 있다.
 
@@ -30,5 +30,10 @@ API/DB 수정 전 backend README의 “저장 정책”을 확인한다. track �
 데이터셋은 `dataset.py` router/service, `dataset_models.py` additive tables를 사용한다.
 원본 JPEG/썸네일/ZIP은 DB 외부 볼륨에 두고 픽셀 박스·검수·revision은 DB에 저장한다.
 삭제 tombstone 복구, 캡처 중복/세션, export snapshot/분할과 제한은 [AI 데이터셋](../datasets.md)이 원문이다.
+
+웹 fine-tuning은 `training.py` router/`TrainingService`와 `training_models.py` additive tables(`training_jobs`, `training_models`)를 쓴다.
+학습은 API 안에서 돌지 않고 host `training/worker.py`가 worker token으로 `/api/training/worker/*`를 호출한다. 시작·중지·다운로드는
+`TRAINING_ADMIN_TOKEN` Bearer가 필요하다(이 프로젝트의 유일한 쓰기 인증이며 사용자 계정 인증은 아님). 동시 1 job은 `active_slot`
+unique constraint가 보장한다. 계약·보호 기준·운영 절차는 [웹 fine-tuning](../training.md)이 원문이다.
 
 데이터셋 export 삭제는 row lock·파일 tombstone 복구를 사용하고 이미지/라벨을 삭제하지 않는다. 새 ZIP은 car-only이며 legacy non-car 라벨은 오류로 거부한다. 계약은 docs/datasets.md를 따른다.

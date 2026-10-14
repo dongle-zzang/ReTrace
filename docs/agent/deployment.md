@@ -31,3 +31,7 @@ Git 공유 대상은 `AGENTS.md`, `CLAUDE.md`, `.ai/`, `docs/agent/`다. `.gitig
 `DATASET_CAPTURE_ENABLED` 기본은 0이며 1로 바꾸면 Preview 재생성과 native GPU 확인이 필요하다.
 기존 PostgreSQL volume·모델/config를 보존하고 DB/파일 볼륨을 함께 백업한다.
 운영 적용과 검증 순서는 [AI 데이터셋](../datasets.md#실행과-아직-필요한-검증)을 따른다.
+
+웹 fine-tuning은 Backend에 `TRAINING_*` 변수(토큰이 비면 비활성)를 전달하고, 학습 자체는 컨테이너가 아닌 host의
+`training/.venv`에서 `worker.py`가 loopback Backend(:8000)에 붙어 실행한다. DeepStream(`retrace`)은 멈추거나 재시작하지 않으며
+자원 부족 시 학습이 대기·중지한다. 토큰 설정·worker 실행·보호 기준은 [웹 fine-tuning](../training.md)을 따른다.
