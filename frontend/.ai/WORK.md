@@ -1,5 +1,11 @@
 # Frontend current work
 
+## Training auth 415 fix + Parking as landing page — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
+
+- `trainingRequest` POSTs always send `Content-Type: application/json` and `{}` when there is no body (Preview proxy `read_body` returns 415 otherwise); fixes `/auth` unlock and `/jobs/{id}/stop`. No server, token or env change.
+- `/` redirects to `/parking`; CCTV monitoring moved from `pages/index.vue` to `pages/monitoring.vue` (`/monitoring`); nav item and logo updated.
+- Verified: npm test 51, typecheck, generate; local `nuxt dev` on :4444 → real `BackendAPIProxy` → mock backend: old code 415 with no payload, new code 204 with `{}`; `/` lands on /parking, /monitoring renders. Not verified against the real server.
+
 ## Korean / English UI toggle — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
 
 - `LocaleToggle.vue` in AppNav (beside the menu from sm; below the bar on phones because 4 tabs already fill 360px; clock now from lg). `useI18n` + `lib/i18n.ts` + `lib/i18n.ko.ts`, English text as key, choice in localStorage `retrace.locale`, browser language fallback. All pages/components incl. /training translated; server-sent text stays as sent. README "화면 언어" section.
