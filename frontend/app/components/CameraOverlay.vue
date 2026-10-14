@@ -4,6 +4,7 @@ import type {
   OverlaySelection,
   Point,
 } from '~/types/overlay'
+import { useI18n } from '~/composables/useI18n'
 
 type EditableKind = 'line' | 'polygon' | 'parking'
 interface Handle {
@@ -13,6 +14,7 @@ interface Handle {
   point: Point
 }
 
+const { t } = useI18n()
 const props = defineProps<{
   annotations: CameraOverlayData
   selection: OverlaySelection
@@ -153,7 +155,7 @@ function endDrag(event: PointerEvent) {
     class="pointer-events-none select-none"
     :viewBox="'0 0 1000 ' + viewHeight"
     preserveAspectRatio="none"
-    aria-label="Camera overlay"
+    :aria-label="t('Camera overlay')"
     :style="{ touchAction: editable ? 'none' : 'auto' }"
     @pointermove="onPointerMove"
     @pointerup="endDrag"
@@ -165,7 +167,7 @@ function endDrag(event: PointerEvent) {
       class="pointer-events-auto cursor-pointer"
       role="button"
       tabindex="0"
-      :aria-label="(zone.label || zone.id) + (zone.occupied ? ' occupied' : ' available')"
+      :aria-label="(zone.label || zone.id) + ' ' + (zone.occupied ? t('occupied') : t('available'))"
       @click.stop="select('parking', zone.id)"
       @keydown.enter.stop="select('parking', zone.id)"
       @keydown.space.prevent.stop="select('parking', zone.id)"
@@ -188,7 +190,7 @@ function endDrag(event: PointerEvent) {
         stroke-width="5"
         paint-order="stroke"
         class="pointer-events-none"
-      >{{ zone.label || zone.id }} · {{ zone.occupied ? 'Occupied' : 'Available' }}</text>
+      >{{ zone.label || zone.id }} · {{ zone.occupied ? t('Occupied') : t('Available') }}</text>
     </g>
 
     <g

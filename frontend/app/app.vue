@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { TooltipProvider } from '~/components/ui/tooltip'
+import { useI18n } from '~/composables/useI18n'
 
-useHead({ htmlAttrs: { class: 'dark', lang: 'en' } })
+const { locale } = useI18n()
+useHead({ htmlAttrs: { class: 'dark', lang: locale } })
 </script>
 
 <template>

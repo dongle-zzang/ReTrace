@@ -17,6 +17,7 @@ import { useParking } from '~/composables/useParking'
 import { useParkingEditor } from '~/composables/useParkingEditor'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { useVideoStage } from '~/composables/useVideoStage'
+import { useI18n } from '~/composables/useI18n'
 import { floorLabel } from '~/lib/cameraSort'
 import { compareLabels, countStatuses } from '~/lib/parking'
 import type { TransportState } from '~/composables/realtimePreviewClient'
@@ -25,6 +26,7 @@ import type { TransportState } from '~/composables/realtimePreviewClient'
 definePageMeta({ viewportWorkspace: true })
 
 const route = useRoute()
+const { t } = useI18n()
 const cameraId = computed(() => String(route.params.cameraId ?? ''))
 
 const config = useRuntimeConfig()
@@ -45,7 +47,7 @@ const videoTransport = ref<TransportState>('waiting')
 const cameraNames = computed(() => Object.fromEntries(cameras.value.map((item) => [item.camera_id, item.name])))
 const zoneScores = computed(() => Object.fromEntries(Object.values(parking.zoneStates.value).map((state) => [state.zoneId, state.score])))
 
-useHead({ title: () => `ReTrace · ${camera.value?.name ?? cameraId.value} parking zones` })
+useHead({ title: () => `ReTrace · ${t('{camera} parking zones', { camera: camera.value?.name ?? cameraId.value })}` })
 
 const viewerElement = ref<HTMLElement | null>(null)
 const stageElement = ref<HTMLElement | null>(null)
@@ -117,7 +119,7 @@ function addZone() {
   const unlabeled = zones.value.find((zone) => !zone.parkingSpaceId)
   if (unlabeled) {
     editor.select(unlabeled.id)
-    editor.notice.value = 'Choose a label or delete this zone before adding another.'
+    editor.notice.value = t('Choose a label or delete this zone before adding another.')
     focusLabel()
     return
   }
@@ -137,7 +139,7 @@ function startEditing() {
 
 const { confirm } = useConfirmDialog()
 function confirmDiscard() {
-  return !editor.dirty.value || confirm({ title: 'Discard parking changes?', description: 'Your unsaved parking zone changes will be lost.', confirmLabel: 'Discard changes', destructive: true })
+  return !editor.dirty.value || confirm({ title: t('Discard parking changes?'), description: t('Your unsaved parking zone changes will be lost.'), confirmLabel: t('Discard changes'), destructive: true })
 }
 
 async function cancelEditing() {
@@ -156,7 +158,7 @@ async function save() {
   if (firstProblem) {
     editor.select(firstProblem.zoneId)
     const zone = zones.value.find((item) => item.id === firstProblem.zoneId)
-    editor.notice.value = `${(zone && parking.spaceLabels.value[zone.parkingSpaceId]) || 'New zone'}: ${firstProblem.message}`
+    editor.notice.value = `${(zone && parking.spaceLabels.value[zone.parkingSpaceId]) || t('New zone')}: ${t(firstProblem.message)}`
     if (zone && !zone.parkingSpaceId) focusLabel()
     return
   }
@@ -180,14 +182,14 @@ async function save() {
 }
 
 const hint = computed(() => {
-  if (editor.notice.value) return editor.notice.value
+  if (editor.notice.value) return t(editor.notice.value)
   if (editor.drawing.value) {
     return editor.drawing.value.length < 3
-      ? `Click the video to place points (${editor.drawing.value.length}/3)`
-      : 'Click the first point or press Enter to finish · Backspace undoes · Esc cancels'
+      ? t('Click the video to place points ({count}/3)', { count: editor.drawing.value.length })
+      : t('Click the first point or press Enter to finish · Backspace undoes · Esc cancels')
   }
-  if (editor.editing.value) return 'Select a zone to adjust its points. Save changes when done.'
-  return 'Select a zone to see its status and empty baseline, or add a new zone.'
+  if (editor.editing.value) return t('Select a zone to adjust its points. Save changes when done.')
+  return t('Select a zone to see its status and empty baseline, or add a new zone.')
 })
 
 // ---- Keyboard / navigation ---------------------------------------------------------------------
@@ -245,53 +247,53 @@ onUnmounted(() => {
 <template>
   <main class="flex min-h-0 flex-1 flex-col text-foreground">
     <header class="flex min-h-16 shrink-0 items-center gap-3 px-4 py-3 sm:px-6">
-      <Button as-child variant="ghost" size="icon-sm" aria-label="Back to Parking"><NuxtLink to="/parking"><ArrowLeft /></NuxtLink></Button>
+      <Button as-child variant="ghost" size="icon-sm" :aria-label="t('Back to Parking')"><NuxtLink to="/parking"><ArrowLeft /></NuxtLink></Button>
       <SquareParking class="hidden size-4 shrink-0 text-muted-foreground sm:block" />
       <h1 class="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight sm:text-base">
         <Skeleton v-if="camerasLoading && !camera" class="h-5 w-40" />
-        <template v-else>{{ camera?.name ?? cameraId }} <span class="font-normal text-muted-foreground">Parking zones</span></template>
+        <template v-else>{{ camera?.name ?? cameraId }} <span class="font-normal text-muted-foreground">{{ t('Parking zones') }}</span></template>
       </h1>
       <Badge v-if="camera" variant="secondary" class="shrink-0 tabular-nums">{{ floorLabel(camera.floor) }}</Badge>
-      <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="shrink-0 text-muted-foreground">Mock data</Badge>
+      <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="shrink-0 text-muted-foreground">{{ t('Mock data') }}</Badge>
     </header>
     <Empty v-if="!camerasLoading && !camera" class="mx-auto mt-16 max-w-xl border border-border bg-card/40 py-16">
       <EmptyHeader>
         <EmptyMedia variant="icon" class="size-12 rounded-xl"><SquareParking class="size-6" /></EmptyMedia>
-        <EmptyTitle class="text-base">Camera not found</EmptyTitle>
-        <EmptyDescription>{{ cameraId }} isn't in the camera list.</EmptyDescription>
+        <EmptyTitle class="text-base">{{ t('Camera not found') }}</EmptyTitle>
+        <EmptyDescription>{{ t("{camera} isn't in the camera list.", { camera: cameraId }) }}</EmptyDescription>
       </EmptyHeader>
-      <EmptyContent><Button as-child variant="outline"><NuxtLink to="/parking">Back to Parking</NuxtLink></Button></EmptyContent>
+      <EmptyContent><Button as-child variant="outline"><NuxtLink to="/parking">{{ t('Back to Parking') }}</NuxtLink></Button></EmptyContent>
     </Empty>
     <div v-else class="flex min-h-0 flex-1 flex-col px-3 pb-4 sm:px-6">
-      <div ref="viewerElement" class="flex min-h-0 flex-1 flex-col gap-2" aria-label="Parking zone workspace">
+      <div ref="viewerElement" class="flex min-h-0 flex-1 flex-col gap-2" :aria-label="t('Parking zone workspace')">
         <div class="flex shrink-0 items-center justify-between gap-3">
-        <div class="editor-tools flex shrink-0 flex-wrap items-center" role="toolbar" aria-label="Zone tools" title="Zone tools">
+        <div class="editor-tools flex shrink-0 flex-wrap items-center" role="toolbar" :aria-label="t('Zone tools')" :title="t('Zone tools')">
           <template v-if="editor.drawing.value">
-            <Button title="Undo point" size="icon" variant="outline" :disabled="!editor.drawing.value.length" @click="editor.undoPoint"><Undo2 /><span class="sr-only">Undo point</span></Button>
-            <Button title="Finish shape" size="icon" :disabled="editor.drawing.value.length < 3" @click="finishShape"><Check /><span class="sr-only">Finish shape</span></Button>
-            <Button title="Cancel shape" size="icon" variant="destructive" @click="cancelShape"><X /><span class="sr-only">Cancel shape</span></Button>
+            <Button :title="t('Undo point')" size="icon" variant="outline" :disabled="!editor.drawing.value.length" @click="editor.undoPoint"><Undo2 /><span class="sr-only">{{ t('Undo point') }}</span></Button>
+            <Button :title="t('Finish shape')" size="icon" :disabled="editor.drawing.value.length < 3" @click="finishShape"><Check /><span class="sr-only">{{ t('Finish shape') }}</span></Button>
+            <Button :title="t('Cancel shape')" size="icon" variant="destructive" @click="cancelShape"><X /><span class="sr-only">{{ t('Cancel shape') }}</span></Button>
           </template>
           <template v-else>
-            <Button title="Add zone" size="icon" :variant="editor.editing.value ? 'outline' : 'default'" :disabled="saving || parking.loading.value" @click="addZone"><Plus /><span class="sr-only">Add zone</span></Button>
-            <Button title="Edit zones" v-if="!editor.editing.value" size="icon" variant="outline" :disabled="parking.loading.value" @click="startEditing"><Pencil /><span class="sr-only">Edit zones</span></Button>
+            <Button :title="t('Add zone')" size="icon" :variant="editor.editing.value ? 'outline' : 'default'" :disabled="saving || parking.loading.value" @click="addZone"><Plus /><span class="sr-only">{{ t('Add zone') }}</span></Button>
+            <Button v-if="!editor.editing.value" size="icon" variant="outline" :disabled="parking.loading.value" :title="t('Edit zones')" @click="startEditing"><Pencil /><span class="sr-only">{{ t('Edit zones') }}</span></Button>
             <template v-if="editor.editing.value">
-              <Button title="Save changes" size="icon" :disabled="saving" @click="save"><Check /><span class="sr-only">{{ saving ? 'Saving…' : 'Save changes' }}</span></Button>
-              <Button title="Cancel" size="icon" variant="destructive" :disabled="saving" @click="cancelEditing"><X /><span class="sr-only">Cancel</span></Button>
+              <Button :title="t('Save changes')" size="icon" :disabled="saving" @click="save"><Check /><span class="sr-only">{{ saving ? t('Saving…') : t('Save changes') }}</span></Button>
+              <Button :title="t('Cancel')" size="icon" variant="destructive" :disabled="saving" @click="cancelEditing"><X /><span class="sr-only">{{ t('Cancel') }}</span></Button>
             </template>
           </template>
-          <Button v-if="selectedZone && editor.editing.value && !editor.drawing.value" size="icon" variant="destructive" :disabled="saving" aria-label="Delete selected zone" title="Delete selected zone" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
+          <Button v-if="selectedZone && editor.editing.value && !editor.drawing.value" size="icon" variant="destructive" :disabled="saving" :aria-label="t('Delete selected zone')" :title="t('Delete selected zone')" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
         </div>
         <div class="editor-tools flex shrink-0 items-center">
-        <Button title="Zones" as-child size="icon" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
-          <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" :aria-pressed="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /><span class="sr-only">Zones {{ zones.length }}</span></button>
+        <Button :title="t('Zones')" as-child size="icon" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
+          <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" :aria-pressed="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /><span class="sr-only">{{ t('Zones') }} {{ zones.length }}</span></button>
         </Button>
         </div>
         </div>
         <p :class="['shrink-0 px-1 text-xs', editor.notice.value ? 'text-amber-300' : 'text-muted-foreground']" role="status">{{ hint }}</p>
         <div v-if="pageError" class="flex shrink-0 items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-red-300" role="alert">
           <CircleAlert class="size-3.5 shrink-0" />
-          <span class="min-w-0 flex-1">{{ pageError }}</span>
-          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-2 text-xs" :disabled="saving" @click="retry">Retry</Button>
+          <span class="min-w-0 flex-1">{{ t(pageError) }}</span>
+          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-2 text-xs" :disabled="saving" @click="retry">{{ t('Retry') }}</Button>
         </div>
         <div class="flex min-h-0 flex-1 gap-3 overflow-hidden">
           <div
@@ -337,12 +339,12 @@ onUnmounted(() => {
               id="camera-zone-panel"
               :inert="!zonesOpen"
               class="flex w-full min-w-0 shrink-0 flex-col gap-4 overflow-y-auto px-2 py-3 sm:w-80 sm:pl-4 lg:w-88"
-              aria-label="Parking zone list"
+              :aria-label="t('Parking zone list')"
               @keydown.esc.stop="closeZones"
             >
               <div class="flex items-center justify-between gap-3">
-                <h2 class="text-sm font-semibold">Zones <span class="ml-1 text-muted-foreground">{{ zones.length }}</span></h2>
-                <Button size="icon-sm" variant="ghost" aria-label="Close zone list" @click="closeZones"><X /></Button>
+                <h2 class="text-sm font-semibold">{{ t('Zones') }} <span class="ml-1 text-muted-foreground">{{ zones.length }}</span></h2>
+                <Button size="icon-sm" variant="ghost" :aria-label="t('Close zone list')" @click="closeZones"><X /></Button>
               </div>
               <ParkingSummary :counts="counts" compact />
               <!-- Keep this mounted while the panel is hidden; its modal portals to the workspace. -->
@@ -361,9 +363,9 @@ onUnmounted(() => {
                 @remove="removeZone"
                 @add-another="addZone"
               />
-              <p v-if="parking.loading.value" class="text-xs text-muted-foreground">Loading zones…</p>
-              <p v-else-if="!zones.length" class="text-xs text-muted-foreground">No zones yet. Add a zone on the video to get started.</p>
-              <ul v-else class="divide-y divide-white/10" aria-label="Zones on this camera">
+              <p v-if="parking.loading.value" class="text-xs text-muted-foreground">{{ t('Loading zones…') }}</p>
+              <p v-else-if="!zones.length" class="text-xs text-muted-foreground">{{ t('No zones yet. Add a zone on the video to get started.') }}</p>
+              <ul v-else class="divide-y divide-white/10" :aria-label="t('Zones on this camera')">
                 <li
                   v-for="zone in zoneRows"
                   :key="zone.id"
@@ -377,9 +379,9 @@ onUnmounted(() => {
                     :aria-pressed="zone.id === selectedZoneId"
                     @click="selectZone(zone.id)"
                   >
-                    <span class="min-w-0 truncate font-medium" :class="!zone.parkingSpaceId ? 'text-amber-200' : ''">{{ parking.spaceLabels.value[zone.parkingSpaceId] ?? 'Choose a label' }}</span>
+                    <span class="min-w-0 truncate font-medium" :class="!zone.parkingSpaceId ? 'text-amber-200' : ''">{{ parking.spaceLabels.value[zone.parkingSpaceId] ?? t('Choose a label') }}</span>
                     <ParkingStatusBadge :status="parking.zoneStatuses.value[zone.id] ?? 'unknown'" :score="zoneScores[zone.id] ?? null" />
-                    <span v-if="conflictSpaceIds.includes(zone.parkingSpaceId)" class="text-xs text-amber-300">Check</span>
+                    <span v-if="conflictSpaceIds.includes(zone.parkingSpaceId)" class="text-xs text-amber-300">{{ t('Check') }}</span>
                   </button>
                   <Button
                     v-if="editor.editing.value"
@@ -387,7 +389,7 @@ onUnmounted(() => {
                     variant="ghost"
                     class="mr-1 shrink-0 text-muted-foreground hover:text-destructive"
                     :disabled="saving || !!editor.drawing.value"
-                    :aria-label="'Delete zone ' + (parking.spaceLabels.value[zone.parkingSpaceId] ?? 'without label')"
+                    :aria-label="t('Delete zone {label}', { label: parking.spaceLabels.value[zone.parkingSpaceId] ?? t('without label') })"
                     @click="removeZone(zone.id)"
                   ><Trash2 /></Button>
                 </li>
