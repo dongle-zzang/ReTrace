@@ -10,6 +10,8 @@ export interface ParkingApi {
   listSpaces(): Promise<ParkingSpace[]>
   /** Rejects with code 'duplicate' when the label already exists. */
   createSpace(label: string): Promise<ParkingSpace>
+  renameSpace(spaceId: string, label: string): Promise<ParkingSpace>
+  deleteSpace(spaceId: string): Promise<void>
   listZones(cameraId: string): Promise<ParkingZone[]>
   /** Saves one camera's zones as a whole and resolves to what the server holds afterwards. */
   saveZones(cameraId: string, update: ParkingZoneUpdate): Promise<ParkingZone[]>
@@ -138,6 +140,16 @@ export function createHttpParkingApi(request: Request): ParkingApi {
     },
     async createSpace(label) {
       return fromSpaceDto(await call<ParkingSpaceDto>('/api/parking/spaces', { method: 'POST', body: { label: label.trim() } }))
+    },
+    async renameSpace(spaceId, label) {
+      return fromSpaceDto(await call<ParkingSpaceDto>(`/api/parking/spaces/${encodeURIComponent(spaceId)}`, { method: 'PATCH', body: { label: label.trim() } }))
+    },
+    async deleteSpace(spaceId) {
+      try { await request(`/api/parking/spaces/${encodeURIComponent(spaceId)}`, { method: 'DELETE' }) }
+      catch (cause) {
+        if (errorStatus(cause) === 409) throw new ParkingApiError('invalid', 'This label is still used by a camera zone. Refresh to check.')
+        throw toApiError(cause)
+      }
     },
     listZones: loadZones,
     async saveZones(cameraId, update) {
@@ -329,6 +341,18 @@ export function createMockParkingApi(options: MockOptions = {}): ParkingApi {
       data = { ...all, spaces: [...all.spaces, space] }
       persist()
       return clone(space)
+    }),
+    renameSpace: (spaceId, label) => delay(() => {
+      const all = load(), space = all.spaces.find(item => item.id === spaceId)
+      if (!space) throw new ParkingApiError('not-found', 'Label not found.')
+      if (validateLabel(label)) throw new ParkingApiError('invalid', 'Enter a valid label.')
+      if (findSpaceByLabel(all.spaces.filter(item => item.id !== spaceId), label)) throw new ParkingApiError('duplicate', 'That label already exists.')
+      space.label = label.trim(); persist(); return clone(space)
+    }),
+    deleteSpace: (spaceId) => delay(() => {
+      const all = load()
+      if (all.zones.some(zone => zone.parkingSpaceId === spaceId)) throw new ParkingApiError('invalid', 'This label is still used by a camera zone.')
+      all.spaces = all.spaces.filter(space => space.id !== spaceId); persist()
     }),
     listZones: (cameraId) => delay(() => clone(load().zones.filter((zone) => zone.cameraId === cameraId))),
     saveZones: (cameraId, update) => delay(() => {

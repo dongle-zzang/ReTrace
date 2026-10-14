@@ -1,5 +1,16 @@
 # Frontend current work
 
+## Dataset editor status placement — deployment pending (2026-10-14)
+
+- Moved Reviewed/Pending/Unsaved changes badge from the page header to a fixed top-left overlay inside the annotation canvas. Dark translucent backdrop, larger padding and teal/amber contrast; pointer-events:none preserves drawing through the badge. Existing parking operations branch changes preserved.
+- Typecheck and generate passed; actual reviewed image browser verification: badge is inside the canvas at 12px top/left, header badge removed, pointer-events:none confirmed. Git handoff and main merge requested; not deployed.
+
+## Parking operations tools — deployment pending (2026-10-14)
+
+- Backup source branch codex/backup-before-parking-tools-20261013 at 50d920c; previous static build archived locally under .cache/backups.
+- User approved all six improvements: Unknown reasons, count filters/search, label camera comparison, freshness/expiry, baseline management, label rename/unused deletion. Backend label item routes + Preview allowlist added; no operational data changed.
+- Verified: frontend 44 tests, typecheck and generate; Backend 141 tests plus calibrated-baseline rename preservation test; Preview write proxy 13 tests. Browser label search/count filters, 3-camera comparison with selected polygons, unused-only labels/deletion disabled for used labels, baseline list, 390px no overflow and no console errors. No live label/baseline mutation tested; server PATCH/DELETE deployment still needed. Existing relay sends state changes only, so connected REST confirms freshness every 10 s; individual unchanged-source readings expire after 15 s without new observations. New build .output/public; Git handoff and main merge requested; not deployed.
+
 ## Parking board polish and label totals — deployment pending (2026-10-13)
 
 - Thin translucent Spaces scrollbar; text-only Check labels in board/filter/polygons; overlays gated by CameraVideo transport in cards, zoom and editor. Offline/stale status hides video and resets decoded-frame readiness.

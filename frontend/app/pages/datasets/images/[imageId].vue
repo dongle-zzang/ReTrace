@@ -67,7 +67,7 @@ onUnmounted(() => { version++; window.removeEventListener('beforeunload', before
 
 <template>
   <main class="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3 sm:px-6">
-    <header class="flex shrink-0 flex-wrap items-center gap-3"><Button as-child size="icon-sm" variant="ghost" aria-label="Back to datasets"><NuxtLink to="/datasets"><ArrowLeft /></NuxtLink></Button><div class="min-w-0 flex-1"><h1 class="text-base font-semibold">Label vehicles</h1><p v-if="image" class="truncate text-xs text-muted-foreground">{{ image.camera_id }} · {{ new Date(image.captured_at).toLocaleString() }} · {{ image.width }} × {{ image.height }}</p></div><Badge v-if="image" variant="outline" :class="dirty ? 'text-amber-200' : 'text-primary'">{{ dirty ? 'Unsaved changes' : DATASET_STATUS_LABELS[image.status] }}</Badge></header>
+    <header class="flex shrink-0 flex-wrap items-center gap-3"><Button as-child size="icon-sm" variant="ghost" aria-label="Back to datasets"><NuxtLink to="/datasets"><ArrowLeft /></NuxtLink></Button><div class="min-w-0 flex-1"><h1 class="text-base font-semibold">Label vehicles</h1><p v-if="image" class="truncate text-xs text-muted-foreground">{{ image.camera_id }} · {{ new Date(image.captured_at).toLocaleString() }} · {{ image.width }} × {{ image.height }}</p></div></header>
     <p v-if="error" class="shrink-0 rounded-lg bg-red-400/10 px-3 py-2 text-sm text-red-300" role="alert">{{ error }} <Button v-if="!image" size="sm" variant="ghost" @click="load">Retry</Button></p>
     <p class="h-5 shrink-0 truncate text-xs text-primary" role="status">{{ !dirty ? message : '' }}</p>
     <p v-if="loading" class="py-16 text-center text-sm text-muted-foreground">Loading image…</p>
@@ -88,7 +88,10 @@ onUnmounted(() => { version++; window.removeEventListener('beforeunload', before
         </div>
       </div>
       <div class="flex min-h-0 flex-1 basis-0 flex-col gap-3 sm:flex-row">
-        <DatasetBoxEditor :key="image.id" class="min-h-0 min-w-0 flex-1" :image-url="image.image_url" :width="image.width" :height="image.height" :boxes="boxes" :selected-id="selectedId" :class-id="0" :tool="tool" :zoom="zoom" :disabled="saving" @update="updateBoxes" @select="selectBox" @delete="deleteBoxId = $event" @ready="ready = $event" />
+        <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <DatasetBoxEditor :key="image.id" class="min-h-0 min-w-0 flex-1" :image-url="image.image_url" :width="image.width" :height="image.height" :boxes="boxes" :selected-id="selectedId" :class-id="0" :tool="tool" :zoom="zoom" :disabled="saving" @update="updateBoxes" @select="selectBox" @delete="deleteBoxId = $event" @ready="ready = $event" />
+          <Badge variant="outline" role="status" class="pointer-events-none absolute top-3 left-3 z-20 h-auto min-h-7 border px-3 py-1 text-xs font-semibold shadow-lg backdrop-blur-md" :class="dirty ? 'border-amber-300/40 bg-black/80 text-amber-200' : 'border-primary/40 bg-black/80 text-primary'">{{ dirty ? 'Unsaved changes' : DATASET_STATUS_LABELS[image.status] }}</Badge>
+        </div>
         <aside class="flex max-h-40 shrink-0 flex-col gap-3 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:max-h-none sm:w-60" aria-label="Vehicle labels">
           <div class="flex items-center justify-between"><h2 class="text-sm font-semibold">Boxes <span class="ml-1 text-muted-foreground">{{ boxes.length }}</span></h2><Button size="icon-sm" variant="destructive" aria-label="Delete selected box" title="Delete selected box" :disabled="saving || !selected" @click="deleteBoxId = selectedId"><Trash2 /></Button></div>
 

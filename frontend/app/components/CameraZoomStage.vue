@@ -22,6 +22,7 @@ defineProps<{
   parkingStatuses?: Record<string, ParkingStatus>
   /** parkingSpaceIds whose cameras disagree */
   parkingConflicts?: string[]
+  selectedZoneId?: string | null
 }>()
 
 const stageElement = ref<HTMLElement | null>(null)
@@ -53,6 +54,7 @@ const { content, contentStyle, isFullscreen, toggleFullscreen } = useVideoStage(
       :space-labels="parkingLabels ?? {}"
       :statuses="parkingStatuses ?? {}"
       :conflict-space-ids="parkingConflicts"
+      :selected-id="selectedZoneId"
     />
     <Button
       type="button"
