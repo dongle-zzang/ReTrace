@@ -1,5 +1,10 @@
 # Frontend current work
 
+## AI Training page (/training) — branch claude/web-yolo-finetuning-k5jypr, not deployed (2026-10-14)
+
+- New `pages/training.vue`, `TrainingJobPanel/TrainingChart/TrainingComparison.vue`, `composables/trainingApi.ts` (admin token in sessionStorage only), `lib/training.ts`, `types/training.ts`; nav item `AI Training`/`Train` (mobile nav text-xs, gap-0.5 so 4 items fit 360px). Server contract: root docs/training.md.
+- Verified: npm test, typecheck, generate; headless Chromium against a demo backend (desktop, 360/390px no overflow). Not verified against the real server API.
+
 ## Dataset editor status placement — deployment pending (2026-10-14)
 
 - Moved Reviewed/Pending/Unsaved changes badge from the page header to a fixed top-left overlay inside the annotation canvas. Dark translucent backdrop, larger padding and teal/amber contrast; pointer-events:none preserves drawing through the badge. Existing parking operations branch changes preserved.

@@ -7,6 +7,7 @@ const route = useRoute()
 const items = [
   { to: '/parking', label: 'Parking', shortLabel: 'Parking', match: (path: string) => path === '/parking' || /^\/cameras\/[^/]+\/parking\/?$/.test(path) },
   { to: '/datasets', label: 'AI Datasets', shortLabel: 'Datasets', match: (path: string) => path === '/datasets' || path.startsWith('/datasets/') },
+  { to: '/training', label: 'AI Training', shortLabel: 'Train', match: (path: string) => path === '/training' },
   { to: '/', label: 'CCTV Monitoring', shortLabel: 'Monitoring', match: (path: string) => path === '/' },
 ]
 
@@ -50,7 +51,7 @@ const dateLabel = computed(() => now.value.toLocaleDateString('en-US', { weekday
         <span class="text-lg font-bold tracking-[-0.04em]">Re<span class="font-light">Trace</span></span>
       </NuxtLink>
 
-      <ul ref="menuElement" class="relative flex items-center gap-1 justify-self-end rounded-full bg-white/[0.05] p-1 sm:justify-self-center">
+      <ul ref="menuElement" class="relative flex items-center gap-0.5 sm:gap-1 justify-self-end rounded-full bg-white/[0.05] p-1 sm:justify-self-center">
         <span
           v-if="indicator"
           aria-hidden="true"
@@ -62,7 +63,7 @@ const dateLabel = computed(() => now.value.toLocaleDateString('en-US', { weekday
             :to="item.to"
             :aria-current="item.match(route.path) ? 'page' : undefined"
             :class="[
-              'flex h-8 items-center gap-1.5 rounded-full px-2 text-sm sm:px-3.5 font-medium whitespace-nowrap outline-none transition-colors duration-300 focus-visible:ring-2 focus-visible:ring-ring/50',
+              'flex h-8 items-center gap-1.5 rounded-full px-2 text-xs sm:px-3.5 sm:text-sm font-medium whitespace-nowrap outline-none transition-colors duration-300 focus-visible:ring-2 focus-visible:ring-ring/50',
               index === selectedIndex
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
