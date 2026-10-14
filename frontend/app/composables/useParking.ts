@@ -7,6 +7,7 @@ import type { RealtimeMessage } from '~/types/realtime'
 import type { ConnectionState } from '~/composables/realtimePreviewClient'
 import { compareLabels, countStatuses, findSpaceByLabel, isNewerState, statusReportFromMessage, summarizeSpaces } from '~/lib/parking'
 import { ParkingApiError, useParkingApi } from '~/composables/parkingApi'
+import { isParkingReportFresh } from '~/lib/parkingOperations'
 
 const STATUS_REFRESH_MS = 10_000
 
@@ -39,6 +40,14 @@ export function useParking(options: UseParkingOptions = {}) {
   const loading = ref(true)
   const error = ref<string | null>(null)
   const statusError = ref<string | null>(null)
+  const now = ref(Date.now())
+  const lastReportAt = ref<number | null>(null)
+  const reportReady = ref(!options.realtime)
+  const receivedAt = shallowRef<Record<string, number>>({})
+  let clock: ReturnType<typeof setInterval> | undefined
+  const disconnected = computed(() => api.kind === 'http' && !!options.realtime && options.realtime.connection.value !== 'open')
+  const delayed = computed(() => api.kind === 'http' && (!reportReady.value || !!statusError.value || !isParkingReportFresh(lastReportAt.value ?? undefined, now.value)))
+  const staleZoneIds = computed(() => new Set(Object.keys(zoneStates.value).filter(id => !isParkingReportFresh(receivedAt.value[id], now.value))))
   const zonesLoading = new Map<string, Promise<void>>()
   let spacesLoading: Promise<void> | null = null
   let statusRequest = 0
@@ -54,7 +63,8 @@ export function useParking(options: UseParkingOptions = {}) {
     const result: Record<string, ParkingStatus> = {}
     for (const state of Object.values(zoneStates.value)) {
       const revision = revisions.get(state.zoneId)
-      if (revision === undefined || state.revision === undefined || state.revision >= revision) result[state.zoneId] = state.status
+      const fresh = api.kind === 'mock' || !disconnected.value && !delayed.value && isParkingReportFresh(receivedAt.value[state.zoneId], now.value)
+      result[state.zoneId] = fresh && (revision === undefined || state.revision === undefined || state.revision >= revision) ? state.status : 'unknown'
     }
     return result
   })
@@ -75,6 +85,7 @@ export function useParking(options: UseParkingOptions = {}) {
         // The zone's own label wins over the report (it may have been relabelled since).
         parkingSpaceId: zone?.parkingSpaceId ?? state.parkingSpaceId,
         status: zoneStatuses.value[state.zoneId] ?? 'unknown',
+        score: zoneStatuses.value[state.zoneId] === 'unknown' ? null : state.score,
       })
     }
     for (const zone of Object.values(loaded).flat()) {
@@ -85,7 +96,13 @@ export function useParking(options: UseParkingOptions = {}) {
     return result
   })
 
-  const summaries = computed<ParkingSpaceSummary[]>(() => summarizeSpaces(spaces.value, currentZoneStates.value, verdicts.value))
+  const summaries = computed<ParkingSpaceSummary[]>(() => {
+    const freshVerdicts = Object.fromEntries(Object.entries(verdicts.value).filter(([id]) => !disconnected.value && !delayed.value
+      && currentZoneStates.value.filter(zone => zone.parkingSpaceId === id).every(zone => isParkingReportFresh(receivedAt.value[zone.zoneId], now.value))))
+    return summarizeSpaces(spaces.value, currentZoneStates.value, api.kind === 'mock' ? verdicts.value : freshVerdicts).map(row =>
+      api.kind === 'http' && row.status === 'empty' && row.zones.some(zone => staleZoneIds.value.has(zone.zoneId))
+        ? { ...row, status: 'unknown' as const } : row)
+  })
   const summaryBySpace = computed(() => Object.fromEntries(summaries.value.flatMap((summary) => summary.spaceIds.map(id => [id, summary]))))
 
   const totals = computed<ParkingCounts>(() => {
@@ -103,17 +120,27 @@ export function useParking(options: UseParkingOptions = {}) {
   }
 
   function mergeReport(report: ParkingStatusReport) {
+    const received = Date.now()
+    now.value = received
+    lastReportAt.value = received
+    const times = { ...receivedAt.value }
     let next: Record<string, ParkingZoneState> | null = null
     for (const incoming of report.zones) {
       const current = (next ?? zoneStates.value)[incoming.zoneId]
       if (!isNewerState(current, incoming)) continue
+      if (!current || current.updatedAt !== incoming.updatedAt || current.revision !== incoming.revision || current.status !== incoming.status) times[incoming.zoneId] = received
       if (current && JSON.stringify(current) === JSON.stringify(incoming)) continue
       next ??= { ...zoneStates.value }
       next[incoming.zoneId] = incoming
     }
     if (next) zoneStates.value = next
+    receivedAt.value = times
     // The status report carries labels too; pick up spaces created elsewhere without a reload.
     const known = new Set(spaces.value.map((space) => space.id))
+    const renamed = new Map(report.spaces.filter(verdict => verdict.label).map(verdict => [verdict.spaceId, verdict.label!]))
+    if (spaces.value.some(space => renamed.has(space.id) && renamed.get(space.id) !== space.label)) {
+      spaces.value = spaces.value.map(space => renamed.has(space.id) ? { ...space, label: renamed.get(space.id)! } : space)
+    }
     const added = report.spaces.filter((verdict) => verdict.label && !known.has(verdict.spaceId))
     if (added.length) spaces.value = [...spaces.value, ...added.map((verdict) => ({ id: verdict.spaceId, label: verdict.label! }))]
     if (report.spaces.length) {
@@ -176,6 +203,7 @@ export function useParking(options: UseParkingOptions = {}) {
       const report = await api.getStatus()
       if (request !== statusRequest) return
       statusError.value = null
+      reportReady.value = true
       mergeReport(report)
       if (api.kind === 'http' && !loading.value) syncWithReport(report)
       else if (api.kind === 'mock') void ensureCameras([...new Set(report.zones.map((state) => state.cameraId))])
@@ -223,6 +251,20 @@ export function useParking(options: UseParkingOptions = {}) {
     return result
   })
 
+  async function renameSpace(spaceId: string, label: string) {
+    const updated = await api.renameSpace(spaceId, label)
+    spaces.value = spaces.value.map(space => space.id === spaceId ? updated : space)
+    if (verdicts.value[spaceId]) verdicts.value = { ...verdicts.value, [spaceId]: { ...verdicts.value[spaceId]!, label: updated.label } }
+    await loadStatus()
+  }
+  async function deleteSpace(spaceId: string) {
+    await api.deleteSpace(spaceId)
+    spaces.value = spaces.value.filter(space => space.id !== spaceId)
+    const { [spaceId]: removed, ...remaining } = verdicts.value
+    verdicts.value = remaining
+    await reload()
+  }
+
   function replaceZone(updated: ParkingZone) {
     const list = zones.value[updated.cameraId]
     if (list) zones.value = { ...zones.value, [updated.cameraId]: list.map((zone) => (zone.id === updated.id ? { ...zone, ...updated } : zone)) }
@@ -258,6 +300,7 @@ export function useParking(options: UseParkingOptions = {}) {
     })
     // First connect and every reconnect: messages may have been missed, so resync from REST.
     watch(options.realtime.connection, (state, previous) => {
+      if (state !== 'open') { reportReady.value = false; statusRequest++ }
       if (state === 'open' && previous !== 'open') void loadStatus()
     })
   }
@@ -269,19 +312,23 @@ export function useParking(options: UseParkingOptions = {}) {
   }
 
   onMounted(() => {
+    clock = setInterval(() => { now.value = Date.now() }, 1000)
     void reload()
-    // Server: REST on load and on every /ws (re)connect, then `parking.status_updated`. Mock has no /ws.
-    if (api.kind === 'mock') intervalId = setInterval(() => void loadStatus(), STATUS_REFRESH_MS)
+    // The relay emits only state/topology changes, not a heartbeat. REST confirms
+    // unchanged readings too, so quiet cameras are not mistaken for expired data.
+    intervalId = setInterval(() => { if (!disconnected.value) void loadStatus() }, STATUS_REFRESH_MS)
   })
 
   onUnmounted(() => {
     if (intervalId) clearInterval(intervalId)
+    if (clock) clearInterval(clock)
     stopMessages?.()
   })
 
   return {
     api, spaces: sortedSpaces, spaceLabels, zones, zoneStates, zoneStatuses, summaries, summaryBySpace, totals,
     loading, error, statusError, calibrated, cameraCounts, applyZones, createSpace, calibrate, loadSpaces, ensureCameras, reload,
+    now, lastReportAt, disconnected, delayed, staleZoneIds, renameSpace, deleteSpace,
   }
 }
 

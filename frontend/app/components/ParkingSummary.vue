@@ -4,7 +4,10 @@ import type { ParkingCounts } from '~/types/parking'
 const props = withDefaults(defineProps<{
   counts: ParkingCounts
   compact?: boolean
-}>(), { compact: false })
+  interactive?: boolean
+  selected?: string
+}>(), { compact: false, interactive: false, selected: 'all' })
+const emit = defineEmits<{ select: [status: 'all' | 'occupied' | 'empty' | 'unknown'] }>()
 
 const items = computed(() => [
   { key: 'total', label: 'Total', value: props.counts.total, dot: 'ring-1 ring-inset ring-white/40' },
@@ -28,11 +31,15 @@ const description = computed(() => items.value.map((item) => `${item.label} ${it
   <div v-else class="@container">
     <dl class="grid grid-cols-2 gap-2 @sm:grid-cols-4" :aria-label="'Parking spaces: ' + description">
       <div v-for="item in items" :key="item.key" class="glass-panel rounded-xl px-3 py-2.5">
-        <dt class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
+        <button v-if="interactive" type="button" class="-mx-3 -my-2.5 block w-[calc(100%+1.5rem)] rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-ring" :class="selected === (item.key === 'total' ? 'all' : item.key) ? 'bg-primary/10 ring-1 ring-primary/40' : ''" :aria-pressed="selected === (item.key === 'total' ? 'all' : item.key)" :aria-label="`Show ${item.key === 'total' ? 'all' : item.label.toLowerCase()} spaces (${item.value})`" @click="emit('select', item.key === 'total' ? 'all' : item.key as 'occupied' | 'empty' | 'unknown')">
+          <span class="flex items-center gap-1.5 text-xs text-muted-foreground"><span :class="['size-1.5 shrink-0 rounded-full', item.dot]" />{{ item.label }}</span>
+          <span class="mt-1 block font-mono text-xl font-semibold tabular-nums">{{ item.value }}</span>
+        </button>
+        <dt v-if="!interactive" class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
           <span :class="['size-1.5 shrink-0 rounded-full', item.dot]" />
           {{ item.label }}
         </dt>
-        <dd class="mt-1 font-mono text-xl font-semibold tabular-nums">{{ item.value }}</dd>
+        <dd v-if="!interactive" class="mt-1 font-mono text-xl font-semibold tabular-nums">{{ item.value }}</dd>
       </div>
     </dl>
   </div>

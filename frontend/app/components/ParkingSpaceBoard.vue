@@ -13,7 +13,10 @@ const props = withDefaults(defineProps<{
   cameraNames: Record<string, string>
   /** Marks this camera's view (the editor's camera). */
   currentCameraId?: string | null
+  reasons?: Record<string, string | null>
+  selectable?: boolean
 }>(), { currentCameraId: null })
+const emit = defineEmits<{ select: [spaceId: string] }>()
 
 const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
 </script>
@@ -26,7 +29,8 @@ const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
       :class="['py-3 pr-1', summary.conflict ? 'border-l-2 border-l-amber-400/70 pl-3' : 'pl-1']"
     >
       <div class="flex items-center gap-2.5">
-        <span class="min-w-0 truncate font-mono text-sm font-semibold">{{ summary.space.label }}</span>
+        <button v-if="selectable" type="button" class="min-w-0 truncate rounded font-mono text-sm font-semibold underline-offset-4 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring" :aria-label="`Compare cameras for ${summary.space.label}`" @click="emit('select', summary.space.id)">{{ summary.space.label }}</button>
+        <span v-else class="min-w-0 truncate font-mono text-sm font-semibold">{{ summary.space.label }}</span>
         <Badge
           v-if="summary.conflict"
           variant="outline"
@@ -49,7 +53,7 @@ const cameraName = (cameraId: string) => props.cameraNames[cameraId] ?? cameraId
           <ParkingStatusBadge :status="zone.status" :score="zone.score" />
         </li>
       </ul>
-      <p v-if="!summary.zones.length" class="mt-1.5 text-xs text-muted-foreground">No camera zone assigned.</p>
+      <p v-if="reasons?.[summary.space.id] || !summary.zones.length" class="mt-1.5 text-xs text-muted-foreground">{{ reasons?.[summary.space.id] ?? 'No camera zone assigned' }}</p>
     </li>
   </ul>
 </template>

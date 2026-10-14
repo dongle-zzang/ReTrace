@@ -3,6 +3,11 @@ import { CircleAlert, RefreshCw, SquareParking } from '@lucide/vue'
 import CameraCard from '~/components/CameraCard.vue'
 import ParkingSpaceBoard from '~/components/ParkingSpaceBoard.vue'
 import ParkingSummary from '~/components/ParkingSummary.vue'
+import ParkingComparisonDialog from '~/components/ParkingComparisonDialog.vue'
+import ParkingLabelManager from '~/components/ParkingLabelManager.vue'
+import ParkingCalibrationManager from '~/components/ParkingCalibrationManager.vue'
+import { Input } from '~/components/ui/input'
+import { filterParkingSpaces, unknownReason, type SpaceFilter } from '~/lib/parkingOperations'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
@@ -31,12 +36,20 @@ const parkingCameras = computed(() => cameras.value
 const cameraNames = computed(() => Object.fromEntries(cameras.value.map((camera) => [camera.camera_id, camera.name])))
 const conflictSummaries = computed(() => parking.summaries.value.filter((summary) => summary.conflict))
 const conflictSpaceIds = computed(() => conflictSummaries.value.flatMap((summary) => summary.spaceIds))
-const showConflictsOnly = ref(false)
-const boardSummaries = computed(() =>
-  showConflictsOnly.value ? parking.summaries.value.filter((summary) => summary.conflict) : parking.summaries.value)
-
-watch(conflictSpaceIds, (ids) => {
-  if (!ids.length) showConflictsOnly.value = false
+const filter = ref<SpaceFilter>('all'), search = ref('')
+const allZones = computed(() => Object.values(parking.zones.value).flat())
+const boardSummaries = computed(() => filterParkingSpaces(parking.summaries.value, search.value, filter.value, allZones.value))
+const offlineCameraIds = computed(() => new Set(cameras.value.filter(camera => !camera.enabled || !['online', 'degraded'].includes(String(statuses.value[camera.camera_id]?.state ?? camera.status.state)) || (!statuses.value[camera.camera_id] && camera.status.stale)).map(camera => camera.camera_id)))
+const reasons = computed(() => Object.fromEntries(parking.summaries.value.map(row => [row.space.id, unknownReason(row, parking.disconnected.value, parking.delayed.value || row.zones.some(zone => parking.staleZoneIds.value.has(zone.zoneId)), offlineCameraIds.value)])))
+const comparisonOpen = ref(false), labelManagerOpen = ref(false), calibrationOpen = ref(false)
+const selectedSpaceId = ref<string | null>(null)
+const selectedSummary = computed(() => selectedSpaceId.value ? parking.summaryBySpace.value[selectedSpaceId.value] ?? null : null)
+function compare(id: string) { selectedSpaceId.value = id; comparisonOpen.value = true }
+const missingBaselines = computed(() => allZones.value.filter(zone => zone.calibrated !== true).length)
+const freshnessText = computed(() => {
+  if (parking.disconnected.value) return 'Server disconnected · readings unavailable'
+  if (parking.delayed.value) return 'Waiting for fresh parking status'
+  return parking.lastReportAt.value ? `Status received ${Math.max(0, Math.floor((parking.now.value - parking.lastReportAt.value) / 1000))}s ago` : 'Waiting for parking status'
 })
 
 function enterDelay(index: number, step = 70, base = 0) {
@@ -57,12 +70,18 @@ function enterDelay(index: number, step = 70, base = 0) {
           </div>
         </div>
         <div class="w-full lg:w-[34rem]">
-          <ParkingSummary :counts="parking.totals.value" />
+          <ParkingSummary :counts="parking.totals.value" interactive :selected="filter" @select="filter = $event" />
         </div>
       </div>
     </div>
 
     <section aria-label="Parking" class="mx-auto max-w-[1500px] px-5 pt-8 pb-16 sm:px-8 lg:px-10">
+      <div class="mb-6 flex flex-wrap items-center gap-2">
+        <p class="mr-auto text-xs" :class="parking.disconnected.value || parking.delayed.value ? 'text-amber-300' : 'text-muted-foreground'" role="status">{{ freshnessText }}</p>
+        <Button size="sm" variant="outline" @click="calibrationOpen = true">Empty baselines <span class="tabular-nums text-muted-foreground">{{ missingBaselines }}</span></Button>
+        <Button size="sm" variant="outline" @click="labelManagerOpen = true">Manage labels</Button>
+        <Button size="sm" variant="outline" :disabled="parking.loading.value" @click="parking.reload()">Refresh status</Button>
+      </div>
       <Alert v-if="error" variant="destructive" class="motion-safe:animate-fade-up mb-8 border-destructive/30 bg-destructive/10 px-4 py-3">
         <CircleAlert />
         <AlertTitle>Couldn't load cameras</AlertTitle>
@@ -146,13 +165,18 @@ function enterDelay(index: number, step = 70, base = 0) {
             <Button
               v-if="conflictSpaceIds.length"
               size="sm"
-              :variant="showConflictsOnly ? 'secondary' : 'ghost'"
+              :variant="filter === 'check' ? 'secondary' : 'ghost'"
               class="ml-auto h-7 gap-1.5 text-amber-300"
-              :aria-pressed="showConflictsOnly"
-              @click="showConflictsOnly = !showConflictsOnly"
+              :aria-pressed="filter === 'check'"
+              @click="filter = filter === 'check' ? 'all' : 'check'"
             >
               {{ conflictSummaries.length }} to check
             </Button>
+          </div>
+          <div class="mb-3 space-y-2">
+            <Input v-model="search" type="search" aria-label="Search parking labels" placeholder="Search labels" />
+            <div class="flex flex-wrap gap-1.5"><Button v-for="option in ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</Button></div>
+            <p class="text-xs text-muted-foreground">{{ boardSummaries.length }} of {{ parking.summaries.value.length }} spaces</p>
           </div>
           <div v-if="parking.loading.value" class="space-y-2">
             <Skeleton v-for="item in 4" :key="item" class="h-14 w-full" />
@@ -160,12 +184,16 @@ function enterDelay(index: number, step = 70, base = 0) {
           <p v-else-if="!parking.summaries.value.length" class="border-t border-white/10 py-6 text-sm text-muted-foreground">
             No labelled zones yet. Open a camera with the P button to draw zones.
           </p>
-          <div v-else class="parking-scroll max-h-[calc(100dvh-12rem)] overflow-y-auto pr-2">
-            <ParkingSpaceBoard :summaries="boardSummaries" :camera-names="cameraNames" />
+          <div v-else class="parking-scroll max-h-[max(12rem,calc(100dvh-23rem))] overflow-y-auto pr-2">
+            <ParkingSpaceBoard :summaries="boardSummaries" :camera-names="cameraNames" :reasons="reasons" selectable @select="compare" />
+            <p v-if="!boardSummaries.length" class="py-6 text-sm text-muted-foreground">No spaces match this search or filter.</p>
           </div>
         </aside>
       </div>
     </section>
+    <ParkingComparisonDialog v-model:open="comparisonOpen" :summary="selectedSummary" :cameras="cameras" :zones="parking.zones.value" :labels="parking.spaceLabels.value" :zone-statuses="parking.zoneStatuses.value" :realtime-client="realtimeClient" :connection="connection" :statuses="statuses" :reason="selectedSummary ? reasons[selectedSummary.space.id] : null" />
+    <ParkingLabelManager v-model:open="labelManagerOpen" :spaces="parking.spaces.value" :zones="allZones" :camera-names="cameraNames" :rename="parking.renameSpace" :remove="parking.deleteSpace" />
+    <ParkingCalibrationManager v-model:open="calibrationOpen" :zones="allZones" :labels="parking.spaceLabels.value" :camera-names="cameraNames" :statuses="parking.zoneStatuses.value" :calibrate="parking.calibrate" @compare="compare" />
   </main>
 </template>
 

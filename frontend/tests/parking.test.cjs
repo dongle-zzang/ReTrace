@@ -290,6 +290,33 @@ test('HTTP API uses the /api/parking spaces, zones and status endpoints', async 
   ])
 })
 
+test('label management API renames shared labels and rejects deleting used labels', async () => {
+  const mock = api.createMockParkingApi({ storage: null, latencyMs: 0 })
+  const before = await mock.listZones('b1_parking_overview')
+  const used = before[0].parkingSpaceId
+  const renamed = await mock.renameSpace(used, 'Renamed')
+  assert.equal(renamed.label, 'Renamed')
+  assert.deepEqual(plain(await mock.listZones('b1_parking_overview')), plain(before))
+  await assert.rejects(mock.deleteSpace(used), error => error.code === 'invalid')
+  const unused = await mock.createSpace('Unused')
+  await assert.rejects(mock.renameSpace(unused.id, 'renamed'), error => error.code === 'duplicate')
+  await mock.deleteSpace(unused.id)
+  assert.equal((await mock.listSpaces()).some(space => space.id === unused.id), false)
+})
+
+test('HTTP label item requests preserve ID and surface server deletion conflicts', async () => {
+  const calls = []
+  const http = api.createHttpParkingApi(async (url, options) => { calls.push({ url, ...options }); return { id: 'shared', label: 'New' } })
+  assert.equal((await http.renameSpace('shared', ' New ')).id, 'shared')
+  await http.deleteSpace('unused')
+  assert.equal(calls[0].url, '/api/parking/spaces/shared')
+  assert.equal(calls[0].method, 'PATCH')
+  assert.equal(calls[0].body.label, 'New')
+  assert.equal(calls[1].method, 'DELETE')
+  const conflicting = api.createHttpParkingApi(async () => { throw { statusCode: 409 } })
+  await assert.rejects(conflicting.deleteSpace('shared'), error => error.code === 'invalid')
+})
+
 test('HTTP createSpace maps 409 to duplicate; a missing endpoint is reported as not found', async () => {
   const conflict = api.createHttpParkingApi(async () => { throw Object.assign(new Error('conflict'), { statusCode: 409 }) })
   await assert.rejects(conflict.createSpace('A-01'), error => error.code === 'duplicate')
