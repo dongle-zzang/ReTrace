@@ -11,7 +11,7 @@ const items = computed(() => [
   { to: '/parking', label: t('Parking'), shortLabel: t('Parking'), match: (path: string) => path === '/parking' || /^\/cameras\/[^/]+\/parking\/?$/.test(path) },
   { to: '/datasets', label: t('AI Datasets'), shortLabel: t('Datasets'), match: (path: string) => path === '/datasets' || path.startsWith('/datasets/') },
   { to: '/training', label: t('AI Training'), shortLabel: t('Train'), match: (path: string) => path === '/training' },
-  { to: '/', label: t('CCTV Monitoring'), shortLabel: t('Monitoring'), match: (path: string) => path === '/' },
+  { to: '/monitoring', label: t('CCTV Monitoring'), shortLabel: t('Monitoring'), match: (path: string) => path === '/monitoring' },
 ])
 
 // Sliding active pill: moves on click (before the route resolves) and follows the route after.
@@ -52,7 +52,7 @@ const dateLabel = computed(() => now.value.toLocaleDateString(dateLocale.value, 
       :aria-label="t('Main')"
       class="mx-auto grid h-14 max-w-[1500px] grid-cols-[auto_1fr] items-center gap-3 rounded-2xl bg-white/[0.03] px-2.5 shadow-[0_10px_40px_-16px_rgb(0_0_0/0.45)] backdrop-blur-xl sm:grid-cols-[1fr_auto_1fr] sm:px-3"
     >
-      <NuxtLink to="/" class="flex items-center gap-2 justify-self-start rounded-lg px-1.5 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+      <NuxtLink to="/parking" class="flex items-center gap-2 justify-self-start rounded-lg px-1.5 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
         <span class="text-lg font-bold tracking-[-0.04em]">Re<span class="font-light">Trace</span></span>
       </NuxtLink>
 

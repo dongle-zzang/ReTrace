@@ -33,10 +33,16 @@ function message(cause: unknown) {
 
 export async function trainingRequest<T>(path: string, options: { method?: 'GET' | 'POST'; body?: object; auth?: boolean } = {}): Promise<T> {
   readToken()
+  const method = options.method ?? 'GET'
+  // The Preview proxy rejects a POST without a JSON body (415), so body-less calls (/auth, /stop) send {}.
+  const body = method === 'POST' ? options.body ?? {} : options.body
   try {
     return await $fetch<T>('/api/training' + path, {
-      method: options.method ?? 'GET', body: options.body, retry: 0,
-      headers: options.auth && token.value ? { Authorization: `Bearer ${token.value}` } : undefined,
+      method, body, retry: 0,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.auth && token.value ? { Authorization: `Bearer ${token.value}` } : {}),
+      },
     })
   } catch (cause) {
     const error = new Error(message(cause)) as Error & { status?: number }
