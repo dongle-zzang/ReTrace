@@ -83,6 +83,11 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 [AI 데이터셋 계약](../docs/datasets.md)을 따릅니다. 핵심 구현은 `DatasetBoxEditor.vue`,
 `pages/datasets/`, `composables/datasetApi.ts`, `types/dataset.ts`입니다.
 
+내비게이션 `AI Training` → `/training`에서 데이터셋 export 선택·적합성 확인, 학습 설정·시작·중지, 진행(epoch·loss·mAP·GPU·로그),
+기존 모델과의 같은 test 이미지 비교, 모델 registry를 제공합니다. 시작·중지·다운로드는 서버 `TRAINING_ADMIN_TOKEN`을 입력해야 하며
+토큰은 sessionStorage에만 둡니다. 계약은 [웹 fine-tuning](../docs/training.md), 구현은 `pages/training.vue`,
+`components/Training*.vue`, `composables/trainingApi.ts`, `lib/training.ts`입니다.
+
 ## 정적 배포
 
 ```powershell
