@@ -17,7 +17,7 @@ from sqlalchemy import select
 from backend.app.db import CameraStatus, make_engine
 from backend.app.main import create_app
 from backend.app.settings import Settings
-from backend.app.training import estimate_vram_mib, inspect_archive, required_free_mib
+from backend.app.training import estimate_vram_mib, inspect_archive, metric_point, required_free_mib
 from backend.app.training_models import TrainingJob
 
 ADMIN = {'Authorization': 'Bearer ' + 'a' * 32}
@@ -98,7 +98,9 @@ def test_options_status_and_vram_policy(training):
     client, app, _ = training
     options = client.get('/api/training/options').json()
     assert options['defaults'] == {'epochs': 50, 'imgsz': 640, 'batch': 4, 'seed': 42, 'patience': 15,
-                                   'device': 'gpu', 'class_mode': 'vehicle3', 'base_model_id': 'yolo11m-coco'}
+                                   'device': 'gpu', 'class_mode': 'vehicle3', 'base_model_id': 'yolo11m-coco',
+                                   'train_mode': 'standard'}
+    assert set(options['train_modes']) == {'standard', 'all'}
     assert options['control_enabled'] and options['max_concurrent_jobs'] == 1
     status = client.get('/api/training/status').json()
     assert status['worker']['online'] is False and status['gpu_ready'] is False
@@ -395,3 +397,124 @@ def test_snapshot_survives_export_deletion(training):
     assert client.delete(f'/api/datasets/exports/{export["id"]}').status_code == 204
     download = client.get(f'/api/training/worker/jobs/{job["id"]}/dataset', headers=WORKER)
     assert download.status_code == 200 and hashlib.sha256(download.content).hexdigest() == spec['dataset_sha256']
+
+
+def finish_training(client, job_id, train_all=False, best=b'weights'):
+    upload(client, job_id, 'best.pt', best)
+    rows = [{'epoch': 1.0, 'train/box_loss': 1.0, 'metrics/mAP50-95(B)': .3, 'val/box_loss': 1.2},
+            {'epoch': 2.0, 'train/box_loss': .8, 'metrics/mAP50-95(B)': .9, 'val/box_loss': .4}]
+    evaluation = ({'status': 'skipped', 'reason': 'Train All'} if train_all else
+                  {'status': 'completed', 'metrics': {'images': 1, 'models': {'new': {'vehicle': {'mAP50': .5}}}}})
+    response = client.post(f'/api/training/worker/jobs/{job_id}/finish', headers=WORKER, json={
+        'worker_id': 'w1', 'status': 'completed', 'metrics_rows': rows, 'evaluation': evaluation,
+        'run_info': {'names': {'2': 'car'}, 'final_batch': 4}})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_train_all_mode_uses_every_split_and_hides_training_fit(training):
+    client, app, state = training
+    single = make_export(client, state, sessions=1)  # no val split: blocked for standard, allowed for Train All
+    standard = client.get(f'/api/training/datasets/{single["id"]}/check').json()
+    assert standard['readiness'] == 'blocked' and standard['train_mode'] == 'standard'
+    check = client.get(f'/api/training/datasets/{single["id"]}/check?train_mode=all').json()
+    assert check['readiness'] == 'limited' and check['errors'] == [] and check['train_mode'] == 'all'
+    assert any('no independent' in item for item in check['limits'])
+    listed = client.get('/api/training/datasets').json()[0]
+    assert listed['readiness_by_mode'] == {'standard': 'blocked', 'all': 'limited'}
+    beat(client, started=True)
+    assert create(client, single, train_mode='all', class_mode='single', acknowledge_limits=True).status_code == 422
+    assert create(client, single, train_mode='all').status_code == 422  # limitation must be confirmed
+    assert create(client, single, train_mode='bogus', acknowledge_limits=True).status_code == 422
+    job, spec = run_until_claimed(client, app, single, train_mode='all', epochs=40)
+    assert spec['config']['train_mode'] == 'all' and spec['config']['kind'] == 'train'
+    assert spec['config']['early_stopping'] is False and spec['config']['weights_selection'] == 'final_epoch'
+    assert job['config']['train_mode'] == 'all' and job['dataset_summary']['train_mode'] == 'all'
+    rows = [{'epoch': 1.0, 'train/box_loss': 1.0, 'metrics/mAP50(B)': .99, 'val/box_loss': .1}]
+    beat(client, job={'id': job['id'], 'phase': 'training', 'metrics_rows': rows, 'metrics_offset': 0})
+    latest = client.get(f'/api/training/jobs/{job["id"]}').json()['latest']
+    assert latest['train_loss'] == 1.0 and latest['map50'] is None and latest['val_loss'] is None
+    done = finish_training(client, job['id'], train_all=True)
+    assert done['status'] == 'completed' and done['best']['map50_95'] is None
+    model = next(m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned')
+    assert model['config']['train_mode'] == 'all' and model['config']['weights_selection'] == 'final_epoch'
+    assert model['config']['train_images'] == 1
+    assert model['metrics']['val'] is None and model['metrics']['test'] is None
+    assert model['evaluation_conclusive'] is False
+
+
+def test_metric_point_drops_validation_for_train_all():
+    row = {'epoch': 3.0, 'train/box_loss': 1.0, 'val/box_loss': 2.0, 'metrics/mAP50(B)': .8}
+    assert metric_point(row)['map50'] == .8 and metric_point(row)['val_loss'] == 2.0
+    assert metric_point(row, True)['map50'] is None and metric_point(row, True)['train_loss'] == 1.0
+
+
+def test_new_image_evaluation_excludes_trained_images_and_sessions(training):
+    client, app, state = training
+    old = make_export(client, state, sessions=4)
+    beat(client, started=True)
+    job, _ = run_until_claimed(client, app, old, train_mode='all')
+    finish_training(client, job['id'], train_all=True)
+    model = next(m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned')
+    # Same export: everything was trained on, nothing is new.
+    plan = client.get(f'/api/training/evaluations/plan?model_id={model["id"]}&export_id={old["id"]}').json()
+    assert plan['readiness'] == 'blocked' and plan['eligible'] == 0 and plan['excluded_trained'] == 4
+    assert client.post('/api/training/evaluations', headers=ADMIN, json={
+        'model_id': model['id'], 'export_id': old['id'], 'acknowledge_limits': True}).status_code == 422
+    # New captures: 1 frame chained to the last trained session (excluded) plus 2 new sessions.
+    trained = {item['id'] for item in client.get('/api/datasets/images').json()['items']}
+    for hours, minute in ((3, 5), (10, 0), (12, 0)):
+        state['timestamp'] = T0 + timedelta(hours=hours, minutes=minute)
+        image = client.post('/api/datasets/capture', json={'camera_id': 'first'}).json()
+        client.put(f'/api/datasets/images/{image["id"]}/annotations', json={'revision': image['revision'], 'status': 'reviewed',
+                   'boxes': [{'id': str(uuid4()), 'class_id': 0, 'x': 5, 'y': 5, 'width': 30, 'height': 20}]})
+    new = client.post('/api/datasets/exports', json={'seed': 7}).json()
+    for _ in range(200):
+        if next(e for e in client.get('/api/datasets/exports').json() if e['id'] == new['id'])['status'] == 'ready':
+            break
+        time.sleep(.02)
+    plan = client.get(f'/api/training/evaluations/plan?model_id={model["id"]}&export_id={new["id"]}').json()
+    assert (plan['total'], plan['eligible'], plan['excluded_trained'], plan['excluded_same_session']) == (7, 2, 4, 1)
+    assert plan['readiness'] == 'limited' and plan['sessions'] == 2 and 'image_ids' not in plan
+    assert client.get(f'/api/training/evaluations/plan?model_id=yolo11m-coco&export_id={new["id"]}').status_code == 409
+    body = {'model_id': model['id'], 'export_id': new['id']}
+    assert client.post('/api/training/evaluations', json=body).status_code == 401
+    assert client.post('/api/training/evaluations', headers=ADMIN, json=body).status_code == 422
+    created = client.post('/api/training/evaluations', headers=ADMIN, json={**body, 'acknowledge_limits': True})
+    assert created.status_code == 201, created.text
+    evaluation = created.json()
+    assert evaluation['config']['kind'] == 'evaluate' and evaluation['config']['eval_images'] == 2
+    assert 'eval_image_ids' not in evaluation['config'] and evaluation['base_model_id'] == model['id']
+    spec = client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'}).json()
+    assert spec['config']['kind'] == 'evaluate' and len(spec['config']['eval_image_ids']) == 2
+    assert spec['base_model']['id'] == model['id'] and spec['base_model']['kind'] == 'finetuned'
+    assert not trained & set(spec['config']['eval_image_ids'])
+    metrics = {'images': 2, 'gt_boxes': 2, 'dataset_warnings': [], 'models': {
+        'baseline': {'vehicle': {'mAP50': .4}, 'operating_point': {'recall': .5}},
+        'new': {'vehicle': {'mAP50': .7}, 'operating_point': {'recall': 1.0}}}}
+    finish = client.post(f'/api/training/worker/jobs/{spec["id"]}/finish', headers=WORKER, json={
+        'worker_id': 'w1', 'status': 'completed', 'evaluation': {'status': 'completed', 'metrics': metrics}})
+    assert finish.status_code == 200 and finish.json()['status'] == 'completed' and finish.json()['model_id'] is None
+    detail = client.get(f'/api/training/jobs/{spec["id"]}').json()
+    assert detail['evaluation']['conclusive'] is False
+    assert any('Only 2 test images' in c for c in detail['evaluation']['caveats'])
+    models = client.get('/api/training/models').json()
+    assert sum(m['kind'] == 'finetuned' for m in models) == 1  # evaluation never registers a model
+    tuned = next(m for m in models if m['kind'] == 'finetuned')
+    entry = tuned['metrics']['new_images'][-1]
+    assert entry['job_id'] == spec['id'] and entry['images'] == 2 and entry['new']['vehicle']['mAP50'] == .7
+    assert entry['excluded'] == {'trained': 4, 'same_session': 1, 'export_total': 7}
+
+
+def test_retraining_from_a_model_that_saw_the_test_split_is_not_independent(training):
+    client, app, state = training
+    export = make_export(client, state, sessions=4)
+    beat(client, started=True)
+    job, _ = run_until_claimed(client, app, export, train_mode='all')
+    finish_training(client, job['id'], train_all=True)
+    model = next(m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned')
+    retrain, _ = run_until_claimed(client, app, export, base_model_id=model['id'])
+    assert retrain['dataset_summary']['test_overlap'] == retrain['dataset_summary']['counts']['test'] >= 1
+    finish_training(client, retrain['id'])
+    caveats = client.get(f'/api/training/jobs/{retrain["id"]}').json()['evaluation']['caveats']
+    assert any('not independent' in c for c in caveats)

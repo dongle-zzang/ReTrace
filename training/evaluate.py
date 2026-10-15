@@ -231,10 +231,14 @@ def main(argv=None):
     p.add_argument("--out", type=Path)
     p.add_argument("--predictions-json", type=Path,
                    help="also write per-image GT/TP/FP/missed boxes (pixel xyxy) per model for the web comparison")
+    p.add_argument("--eval-only", action="store_true",
+                   help="dataset holds only evaluation images (new CCTV captures); an empty train split is expected")
     args = p.parse_args(argv)
 
     root = check_dataset.find_dataset_root(args.data.resolve())
     report = check_dataset.check(root)
+    if args.eval_only:
+        report["errors"] = [e for e in report["errors"] if e != "train: no images"]
     if report["errors"]:
         print("\n".join(["Dataset errors; fix before evaluating:"] + report["errors"][:20]))
         return 1

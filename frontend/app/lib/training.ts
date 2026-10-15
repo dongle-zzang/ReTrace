@@ -104,3 +104,19 @@ export function deltaLabel(next: number | null | undefined, base: number | null 
   const delta = next - base
   return `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}`
 }
+
+export interface JobLike { status: string; export_id: string; created_at: string; name: string; config: { kind?: string; train_mode?: string; smoke?: boolean }; best: { epoch: number; map50_95: number | null } | null }
+
+// Train All has no validation to stop on, so its epoch count should come from a standard run on the
+// same data: the epoch where validation mAP50-95 peaked (the latest such run wins).
+export function suggestedTrainAllEpochs(jobs: JobLike[], exportId: string) {
+  const runs = jobs.filter(job => job.status === 'completed' && job.export_id === exportId && (job.config.kind ?? 'train') === 'train'
+    && (job.config.train_mode ?? 'standard') === 'standard' && !job.config.smoke && job.best && typeof job.best.map50_95 === 'number')
+  runs.sort((a, b) => b.created_at.localeCompare(a.created_at))
+  const run = runs[0]
+  return run?.best ? { epoch: run.best.epoch, name: run.name } : null
+}
+
+export function jobKind(config: { kind?: string; train_mode?: string }) {
+  return config.kind === 'evaluate' ? 'evaluate' : config.train_mode === 'all' ? 'all' : 'standard'
+}
