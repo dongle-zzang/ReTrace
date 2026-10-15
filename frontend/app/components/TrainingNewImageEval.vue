@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { AlertTriangle, Ban, Camera, LoaderCircle, Play } from '@lucide/vue'
+import { AlertTriangle, Ban, LoaderCircle, Play } from '@lucide/vue'
 import DatasetSelect from '~/components/DatasetSelect.vue'
+import LockedOverlay from '~/components/LockedOverlay.vue'
 import { Button } from '~/components/ui/button'
 import { trainingRequest } from '~/composables/trainingApi'
 import { useI18n } from '~/composables/useI18n'
@@ -67,9 +68,10 @@ async function start() {
 </script>
 
 <template>
-  <section class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Evaluate on new CCTV images')">
+  <section class="relative space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :inert="!canControl" :aria-label="t('Evaluate on new CCTV images')">
+    <LockedOverlay v-if="!canControl" />
     <div class="space-y-1">
-      <h2 class="flex items-center gap-2 text-sm font-semibold"><Camera class="size-4 text-primary" /> {{ t('Evaluate on new CCTV images') }}</h2>
+      <h2 class="text-sm font-semibold">{{ t('Evaluate on new CCTV images') }}</h2>
       <p class="text-xs text-muted-foreground">{{ t('Capture and label new images in AI Datasets, then create a new export. Images the model trained on, and frames from the same capture sessions, are left out automatically, so the score is independent.') }}</p>
     </div>
     <p v-if="!evaluable.length" class="rounded-xl border border-dashed border-white/15 py-6 text-center text-sm text-muted-foreground">{{ t('No fine-tuned model yet. Train one first.') }}</p>
@@ -87,8 +89,8 @@ async function start() {
           <div class="rounded-xl border border-white/10 bg-black/10 p-3"><dt class="text-muted-foreground">{{ t('Left out: same capture session') }}</dt><dd class="font-mono text-lg tabular-nums">{{ plan.excluded_same_session }}</dd></div>
           <div class="rounded-xl border border-white/10 bg-black/10 p-3"><dt class="text-muted-foreground">{{ t('Sessions · cameras · boxes') }}</dt><dd class="font-mono text-lg tabular-nums">{{ plan.sessions }} · {{ plan.cameras }} · {{ plan.boxes }}</dd></div>
         </dl>
-        <ul v-if="plan.errors.length" class="space-y-1 text-xs text-red-300"><li v-for="item in plan.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
-        <ul v-if="plan.limits.length" class="space-y-1 text-xs text-amber-200"><li v-for="item in plan.limits" :key="item" class="flex gap-2"><AlertTriangle class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
+        <ul v-if="plan.errors.length" class="space-y-1 text-xs text-red-300"><li v-for="item in plan.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-3.5 shrink-0" />{{ t(item) }}</li></ul>
+        <ul v-if="plan.limits.length" class="space-y-1 text-xs text-amber-200"><li v-for="item in plan.limits" :key="item" class="flex gap-2"><AlertTriangle class="mt-0.5 size-3.5 shrink-0" />{{ t(item) }}</li></ul>
         <label v-if="plan.readiness === 'limited'" class="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-100"><input v-model="acknowledge" type="checkbox" class="mt-0.5 accent-amber-300"> {{ t('I understand these limitations. The result is a first check, not a confirmed improvement.') }}</label>
       </template>
       <div class="flex flex-wrap items-center gap-3">
