@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, CircleCheck, Download, LoaderCircle, Square } from '@lucide/vue'
+import { AlertTriangle, Download, LoaderCircle, Square } from '@lucide/vue'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import TrainingChart from '~/components/TrainingChart.vue'
@@ -14,6 +14,13 @@ const emit = defineEmits<{ stop: []; download: [name: string, url: string]; eval
 
 const { t } = useI18n()
 const active = computed(() => isActiveStatus(props.job.status))
+// Server messages are English; a protection stop joins several guard reasons after a fixed prefix.
+const PROTECTION_PREFIX = 'Production protection: '
+function serverText(text: string | null | undefined) {
+  if (!text) return ''
+  if (!text.startsWith(PROTECTION_PREFIX)) return t(text)
+  return t('Production protection: {reasons}', { reasons: text.slice(PROTECTION_PREFIX.length).split('; ').map(reason => t(reason)).join('; ') })
+}
 const evaluating = computed(() => props.job.config.kind === 'evaluate')
 // Train All validates (if at all) on its own training images: only the training loss is shown.
 const trainAll = computed(() => props.job.config.train_mode === 'all')
@@ -93,7 +100,7 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
 
     <div v-if="job.error || job.stop_reason" :class="['flex gap-3 rounded-xl border p-3 text-sm', job.status === 'failed' ? 'border-red-400/20 bg-red-400/5 text-red-300' : 'border-amber-300/20 bg-amber-300/5 text-amber-200']" role="alert">
       <AlertTriangle class="mt-0.5 size-4 shrink-0" />
-      <div class="space-y-1"><p>{{ job.error || job.stop_reason }}</p><p v-if="job.error_code" class="font-mono text-xs opacity-70">{{ job.error_code }}</p></div>
+      <div class="space-y-1"><p>{{ serverText(job.error || job.stop_reason) }}</p><p v-if="job.error_code" class="font-mono text-xs opacity-70">{{ job.error_code }}</p></div>
     </div>
 
     <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-xs text-sky-200">{{ t('Train All: train, val and test images all trained the weights, so there is no independent validation or test in this run. Early stopping is off, the final epoch is the result (best.pt = last.pt), and scores on training images are not shown.') }}</p>
@@ -118,7 +125,7 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
       <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('GPU total') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.used_mib) }} / {{ formatMib(job.gpu?.total_mib) }} · {{ job.gpu?.util ?? '–' }}%</span></p>
       <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('Production FPS vs. before training') }}</span><span class="font-mono tabular-nums">{{ guardSample?.fps_ratio != null ? `${Math.round(guardSample.fps_ratio * 100)}%` : '–' }}</span><span class="text-muted-foreground"> · {{ guardSample?.total_fps ?? '–' }} fps · {{ t('max frame age') }} {{ guardSample?.max_frame_age ?? '–' }} s</span></p>
     </div>
-    <p v-if="job.monitor?.last_reasons?.length && active" class="text-xs text-amber-200">{{ t('Protection warning') }} ({{ job.monitor.violations }}/{{ job.monitor.limits?.guard_samples }}): {{ job.monitor.last_reasons.join('; ') }}</p>
+    <p v-if="job.monitor?.last_reasons?.length && active" class="text-xs text-amber-200">{{ t('Protection warning') }} ({{ job.monitor.violations }}/{{ job.monitor.limits?.guard_samples }}): {{ job.monitor.last_reasons.map(reason => t(reason)).join('; ') }}</p>
 
     <div v-if="!evaluating" :class="['grid gap-3', trainAll ? '' : 'lg:grid-cols-2']">
       <TrainingChart :title="t('Loss')" :points="job.metrics" :series="lossSeries" />
@@ -127,7 +134,7 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
 
     <section v-if="job.status === 'completed'" class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4" :aria-label="t('Results')">
       <div class="flex flex-wrap items-center gap-2">
-        <CircleCheck class="size-4 text-primary" /><h3 class="mr-auto text-sm font-semibold">{{ t('Results') }}</h3>
+        <h3 class="mr-auto text-sm font-semibold">{{ t('Results') }}</h3>
         <span v-if="job.best && !trainAll && !evaluating" class="text-xs text-muted-foreground">{{ t('Best validation epoch {epoch}', { epoch: job.best.epoch }) }} · mAP50-95 {{ formatMetric(job.best.map50_95) }}</span>
         <span v-else-if="trainAll" class="text-xs text-muted-foreground">{{ t('Final epoch {epoch} weights', { epoch: job.epoch }) }}</span>
       </div>
@@ -136,7 +143,7 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
       <template v-else>
         <div :class="['rounded-xl border p-3 text-sm', job.evaluation.conclusive ? 'border-primary/20 bg-primary/5 text-primary' : 'border-amber-300/20 bg-amber-300/5 text-amber-200']">
           <p class="font-medium">{{ job.evaluation.conclusive ? t('Independent test set is large enough to compare.') : t('Not enough independent test data: do not treat the difference as a confirmed improvement.') }}</p>
-          <ul class="mt-1 list-disc space-y-0.5 pl-5 text-xs opacity-90"><li v-for="caveat in job.evaluation.caveats ?? []" :key="caveat">{{ caveat }}</li></ul>
+          <ul class="mt-1 list-disc space-y-0.5 pl-5 text-xs opacity-90"><li v-for="caveat in job.evaluation.caveats ?? []" :key="caveat">{{ t(caveat) }}</li></ul>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full min-w-[40rem] text-left text-xs">

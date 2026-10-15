@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { Cctv, CircleAlert, RefreshCw, Search, SearchX, X } from '@lucide/vue'
+import { Cctv, RefreshCw, Search, SearchX, X } from '@lucide/vue'
 import CameraCard from '~/components/CameraCard.vue'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
@@ -129,16 +128,8 @@ function resetFilters() {
     </div>
 
     <section :aria-label="t('Cameras')" class="mx-auto max-w-[1500px] px-5 pt-6 pb-16 sm:px-8 lg:px-10">
-      <Alert v-if="error" variant="destructive" class="motion-safe:animate-fade-up mb-8 border-destructive/30 bg-destructive/10 px-4 py-3">
-        <CircleAlert />
-        <AlertTitle>{{ t("Couldn't load cameras") }}</AlertTitle>
-        <AlertDescription>{{ t(error) }}</AlertDescription>
-        <AlertAction class="top-1/2 -translate-y-1/2">
-          <Button size="sm" variant="outline" :disabled="refreshing" @click="refresh">{{ t('Retry') }}</Button>
-        </AlertAction>
-      </Alert>
-
-      <div v-if="loading" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" :aria-label="t('Loading cameras')">
+      <!-- A failed camera list keeps the loading skeleton; the 10 s refresh retries it. -->
+      <div v-if="loading || (error && !cameras.length)" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" :aria-label="t('Loading cameras')">
         <Card v-for="item in 6" :key="item" :style="enterDelay(item - 1)" class="gap-0 py-0 motion-safe:animate-fade-up">
           <Skeleton class="aspect-video w-full rounded-none" />
           <CardContent class="space-y-3 px-5 py-5">

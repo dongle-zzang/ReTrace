@@ -1,5 +1,13 @@
 # Frontend current work
 
+## UI polish (monitoring, datasets, training, parking) — branch claude/frontend-fix-wheqz0, merged to main, not deployed (2026-10-15)
+
+- Monitoring: camera-list load failure keeps the loading skeleton (no alert); the 10 s refresh retries.
+- Datasets: thumbnails draw label boxes (`DatasetThumbnail.vue`, boxes fetched from the image detail, cached by revision); status badge shows `N · status`; capture notice clears when the capture camera changes; header icons removed.
+- Training: card title icons and step numbers removed; token row label left / input right; class mode fixed to car/truck/bus; limits in one amber card; server-sent check/evaluation/job texts translated via `i18n.ko.ts` messages and patterns (exact-text match, so changed server wording falls back to English); token-gated cards blurred and inert with `LockedOverlay.vue` until unlocked.
+- Parking: hero removed; status/baselines/labels as cards; counts as compact text under Spaces.
+- Verified: npm test 52, typecheck, generate; headless Chromium against mocked/absent APIs. Not verified against the real server.
+
 ## Train All + new-image evaluation UI (/training) — branch claude/project-thread-3a3y0r, not deployed (2026-10-15)
 
 - Training mode selector (standard / Train All; Train All forces car/truck/bus, disables patience, suggests the best epoch of a standard run on the same export), per-mode dataset check, `TrainingNewImageEval.vue` (plan + start evaluation), job panel hides validation metrics for Train All and shows evaluation jobs, history kind tags, model new-image results. Server contract: root docs/training.md §4-1.

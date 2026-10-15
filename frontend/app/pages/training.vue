@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useIntervalFn } from '@vueuse/core'
-import { AlertTriangle, Ban, CircleCheck, CircleDashed, Cpu, Database, Download, KeyRound, LoaderCircle, Lock, Play, RefreshCw, Rocket, Server, SlidersHorizontal } from '@lucide/vue'
+import { AlertTriangle, Ban, CircleCheck, CircleDashed, Download, LoaderCircle, Lock, Play, RefreshCw } from '@lucide/vue'
 import DatasetSelect from '~/components/DatasetSelect.vue'
+import LockedOverlay from '~/components/LockedOverlay.vue'
 import TrainingJobPanel from '~/components/TrainingJobPanel.vue'
 import TrainingNewImageEval from '~/components/TrainingNewImageEval.vue'
 import { Badge } from '~/components/ui/badge'
@@ -119,7 +120,7 @@ watch(() => activeJob.value?.id, (id, previous) => {
 
 onMounted(async () => {
   try { options.value = await trainingRequest<TrainingOptions>('/options') } catch (cause) { error.value = (cause as Error).message }
-  if (options.value) Object.assign(form, { epochs: options.value.defaults.epochs, imgsz: options.value.defaults.imgsz, batch: options.value.defaults.batch, seed: options.value.defaults.seed, patience: options.value.defaults.patience, classMode: options.value.defaults.class_mode })
+  if (options.value) Object.assign(form, { epochs: options.value.defaults.epochs, imgsz: options.value.defaults.imgsz, batch: options.value.defaults.batch, seed: options.value.defaults.seed, patience: options.value.defaults.patience })
   await refreshAll()
   loading.value = false
   if (token.value && options.value?.control_enabled) void verifyToken(token.value)
@@ -129,7 +130,6 @@ onMounted(async () => {
 const baseModel = computed(() => models.value.find(model => model.id === form.baseModelId))
 const trainAll = computed(() => form.trainMode === 'all')
 // Train All keeps the pretrained COCO head (car stays class 2), so it is car/truck/bus only.
-watch(trainAll, (value) => { if (value) form.classMode = 'vehicle3' })
 const epochHint = computed(() => trainAll.value ? suggestedTrainAllEpochs(jobs.value, form.exportId) : null)
 const baseOptions = computed(() => models.value.filter(model => model.status === 'available').map(model => ({
   value: model.id, label: model.kind === 'base' ? t('YOLO11m pretrained (COCO, production)') : `${model.label} · ${model.class_mode === 'single' ? t('single class') : 'car/truck/bus'}`,
@@ -239,26 +239,26 @@ async function evaluationCreated(job: TrainingJobDetail) {
     <!-- GPU / worker / production / active job -->
     <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" :aria-label="t('Training resources')">
       <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        <h2 class="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Server class="size-4 text-primary" /> {{ t('GPU worker') }}</h2>
+        <h2 class="text-xs font-semibold text-muted-foreground">{{ t('GPU worker') }}</h2>
         <p v-if="!status" class="text-sm text-muted-foreground">{{ t('Loading…') }}</p>
         <template v-else><p class="flex items-center gap-2 text-sm font-medium"><span :class="['size-2 rounded-full', status.worker.online ? 'bg-primary' : 'bg-red-400']" />{{ status.worker.online ? t('Online') : t('Offline') }}</p>
           <p class="text-xs text-muted-foreground">{{ status.worker.online ? t('Last report {seconds}s ago', { seconds: status.worker.age_seconds ?? '–' }) : t('Start training/worker.py on the GPU server.') }}</p>
           <p v-if="status.worker.online && !status.worker.base_weights?.present" class="text-xs text-red-300">{{ t('training/weights/yolo11m.pt is missing.') }}</p></template>
       </article>
       <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        <h2 class="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Cpu class="size-4 text-primary" /> GPU {{ gpu?.name ? `· ${gpu.name}` : '' }}</h2>
+        <h2 class="text-xs font-semibold text-muted-foreground">GPU {{ gpu?.name ? `· ${gpu.name}` : '' }}</h2>
         <template v-if="gpu?.available"><p class="font-mono text-sm tabular-nums">{{ formatMib(gpu.used_mib) }} / {{ formatMib(gpu.total_mib) }} · {{ gpu.util }}%</p>
           <div class="h-1.5 overflow-hidden rounded-full bg-white/10"><div :class="['h-full rounded-full', gpuPercent > 85 ? 'bg-red-400' : gpuPercent > 65 ? 'bg-amber-300' : 'bg-primary']" :style="{ width: `${gpuPercent}%` }" /></div>
           <p class="text-xs text-muted-foreground">{{ t('{free} free · DeepStream reserve {reserve}', { free: formatMib(gpu.free_mib), reserve: formatMib(options?.gpu_policy.reserve_mib) }) }}</p></template>
         <p v-else class="text-sm text-muted-foreground">{{ gpu?.error ?? t('No GPU report') }}</p>
       </article>
       <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        <h2 class="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Rocket class="size-4 text-primary" /> {{ t('Production inference') }}</h2>
+        <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Production inference') }}</h2>
         <template v-if="status"><p class="flex items-center gap-2 text-sm font-medium"><span :class="['size-2 rounded-full', status.production.preview === 'reachable' ? 'bg-primary' : 'bg-red-400']" />{{ t('Preview {state}', { state: t(status.production.preview) }) }}</p>
           <p class="text-xs text-muted-foreground">{{ t('{online}/{enabled} cameras online · {fps} fps · parking {parking} cams {parkingFps} fps', { online: status.production.cameras_online, enabled: status.production.cameras_enabled, fps: status.production.total_fps, parking: status.production.parking_cameras_online, parkingFps: status.production.parking_fps }) }}</p></template>
       </article>
       <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        <h2 class="flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Play class="size-4 text-primary" /> {{ t('Running job') }}</h2>
+        <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Running job') }}</h2>
         <template v-if="activeJob"><button type="button" class="block text-left text-sm font-medium hover:text-primary" @click="selectedJobId = activeJob.id">{{ activeJob.name }} · {{ t(JOB_STATUS_LABELS[activeJob.status]) }}</button>
           <p class="text-xs text-muted-foreground">{{ t('Epoch') }} {{ activeJob.epoch }}/{{ activeJob.epochs }} · {{ Math.round(activeJob.progress * 100) }}% · {{ formatDuration(activeJob.elapsed_seconds) }}</p></template>
         <p v-else class="text-sm text-muted-foreground">{{ t('No training running. One job runs at a time.') }}</p>
@@ -267,11 +267,10 @@ async function evaluationCreated(job: TrainingJobDetail) {
 
     <!-- Access -->
     <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3" :aria-label="t('Training access')">
-      <KeyRound class="size-4 text-primary" />
       <template v-if="options && !options.control_enabled"><p class="text-sm text-muted-foreground">{{ t('Training control is disabled on the server (TRAINING_ADMIN_TOKEN is not set). Status and results stay visible.') }}</p></template>
       <template v-else-if="unlocked"><p class="mr-auto text-sm">{{ t('Training control unlocked for this browser tab.') }}</p><Button size="sm" variant="ghost" @click="lock"><Lock /> {{ t('Lock') }}</Button></template>
       <form v-else class="flex min-w-0 flex-1 flex-wrap items-center gap-2" @submit.prevent="verifyToken(tokenInput)">
-        <label for="training-token" class="text-sm text-muted-foreground">{{ t('Starting, stopping and downloading need the training admin token.') }}</label>
+        <label for="training-token" class="mr-auto text-sm text-muted-foreground">{{ t('Starting, stopping and downloading need the training admin token.') }}</label>
         <Input id="training-token" v-model="tokenInput" type="password" autocomplete="off" :placeholder="t('Admin token')" class="h-8 w-60 max-w-full" />
         <Button size="sm" type="submit" :disabled="!tokenInput || unlocking"><LoaderCircle v-if="unlocking" class="animate-spin" /> {{ t('Unlock') }}</Button>
         <span v-if="authError" class="text-xs text-red-300" role="alert">{{ t(authError) }}</span>
@@ -280,8 +279,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
 
     <div class="grid gap-4 lg:grid-cols-2">
       <!-- Dataset -->
-      <section class="min-w-0 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Dataset')">
-        <div class="flex flex-wrap items-center justify-between gap-3"><h2 class="flex items-center gap-2 text-sm font-semibold"><Database class="size-4 text-primary" /> 1. {{ t('Dataset') }}</h2>
+      <section class="relative min-w-0 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :inert="!unlocked" :aria-label="t('Dataset')">
+        <LockedOverlay v-if="!unlocked" />
+        <div class="flex flex-wrap items-center justify-between gap-3"><h2 class="text-sm font-semibold">{{ t('Dataset') }}</h2>
           <DatasetSelect v-model="form.exportId" :options="datasetOptions" :label="t('Dataset to train on')" class="w-full sm:w-72" :placeholder="loading ? t('Loading datasets…') : t('No dataset exports')" :disabled="!datasets.length" /></div>
         <p v-if="!loading && !datasets.length" class="rounded-xl border border-dashed border-white/15 py-8 text-center text-sm text-muted-foreground">{{ t('No dataset export yet.') }} <NuxtLink to="/datasets" class="text-primary underline underline-offset-4">{{ t('Create one in AI Datasets') }}</NuxtLink></p>
         <p v-else-if="checking" class="py-6 text-center text-sm text-muted-foreground" role="status"><LoaderCircle class="mr-2 inline size-4 animate-spin" />{{ t('Checking dataset…') }}</p>
@@ -292,9 +292,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
             <tbody class="font-mono tabular-nums"><tr v-for="row in splitRows" :key="row.split" class="border-t border-white/5"><td class="py-1.5 pr-3 font-sans capitalize">{{ t(row.split) }}</td><td class="pr-3">{{ row.images }}</td><td class="pr-3">{{ row.boxes }}</td><td class="pr-3">{{ row.sessions }}</td><td class="font-sans text-muted-foreground">{{ trainAll ? t('Training') : t(SPLIT_USE[row.split]) }}</td></tr>
               <tr class="border-t border-white/10 font-semibold"><td class="py-1.5 pr-3 font-sans">{{ t('Total') }}</td><td class="pr-3">{{ check.counts?.total ?? 0 }}</td><td class="pr-3">{{ check.boxes?.total ?? 0 }}</td><td /><td /></tr></tbody></table></div>
           <p class="text-xs text-muted-foreground">{{ t('Classes') }} {{ Object.values(check.classes ?? {}).join(', ') || '–' }} · {{ t('labels per class:') }} <span v-for="(count, name) in check.labels_per_class_total" :key="name" class="mr-2 font-mono text-foreground">{{ name }} {{ count }}</span></p>
-          <ul v-if="check.errors.length" class="space-y-1 text-xs text-red-300"><li v-for="item in check.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
-          <ul v-if="check.limits.length" class="space-y-1 text-xs text-amber-200"><li v-for="item in check.limits" :key="item" class="flex gap-2"><AlertTriangle class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
-          <ul v-if="check.notes.length" class="space-y-1 text-xs text-muted-foreground"><li v-for="item in check.notes" :key="item">{{ item }}</li></ul>
+          <ul v-if="check.errors.length" class="space-y-1 text-xs text-red-300"><li v-for="item in check.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-3.5 shrink-0" />{{ t(item) }}</li></ul>
+          <div v-if="check.limits.length" class="flex gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs leading-relaxed text-amber-200"><AlertTriangle class="mt-0.5 size-3.5 shrink-0" /><p><template v-for="(item, index) in check.limits" :key="item"><br v-if="index">{{ t(item) }}</template></p></div>
+          <ul v-if="check.notes.length" class="space-y-1 text-xs text-muted-foreground"><li v-for="item in check.notes" :key="item">{{ t(item) }}</li></ul>
           <label v-if="check.readiness === 'limited'" class="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-100"><input v-model="form.acknowledge" type="checkbox" class="mt-0.5 accent-amber-300"> {{ t('I understand these limitations. Results from this dataset are a trial run and will not be shown as a confirmed improvement.') }}</label>
           <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-xs text-sky-200">{{ t('Train All: all {total} images (train {train}, val {val}, test {test}) train the weights. A separate training copy is made; the export and its split assignment stay unchanged.', { total: check.counts?.total ?? 0, train: check.counts?.train ?? 0, val: check.counts?.val ?? 0, test: check.counts?.test ?? 0 }) }}</p>
           <p class="text-xs text-muted-foreground">{{ t('Training uses a frozen copy of this export (sha256 recorded with the job), so later labeling does not change the run.') }}</p>
@@ -302,8 +302,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
       </section>
 
       <!-- Settings -->
-      <section class="min-w-0 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Fine-tuning settings')">
-        <h2 class="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal class="size-4 text-primary" /> 2. {{ t('Fine-tuning settings') }}</h2>
+      <section class="relative min-w-0 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :inert="!unlocked" :aria-label="t('Fine-tuning settings')">
+        <LockedOverlay v-if="!unlocked" />
+        <h2 class="text-sm font-semibold">{{ t('Fine-tuning settings') }}</h2>
         <fieldset class="space-y-2"><legend class="mb-1.5 text-xs text-muted-foreground">{{ t('Training mode') }}</legend>
           <div class="grid gap-2 sm:grid-cols-2">
             <label v-for="mode in (['standard', 'all'] as const)" :key="mode" :class="['flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors', form.trainMode === mode ? 'border-primary/40 bg-primary/5' : 'border-white/10 hover:border-white/20']">
@@ -321,12 +322,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
           <div class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Image size') }}</span>
             <div class="flex gap-1 rounded-lg bg-white/[0.05] p-1" role="radiogroup" :aria-label="t('Image size')"><button v-for="size in [640, 960] as const" :key="size" type="button" role="radio" :aria-checked="form.imgsz === size" :class="['h-7 flex-1 rounded-md text-sm transition-colors', form.imgsz === size ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground']" @click="form.imgsz = size">{{ size }}</button></div></div>
         </div>
-        <fieldset class="space-y-2"><legend class="mb-1.5 text-xs text-muted-foreground">{{ t('Classes') }}</legend>
-          <label v-for="mode in (['vehicle3', 'single'] as const)" :key="mode" :class="['flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors', form.classMode === mode ? 'border-primary/40 bg-primary/5' : 'border-white/10 hover:border-white/20', trainAll && mode === 'single' ? 'pointer-events-none opacity-50' : '']">
-            <input v-model="form.classMode" type="radio" name="class-mode" :value="mode" :disabled="trainAll && mode === 'single'" class="mt-1 accent-primary">
-            <span class="space-y-0.5"><span class="block text-sm font-medium">{{ t(CLASS_MODE_LABELS[mode]) }}<span v-if="mode === 'vehicle3'" class="ml-2 text-xs font-normal text-primary">{{ t('default') }}</span></span><span class="block text-xs text-muted-foreground">{{ options?.class_modes[mode] }}</span></span>
-          </label>
-        </fieldset>
+        <div class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Classes') }}</span>
+          <div class="rounded-xl border border-white/10 p-3"><span class="block text-sm font-medium">{{ t(CLASS_MODE_LABELS.vehicle3) }}</span><span class="block text-xs text-muted-foreground">{{ options?.class_modes.vehicle3 ? t(options.class_modes.vehicle3) : '' }}</span></div>
+        </div>
         <details class="rounded-xl border border-white/10" :open="advanced" @toggle="advanced = ($event.target as HTMLDetailsElement).open">
           <summary class="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">{{ t('Advanced (batch, seed, early stopping, smoke test)') }}</summary>
           <div class="grid gap-3 px-3 pb-3 sm:grid-cols-3">
@@ -343,8 +341,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
     </div>
 
     <!-- Start -->
-    <section class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Start training')">
-      <h2 class="text-sm font-semibold">3. {{ t('Checks before training') }}</h2>
+    <section class="relative space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :inert="!unlocked" :aria-label="t('Start training')">
+        <LockedOverlay v-if="!unlocked" />
+      <h2 class="text-sm font-semibold">{{ t('Checks before training') }}</h2>
       <ul class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         <li v-for="item in checks" :key="item.key" class="flex gap-2 rounded-xl border border-white/10 bg-black/10 p-3 text-xs"><component :is="stateIcon[item.state]" :class="['mt-0.5 size-4 shrink-0', stateClass[item.state], item.state === 'pending' ? 'animate-pulse' : '']" /><span class="min-w-0"><span class="block font-medium text-foreground">{{ item.label }}</span><span class="text-muted-foreground">{{ item.detail }}</span></span></li>
       </ul>
@@ -358,7 +357,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
 
     <!-- Progress / results of the selected job -->
     <section class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Training progress')">
-      <h2 class="text-sm font-semibold">4. {{ t('Progress and results') }}</h2>
+      <h2 class="text-sm font-semibold">{{ t('Progress and results') }}</h2>
       <TrainingJobPanel v-if="detail" :job="detail" :can-control="unlocked" :stopping="stopping" @stop="stop" @download="download" @evaluate="evaluateModel" />
       <p v-else-if="selectedJobId" class="py-6 text-center text-sm text-muted-foreground" role="status"><LoaderCircle class="mr-2 inline size-4 animate-spin" />{{ t('Loading job…') }}</p>
       <p v-else class="rounded-xl border border-dashed border-white/15 py-10 text-center text-sm text-muted-foreground">{{ t('No training has been run yet.') }}</p>
