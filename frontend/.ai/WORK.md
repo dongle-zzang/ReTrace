@@ -1,5 +1,10 @@
 # Frontend current work
 
+## Train All + new-image evaluation UI (/training) — branch claude/project-thread-3a3y0r, not deployed (2026-10-15)
+
+- Training mode selector (standard / Train All; Train All forces car/truck/bus, disables patience, suggests the best epoch of a standard run on the same export), per-mode dataset check, `TrainingNewImageEval.vue` (plan + start evaluation), job panel hides validation metrics for Train All and shows evaluation jobs, history kind tags, model new-image results. Server contract: root docs/training.md §4-1.
+- Verified: npm test 52, typecheck; headless Chromium via `nuxt dev` → real Backend (SQLite demo data) at 1440/390 px, ko/en, no horizontal overflow. Not verified against the real server.
+
 ## Training auth 415 fix + Parking as landing page — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
 
 - `trainingRequest` POSTs always send `Content-Type: application/json` and `{}` when there is no body (Preview proxy `read_body` returns 415 otherwise); fixes `/auth` unlock and `/jobs/{id}/stop`. No server, token or env change.

@@ -3,14 +3,15 @@ import { useIntervalFn } from '@vueuse/core'
 import { AlertTriangle, Ban, CircleCheck, CircleDashed, Cpu, Database, Download, KeyRound, LoaderCircle, Lock, Play, RefreshCw, Rocket, Server, SlidersHorizontal } from '@lucide/vue'
 import DatasetSelect from '~/components/DatasetSelect.vue'
 import TrainingJobPanel from '~/components/TrainingJobPanel.vue'
+import TrainingNewImageEval from '~/components/TrainingNewImageEval.vue'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { downloadTrainingFile, trainingRequest, useTrainingToken } from '~/composables/trainingApi'
 import { useI18n } from '~/composables/useI18n'
-import { estimateVramMib, formatDuration, formatMetric, formatMib, isActiveStatus, requiredFreeMib, safeBatch, toInteger, validateTrainingForm } from '~/lib/training'
-import { CLASS_MODE_LABELS, JOB_STATUS_LABELS, READINESS_LABELS } from '~/types/training'
-import type { ClassMode, DatasetCheck, ImageSize, TrainingDataset, TrainingJob, TrainingJobDetail, TrainingModel, TrainingOptions, TrainingStatus } from '~/types/training'
+import { estimateVramMib, formatDuration, formatMetric, formatMib, isActiveStatus, jobKind, requiredFreeMib, safeBatch, suggestedTrainAllEpochs, toInteger, validateTrainingForm } from '~/lib/training'
+import { CLASS_MODE_LABELS, JOB_STATUS_LABELS, READINESS_LABELS, TRAIN_MODE_LABELS } from '~/types/training'
+import type { ClassMode, DatasetCheck, ImageSize, TrainingDataset, TrainingJob, TrainingJobDetail, TrainingModel, TrainingOptions, TrainingStatus, TrainMode } from '~/types/training'
 
 const { t, dateLocale } = useI18n()
 useHead({ title: () => `ReTrace · ${t('AI training')}` })
@@ -32,7 +33,7 @@ const startError = ref<string | null>(null)
 const notice = ref<string | null>(null)
 
 const form = reactive({
-  exportId: '', baseModelId: 'yolo11m-coco', name: 'yolo11m-ft', classMode: 'vehicle3' as ClassMode,
+  exportId: '', baseModelId: 'yolo11m-coco', name: 'yolo11m-ft', classMode: 'vehicle3' as ClassMode, trainMode: 'standard' as TrainMode,
   epochs: 50 as number | string, imgsz: 640 as ImageSize, batch: 4 as number | string, seed: 42 as number | string,
   patience: 15 as number | string, smoke: false, acknowledge: false,
 })
@@ -91,13 +92,13 @@ async function refreshAll() {
   await loadDetail()
 }
 let checkVersion = 0
-watch(() => form.exportId, async (id) => {
+watch(() => [form.exportId, form.trainMode] as const, async ([id, mode]) => {
   check.value = null; form.acknowledge = false
   if (!id) return
   const version = ++checkVersion
   checking.value = true
   try {
-    const data = await trainingRequest<DatasetCheck>(`/datasets/${id}/check`)
+    const data = await trainingRequest<DatasetCheck>(`/datasets/${id}/check?train_mode=${mode}`)
     if (version === checkVersion) check.value = data
   } catch (cause) { if (version === checkVersion) error.value = (cause as Error).message }
   finally { if (version === checkVersion) checking.value = false }
@@ -126,16 +127,21 @@ onMounted(async () => {
 
 // ----- form & pre-start checks ------------------------------------------------------------
 const baseModel = computed(() => models.value.find(model => model.id === form.baseModelId))
+const trainAll = computed(() => form.trainMode === 'all')
+// Train All keeps the pretrained COCO head (car stays class 2), so it is car/truck/bus only.
+watch(trainAll, (value) => { if (value) form.classMode = 'vehicle3' })
+const epochHint = computed(() => trainAll.value ? suggestedTrainAllEpochs(jobs.value, form.exportId) : null)
 const baseOptions = computed(() => models.value.filter(model => model.status === 'available').map(model => ({
   value: model.id, label: model.kind === 'base' ? t('YOLO11m pretrained (COCO, production)') : `${model.label} · ${model.class_mode === 'single' ? t('single class') : 'car/truck/bus'}`,
 })))
-const datasetOptions = computed(() => datasets.value.map(item => ({ value: item.id, label: `${item.name} · ${t('{count} images', { count: item.counts?.total ?? 0 })} · ${t(READINESS_LABELS[item.readiness])}` })))
+const datasetOptions = computed(() => datasets.value.map(item => ({ value: item.id, label: `${item.name} · ${t('{count} images', { count: item.counts?.total ?? 0 })} · ${t(READINESS_LABELS[item.readiness_by_mode?.[form.trainMode] ?? item.readiness])}` })))
 const formErrors = computed(() => {
   if (!options.value) return []
   const errors = validateTrainingForm({ epochs: form.epochs, imgsz: form.imgsz, batch: form.batch, seed: form.seed, patience: form.patience }, options.value.limits)
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$/.test(form.name)) errors.push('Model name: 1–48 letters, digits, ".", "_" or "-", starting with a letter or digit.')
   if (baseModel.value?.kind === 'finetuned' && form.classMode === 'vehicle3' && baseModel.value.class_mode !== 'vehicle3')
     errors.push('car/truck/bus training needs YOLO11m or a model that was trained in car/truck/bus mode.')
+  if (trainAll.value && form.classMode !== 'vehicle3') errors.push('Train All keeps the COCO 80-class head: use car/truck/bus.')
   return errors
 })
 const batchNumber = computed(() => toInteger(form.batch))
@@ -161,11 +167,13 @@ const { confirm } = useConfirmDialog()
 async function start() {
   if (!canStart.value) return
   const full = !form.smoke
-  if (!await confirm({ title: full ? t('Start GPU training?') : t('Start smoke test?'), description: t('{epochs} at {imgsz} px, batch {batch} on the shared GPU. Production inference keeps priority: the job waits or stops if the GPU or camera FPS needs protecting.', { epochs: full ? t('{count} epochs', { count: toInteger(form.epochs) }) : t('1 epoch'), imgsz: form.imgsz, batch: toInteger(form.batch) }), confirmLabel: full ? t('Start training') : t('Start smoke test') })) return
+  const description = t('{epochs} at {imgsz} px, batch {batch} on the shared GPU. Production inference keeps priority: the job waits or stops if the GPU or camera FPS needs protecting.', { epochs: full ? t('{count} epochs', { count: toInteger(form.epochs) }) : t('1 epoch'), imgsz: form.imgsz, batch: toInteger(form.batch) })
+  const modeNote = trainAll.value ? ` ${t('Train All: all {count} images train the weights, no early stopping, final-epoch weights. Evaluate the model on new CCTV images afterwards.', { count: check.value?.counts?.total ?? 0 })}` : ''
+  if (!await confirm({ title: full ? (trainAll.value ? t('Start Train All?') : t('Start GPU training?')) : t('Start smoke test?'), description: description + modeNote, confirmLabel: full ? t('Start training') : t('Start smoke test') })) return
   starting.value = true; startError.value = null; notice.value = null
   try {
     const job = await trainingRequest<TrainingJobDetail>('/jobs', { method: 'POST', auth: true, body: {
-      export_id: form.exportId, base_model_id: form.baseModelId, name: form.name, class_mode: form.classMode,
+      export_id: form.exportId, base_model_id: form.baseModelId, name: form.name, class_mode: form.classMode, train_mode: form.trainMode,
       epochs: toInteger(form.epochs), imgsz: form.imgsz, batch: toInteger(form.batch), seed: toInteger(form.seed),
       patience: toInteger(form.patience), device: 'gpu', smoke: form.smoke, acknowledge_limits: form.acknowledge,
     } })
@@ -197,8 +205,27 @@ const readinessClass = { ready: 'border-primary/25 bg-primary/10 text-primary', 
 const jobStatusClass = (value: string) => ({ completed: 'text-primary', failed: 'text-red-300', running: 'text-sky-300', stopping: 'text-amber-200', queued: 'text-amber-200' } as Record<string, string>)[value] ?? 'text-muted-foreground'
 const gpu = computed(() => status.value?.worker.gpu)
 const gpuPercent = computed(() => gpu.value?.total_mib ? Math.round(((gpu.value.used_mib ?? 0) / gpu.value.total_mib) * 100) : 0)
+const SPLIT_USE = { train: 'Training', val: 'Best epoch / early stop', test: 'Independent test' } as const
 const splitRows = computed(() => (['train', 'val', 'test'] as const).map(split => ({ split, images: check.value?.counts?.[split] ?? 0, boxes: check.value?.boxes?.[split] ?? 0, sessions: check.value?.sessions?.[split] ?? 0 })))
 const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 1048576).toFixed(1)} MiB` : ''
+const KIND_LABELS = { standard: 'Train / Val / Test', all: 'Train All', evaluate: 'New-image evaluation' } as const
+const jobTag = (job: TrainingJob) => job.config.kind === 'evaluate'
+  ? t('{count} new images', { count: job.config.eval_images ?? 0 })
+  : `${job.config.imgsz} px · b${job.config.batch} · ${job.config.class_mode === 'single' ? t('single') : t('3 cls')}${job.config.smoke ? ` · ${t('smoke')}` : ''}`
+
+// ----- new-image evaluation ----------------------------------------------------------------
+const evalModelId = ref('')
+const evalSection = ref<HTMLElement | null>(null)
+function evaluateModel(modelId: string | null) {
+  if (modelId) evalModelId.value = modelId
+  evalSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+async function evaluationCreated(job: TrainingJobDetail) {
+  selectedJobId.value = job.id
+  detail.value = job
+  notice.value = null
+  await Promise.all([loadJobs(), loadStatus()])
+}
 </script>
 
 <template>
@@ -261,14 +288,15 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
         <template v-else-if="check">
           <div class="flex flex-wrap items-center gap-2"><p class="mr-auto text-sm font-medium">{{ check.name }} <span class="text-xs font-normal text-muted-foreground">· {{ t('created {time}', { time: time(check.created_at) }) }}</span></p><Badge variant="outline" :class="['px-2 py-0.5', readinessClass[check.readiness]]">{{ t(READINESS_LABELS[check.readiness]) }}</Badge></div>
           <div class="overflow-x-auto"><table class="w-full text-left text-xs">
-            <thead class="text-muted-foreground"><tr><th class="py-1 pr-3 font-medium">{{ t('Split') }}</th><th class="pr-3 font-medium">{{ t('Images') }}</th><th class="pr-3 font-medium">{{ t('Vehicle labels') }}</th><th class="font-medium">{{ t('Capture sessions') }}</th></tr></thead>
-            <tbody class="font-mono tabular-nums"><tr v-for="row in splitRows" :key="row.split" class="border-t border-white/5"><td class="py-1.5 pr-3 font-sans capitalize">{{ t(row.split) }}</td><td class="pr-3">{{ row.images }}</td><td class="pr-3">{{ row.boxes }}</td><td>{{ row.sessions }}</td></tr>
-              <tr class="border-t border-white/10 font-semibold"><td class="py-1.5 pr-3 font-sans">{{ t('Total') }}</td><td class="pr-3">{{ check.counts?.total ?? 0 }}</td><td class="pr-3">{{ check.boxes?.total ?? 0 }}</td><td /></tr></tbody></table></div>
+            <thead class="text-muted-foreground"><tr><th class="py-1 pr-3 font-medium">{{ t('Split') }}</th><th class="pr-3 font-medium">{{ t('Images') }}</th><th class="pr-3 font-medium">{{ t('Vehicle labels') }}</th><th class="pr-3 font-medium">{{ t('Capture sessions') }}</th><th class="font-medium">{{ t('Used for') }}</th></tr></thead>
+            <tbody class="font-mono tabular-nums"><tr v-for="row in splitRows" :key="row.split" class="border-t border-white/5"><td class="py-1.5 pr-3 font-sans capitalize">{{ t(row.split) }}</td><td class="pr-3">{{ row.images }}</td><td class="pr-3">{{ row.boxes }}</td><td class="pr-3">{{ row.sessions }}</td><td class="font-sans text-muted-foreground">{{ trainAll ? t('Training') : t(SPLIT_USE[row.split]) }}</td></tr>
+              <tr class="border-t border-white/10 font-semibold"><td class="py-1.5 pr-3 font-sans">{{ t('Total') }}</td><td class="pr-3">{{ check.counts?.total ?? 0 }}</td><td class="pr-3">{{ check.boxes?.total ?? 0 }}</td><td /><td /></tr></tbody></table></div>
           <p class="text-xs text-muted-foreground">{{ t('Classes') }} {{ Object.values(check.classes ?? {}).join(', ') || '–' }} · {{ t('labels per class:') }} <span v-for="(count, name) in check.labels_per_class_total" :key="name" class="mr-2 font-mono text-foreground">{{ name }} {{ count }}</span></p>
           <ul v-if="check.errors.length" class="space-y-1 text-xs text-red-300"><li v-for="item in check.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
           <ul v-if="check.limits.length" class="space-y-1 text-xs text-amber-200"><li v-for="item in check.limits" :key="item" class="flex gap-2"><AlertTriangle class="mt-0.5 size-3.5 shrink-0" />{{ item }}</li></ul>
           <ul v-if="check.notes.length" class="space-y-1 text-xs text-muted-foreground"><li v-for="item in check.notes" :key="item">{{ item }}</li></ul>
           <label v-if="check.readiness === 'limited'" class="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-100"><input v-model="form.acknowledge" type="checkbox" class="mt-0.5 accent-amber-300"> {{ t('I understand these limitations. Results from this dataset are a trial run and will not be shown as a confirmed improvement.') }}</label>
+          <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-xs text-sky-200">{{ t('Train All: all {total} images (train {train}, val {val}, test {test}) train the weights. A separate training copy is made; the export and its split assignment stay unchanged.', { total: check.counts?.total ?? 0, train: check.counts?.train ?? 0, val: check.counts?.val ?? 0, test: check.counts?.test ?? 0 }) }}</p>
           <p class="text-xs text-muted-foreground">{{ t('Training uses a frozen copy of this export (sha256 recorded with the job), so later labeling does not change the run.') }}</p>
         </template>
       </section>
@@ -276,16 +304,26 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
       <!-- Settings -->
       <section class="min-w-0 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Fine-tuning settings')">
         <h2 class="flex items-center gap-2 text-sm font-semibold"><SlidersHorizontal class="size-4 text-primary" /> 2. {{ t('Fine-tuning settings') }}</h2>
+        <fieldset class="space-y-2"><legend class="mb-1.5 text-xs text-muted-foreground">{{ t('Training mode') }}</legend>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <label v-for="mode in (['standard', 'all'] as const)" :key="mode" :class="['flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors', form.trainMode === mode ? 'border-primary/40 bg-primary/5' : 'border-white/10 hover:border-white/20']">
+              <input v-model="form.trainMode" type="radio" name="train-mode" :value="mode" class="mt-1 accent-primary">
+              <span class="space-y-0.5"><span class="block text-sm font-medium">{{ t(TRAIN_MODE_LABELS[mode]) }}<span v-if="mode === 'standard'" class="ml-2 text-xs font-normal text-primary">{{ t('default') }}</span></span>
+                <span class="block text-xs text-muted-foreground">{{ mode === 'standard' ? t('Train trains the weights, Val picks the best epoch and stops early, Test is compared with the current YOLO11m.') : t('Train, Val and Test all train the weights. Fixed epochs, no early stopping, final-epoch weights. No independent score in this run.') }}</span></span>
+            </label>
+          </div>
+        </fieldset>
         <div class="grid gap-4 sm:grid-cols-2">
           <div class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Start from') }}</span><DatasetSelect v-model="form.baseModelId" :options="baseOptions" :label="t('Base model')" class="w-full" /></div>
           <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Model name') }}</span><Input v-model="form.name" maxlength="48" :aria-invalid="!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$/.test(form.name)" /></label>
-          <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Epochs') }}</span><Input v-model="form.epochs" type="number" inputmode="numeric" :min="options?.limits.epochs[0]" :max="options?.limits.epochs[1]" :disabled="form.smoke" /></label>
+          <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Epochs') }}</span><Input v-model="form.epochs" type="number" inputmode="numeric" :min="options?.limits.epochs[0]" :max="options?.limits.epochs[1]" :disabled="form.smoke" />
+            <span v-if="trainAll && !form.smoke" class="block text-xs text-muted-foreground">{{ epochHint ? t('Standard run {name} peaked at epoch {epoch}.', { name: epochHint.name, epoch: epochHint.epoch }) : t('No early stopping: all epochs run. A standard run on the same data shows a good count.') }} <button v-if="epochHint && toInteger(form.epochs) !== epochHint.epoch" type="button" class="text-primary underline-offset-4 hover:underline" @click="form.epochs = epochHint.epoch">{{ t('Use {count}', { count: epochHint.epoch }) }}</button></span></label>
           <div class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Image size') }}</span>
             <div class="flex gap-1 rounded-lg bg-white/[0.05] p-1" role="radiogroup" :aria-label="t('Image size')"><button v-for="size in [640, 960] as const" :key="size" type="button" role="radio" :aria-checked="form.imgsz === size" :class="['h-7 flex-1 rounded-md text-sm transition-colors', form.imgsz === size ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground']" @click="form.imgsz = size">{{ size }}</button></div></div>
         </div>
         <fieldset class="space-y-2"><legend class="mb-1.5 text-xs text-muted-foreground">{{ t('Classes') }}</legend>
-          <label v-for="mode in (['vehicle3', 'single'] as const)" :key="mode" :class="['flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors', form.classMode === mode ? 'border-primary/40 bg-primary/5' : 'border-white/10 hover:border-white/20']">
-            <input v-model="form.classMode" type="radio" name="class-mode" :value="mode" class="mt-1 accent-primary">
+          <label v-for="mode in (['vehicle3', 'single'] as const)" :key="mode" :class="['flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors', form.classMode === mode ? 'border-primary/40 bg-primary/5' : 'border-white/10 hover:border-white/20', trainAll && mode === 'single' ? 'pointer-events-none opacity-50' : '']">
+            <input v-model="form.classMode" type="radio" name="class-mode" :value="mode" :disabled="trainAll && mode === 'single'" class="mt-1 accent-primary">
             <span class="space-y-0.5"><span class="block text-sm font-medium">{{ t(CLASS_MODE_LABELS[mode]) }}<span v-if="mode === 'vehicle3'" class="ml-2 text-xs font-normal text-primary">{{ t('default') }}</span></span><span class="block text-xs text-muted-foreground">{{ options?.class_modes[mode] }}</span></span>
           </label>
         </fieldset>
@@ -294,7 +332,7 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
           <div class="grid gap-3 px-3 pb-3 sm:grid-cols-3">
             <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Batch size') }}</span><Input v-model="form.batch" type="number" inputmode="numeric" min="1" max="32" /></label>
             <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Seed') }}</span><Input v-model="form.seed" type="number" inputmode="numeric" min="0" /></label>
-            <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Early-stop patience') }}</span><Input v-model="form.patience" type="number" inputmode="numeric" min="1" max="300" /></label>
+            <label class="space-y-1.5"><span class="text-xs text-muted-foreground">{{ t('Early-stop patience') }}</span><Input v-model="form.patience" type="number" inputmode="numeric" min="1" max="300" :disabled="trainAll" /><span v-if="trainAll" class="block text-xs text-muted-foreground">{{ t('Off in Train All') }}</span></label>
             <p class="text-xs text-muted-foreground sm:col-span-3">{{ t('Device: GPU only (training never falls back to CPU). If the first epoch runs out of memory, Ultralytics halves the batch automatically; the final batch is recorded.') }}</p>
             <label class="flex items-center gap-2 text-xs sm:col-span-3"><input v-model="form.smoke" type="checkbox" class="accent-primary"> {{ t('Smoke test: 1 epoch to check the pipeline and GPU memory (not registered as a model)') }}</label>
           </div>
@@ -321,10 +359,15 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
     <!-- Progress / results of the selected job -->
     <section class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Training progress')">
       <h2 class="text-sm font-semibold">4. {{ t('Progress and results') }}</h2>
-      <TrainingJobPanel v-if="detail" :job="detail" :can-control="unlocked" :stopping="stopping" @stop="stop" @download="download" />
+      <TrainingJobPanel v-if="detail" :job="detail" :can-control="unlocked" :stopping="stopping" @stop="stop" @download="download" @evaluate="evaluateModel" />
       <p v-else-if="selectedJobId" class="py-6 text-center text-sm text-muted-foreground" role="status"><LoaderCircle class="mr-2 inline size-4 animate-spin" />{{ t('Loading job…') }}</p>
       <p v-else class="rounded-xl border border-dashed border-white/15 py-10 text-center text-sm text-muted-foreground">{{ t('No training has been run yet.') }}</p>
     </section>
+
+    <!-- Independent check on new CCTV images (required after Train All) -->
+    <div ref="evalSection" class="scroll-mt-4">
+      <TrainingNewImageEval v-model:model-id="evalModelId" :models="models" :datasets="datasets" :can-control="unlocked" :busy="!!activeJob" :gpu-ready="!!status?.gpu_ready" @created="evaluationCreated" />
+    </div>
 
     <div class="grid gap-4 xl:grid-cols-2">
       <!-- History -->
@@ -334,9 +377,9 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
         <div v-else class="overflow-x-auto"><table class="w-full min-w-[36rem] text-left text-xs">
           <thead class="text-muted-foreground"><tr><th class="py-1.5 pr-3 font-medium">{{ t('Job') }}</th><th class="pr-3 font-medium">{{ t('Status') }}</th><th class="pr-3 font-medium">{{ t('Epochs') }}</th><th class="pr-3 font-medium">{{ t('Best mAP50-95') }}</th><th class="pr-3 font-medium">{{ t('Duration') }}</th><th class="font-medium">{{ t('Created') }}</th></tr></thead>
           <tbody><tr v-for="job in jobs" :key="job.id" :class="['cursor-pointer border-t border-white/5 hover:bg-white/[0.03]', job.id === selectedJobId ? 'bg-primary/5' : '']" tabindex="0" @click="selectedJobId = job.id" @keydown.enter="selectedJobId = job.id">
-            <td class="py-2 pr-3"><span class="font-medium">{{ job.name }}</span><span class="block text-muted-foreground">{{ job.config.imgsz }} px · b{{ job.config.batch }} · {{ job.config.class_mode === 'single' ? t('single') : t('3 cls') }}{{ job.config.smoke ? ` · ${t('smoke')}` : '' }}</span></td>
+            <td class="py-2 pr-3"><span class="font-medium">{{ job.name }}</span> <span :class="['ml-1 rounded px-1.5 py-0.5 text-[0.65rem]', jobKind(job.config) === 'standard' ? 'bg-white/5 text-muted-foreground' : jobKind(job.config) === 'all' ? 'bg-sky-400/10 text-sky-300' : 'bg-violet-400/10 text-violet-300']">{{ t(KIND_LABELS[jobKind(job.config)]) }}</span><span class="block text-muted-foreground">{{ jobTag(job) }}</span></td>
             <td :class="['pr-3', jobStatusClass(job.status)]">{{ t(JOB_STATUS_LABELS[job.status]) }}</td>
-            <td class="pr-3 font-mono tabular-nums">{{ job.epoch }}/{{ job.epochs }}</td><td class="pr-3 font-mono tabular-nums">{{ formatMetric(job.best?.map50_95) }}</td>
+            <td class="pr-3 font-mono tabular-nums">{{ job.config.kind === 'evaluate' ? '–' : `${job.epoch}/${job.epochs}` }}</td><td class="pr-3 font-mono tabular-nums">{{ formatMetric(job.best?.map50_95) }}</td>
             <td class="pr-3 tabular-nums">{{ formatDuration(job.elapsed_seconds) }}</td><td class="text-muted-foreground">{{ time(job.created_at) }}</td></tr></tbody></table></div>
       </section>
 
@@ -352,11 +395,15 @@ const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 104
           <template v-else>
             <p class="text-xs text-muted-foreground">{{ t('From') }} {{ models.find(item => item.id === model.base_model_id)?.label ?? model.base_model_id }} · dataset_{{ model.export_id?.slice(0, 8) }} · {{ time(model.created_at) }}</p>
             <p class="text-xs text-muted-foreground">{{ model.config?.epochs_run }}/{{ model.config?.epochs }} {{ t('epochs') }} · {{ model.config?.imgsz }} px · {{ t('batch') }} {{ model.config?.final_batch ?? model.config?.batch }} · {{ model.class_mode === 'single' ? t('single class') : 'car/truck/bus' }}</p>
-            <p class="font-mono text-xs tabular-nums">val mAP50 {{ formatMetric(model.metrics?.val?.map50) }} · mAP50-95 {{ formatMetric(model.metrics?.val?.map50_95) }} · test mAP50 {{ formatMetric(model.metrics?.test?.vehicle?.mAP50) }} <span class="text-muted-foreground">(YOLO11m {{ formatMetric(model.metrics?.test_baseline?.vehicle?.mAP50) }})</span></p>
-            <p v-if="!model.evaluation_conclusive" class="text-xs text-amber-200">{{ t('Test evidence is insufficient; improvement is not confirmed.') }}</p>
+            <p v-if="model.config?.train_mode === 'all'" class="text-xs text-sky-200">{{ t('Train All · {count} images · final-epoch weights · no validation or test in this run', { count: model.config?.train_images ?? '–' }) }}</p>
+            <p v-else class="font-mono text-xs tabular-nums">val mAP50 {{ formatMetric(model.metrics?.val?.map50) }} · mAP50-95 {{ formatMetric(model.metrics?.val?.map50_95) }} · test mAP50 {{ formatMetric(model.metrics?.test?.vehicle?.mAP50) }} <span class="text-muted-foreground">(YOLO11m {{ formatMetric(model.metrics?.test_baseline?.vehicle?.mAP50) }})</span></p>
+            <p v-if="model.metrics?.new_images?.length" class="font-mono text-xs tabular-nums">{{ t('New images') }}: mAP50 {{ formatMetric(model.metrics.new_images.at(-1)?.new?.vehicle?.mAP50) }} <span class="text-muted-foreground">(YOLO11m {{ formatMetric(model.metrics.new_images.at(-1)?.baseline?.vehicle?.mAP50) }}) · {{ t('{count} images', { count: model.metrics.new_images.at(-1)?.images ?? 0 }) }}</span></p>
+            <p v-if="model.config?.train_mode === 'all' && !model.metrics?.new_images?.length" class="text-xs text-amber-200">{{ t('Not evaluated yet: score it on new CCTV images before relying on it.') }}</p>
+            <p v-else-if="!model.evaluation_conclusive && !model.metrics?.new_images?.some(item => item.conclusive)" class="text-xs text-amber-200">{{ t('Test evidence is insufficient; improvement is not confirmed.') }}</p>
             <div class="flex flex-wrap items-center gap-2">
               <Button v-for="name in ['best.pt', 'last.pt']" :key="name" size="sm" variant="outline" :disabled="!unlocked || !model.files[name]?.download_url" :title="unlocked ? fileSize(model.files[name]?.size) : t('Unlock training control to download')" @click="download(`${model.name}-v${model.version}-${name}`, model.files[name]!.download_url!)"><Download /> {{ name }}</Button>
               <Button size="sm" variant="outline" disabled :title="t('Planned: requires separate approval, ONNX export and DeepStream validation')">{{ t('Apply to DeepStream (later)') }}</Button>
+              <Button size="sm" variant="outline" :disabled="model.status !== 'available'" @click="evaluateModel(model.id)">{{ t('Evaluate on new images') }}</Button>
               <button v-if="model.job_id" type="button" class="text-xs text-primary underline-offset-4 hover:underline" @click="selectedJobId = model.job_id">{{ t('Open training run') }}</button>
             </div>
           </template>

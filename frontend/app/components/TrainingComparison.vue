@@ -6,7 +6,7 @@ import { boxStyle } from '~/lib/training'
 import type { ComparisonPage } from '~/types/training'
 import { useI18n } from '~/composables/useI18n'
 
-const props = defineProps<{ jobId: string }>()
+const props = defineProps<{ jobId: string; newImages?: boolean }>()
 const { t } = useI18n()
 const PAGE = 4
 const page = ref<ComparisonPage | null>(null)
@@ -15,7 +15,7 @@ const onlyErrors = ref(true)
 const loading = ref(false)
 const error = ref<string | null>(null)
 let version = 0
-const MODEL_LABELS: Record<string, string> = { baseline: 'Current YOLO11m', previous: 'Base of this run', new: 'New model' }
+const MODEL_LABELS = computed<Record<string, string>>(() => ({ baseline: 'Current YOLO11m', previous: 'Base of this run', new: props.newImages ? 'Evaluated model' : 'New model' }))
 const order = (models: Record<string, unknown>) => ['baseline', 'previous', 'new'].filter(key => key in models)
 
 async function load() {
@@ -37,7 +37,7 @@ onUnmounted(() => { version++ })
 <template>
   <section class="space-y-3" :aria-label="t('Detection comparison')">
     <div class="flex flex-wrap items-center gap-3">
-      <h3 class="mr-auto text-sm font-semibold">{{ t('Same test images, both models') }}</h3>
+      <h3 class="mr-auto text-sm font-semibold">{{ newImages ? t('Same new CCTV images, both models') : t('Same test images, both models') }}</h3>
       <label class="flex items-center gap-2 text-xs text-muted-foreground"><input v-model="onlyErrors" type="checkbox" class="accent-primary"> {{ t('Only images with missed or false detections') }}</label>
     </div>
     <p class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -68,7 +68,7 @@ onUnmounted(() => { version++ })
             <span v-for="(box, index) in item.models[key]?.pred_fp ?? []" :key="`fp${index}`" class="absolute border-2 border-amber-400" :style="boxStyle(box, item.width, item.height)" />
             <span v-for="(box, index) in item.models[key]?.gt_fn ?? []" :key="`fn${index}`" class="absolute border-[3px] border-red-500" :style="boxStyle(box, item.width, item.height)" />
           </div>
-          <figcaption class="flex flex-wrap justify-between gap-2 text-xs"><span class="font-medium">{{ MODEL_LABELS[key] ? t(MODEL_LABELS[key]) : key }}</span><span class="font-mono tabular-nums text-muted-foreground">TP {{ item.models[key]?.tp }} · FP {{ item.models[key]?.fp }} · FN {{ item.models[key]?.fn }}</span></figcaption>
+          <figcaption class="flex flex-wrap justify-between gap-2 text-xs"><span class="font-medium">{{ MODEL_LABELS[key] ? t(MODEL_LABELS[key]!) : key }}</span><span class="font-mono tabular-nums text-muted-foreground">TP {{ item.models[key]?.tp }} · FP {{ item.models[key]?.fp }} · FN {{ item.models[key]?.fn }}</span></figcaption>
         </figure>
       </div>
     </article>
