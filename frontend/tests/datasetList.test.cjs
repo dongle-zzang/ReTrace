@@ -6,6 +6,7 @@ const vm = require('node:vm')
 const ts = require('typescript')
 const vue = require('vue')
 const { parse, compileScript } = require('vue/compiler-sfc')
+const i18n = require('./i18nStub.cjs')
 
 const filename = path.join(__dirname, '../app/pages/datasets/index.vue')
 const { descriptor } = parse(fs.readFileSync(filename, 'utf8'), { filename })
@@ -38,7 +39,7 @@ function mount({ width = 1920, page = 1, size = 8, request } = {}) {
     ...vue, window, URLSearchParams, setInterval: () => 1, clearInterval() {},
     useHead() {}, useRuntimeConfig: () => ({ public: {} }), useDatasetNavigation: () => navigation,
     useConfirmDialog: () => ({ confirm: async () => true }),
-    require: name => name === 'vue' ? vue : name.endsWith('/datasetNavigation') ? helpers
+    require: name => name === 'vue' ? vue : name.endsWith('/useI18n') ? i18n : name.endsWith('/datasetNavigation') ? helpers
       : name.endsWith('/datasetApi') ? { datasetRequest }
       : name.endsWith('/useCameras') ? { useCameras: () => ({ cameras: vue.ref([]) }) }
       : name.endsWith('/useRealtimePreview') ? { useRealtimePreview: () => ({}) }

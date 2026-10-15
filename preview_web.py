@@ -85,6 +85,11 @@ class BackendAPIProxy:
         dataset_id = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
         if path in ('/api/datasets/capture', '/api/datasets/exports'):
             return ('GET', 'HEAD', 'POST')
+        # Training control; the Backend additionally requires TRAINING_ADMIN_TOKEN (Authorization).
+        if path in ('/api/training/jobs', '/api/training/auth', '/api/training/evaluations'):
+            return ('GET', 'HEAD', 'POST')
+        if re.fullmatch('/api/training/jobs/' + dataset_id + '/stop', path):
+            return ('POST',)
         if re.fullmatch('/api/datasets/(?:images|exports)/' + dataset_id, path):
             return ('GET', 'HEAD', 'DELETE')
         if re.fullmatch('/api/datasets/images/' + dataset_id + '/annotations', path):
@@ -166,6 +171,11 @@ class BackendAPIProxy:
         if any(part in ('.', '..') for part in unquote(path).split('/')):
             handler.send_error(404)
             return
+        decoded = unquote(path)
+        if decoded == '/api/training/worker' or decoded.startswith('/api/training/worker/'):
+            # GPU worker API is loopback-only (worker -> Backend:8000); never exposed via 40225.
+            handler.send_error(404)
+            return
         target = path + ('?' + address.query if address.query else '')
         method = handler.command
         body = None
@@ -186,12 +196,13 @@ class BackendAPIProxy:
                     headers[name] = handler.headers[name]
             connection.request(method, target, body=body, headers=headers)
             response = connection.getresponse()
-            dataset_file = re.fullmatch(r'/api/datasets/(images/[0-9a-fA-F-]{36}/(file|thumbnail)|exports/[0-9a-fA-F-]{36}/download)', path)
+            dataset_file = re.fullmatch(r'/api/datasets/(images/[0-9a-fA-F-]{36}/(file|thumbnail)|exports/[0-9a-fA-F-]{36}/download)'
+                                        r'|/api/training/(jobs/[0-9a-fA-F-]{36}/artifacts/[A-Za-z0-9_.-]+|models/[A-Za-z0-9_.-]+/files/(best|last))', path)
             if dataset_file and response.status == 200:
                 # Dataset JPEG/ZIP responses are streamed, never buffered under the JSON cap.
                 length = response.getheader('Content-Length', '')
                 content_type = response.getheader('Content-Type', '')
-                if not re.fullmatch(r'[0-9]{1,15}', length) or content_type not in ('image/jpeg', 'application/zip'):
+                if not re.fullmatch(r'[0-9]{1,15}', length) or content_type not in ('image/jpeg', 'application/zip', 'application/octet-stream'):
                     handler.send_error(502)
                     return
                 handler.send_response(200)

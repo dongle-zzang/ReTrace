@@ -45,6 +45,9 @@ def test_compose_preserves_isolation_and_secret_boundaries():
         assert not any("RTSP" in key for key in services[name]["environment"])
     assert "ports" not in services["postgres"]
     assert services["backend"]["ports"] == ["${BACKEND_BIND_IP:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"]
+    # Training stays disabled unless the operator sets the tokens in the private .env.
+    assert services["backend"]["environment"]["TRAINING_ADMIN_TOKEN"] == "${TRAINING_ADMIN_TOKEN:-}"
+    assert services["backend"]["environment"]["TRAINING_WORKER_TOKEN"] == "${TRAINING_WORKER_TOKEN:-}"
     dockerfile = (ROOT / "backend/Dockerfile").read_text()
     assert "--workers\", \"1" in dockerfile
     assert "USER backend" in dockerfile

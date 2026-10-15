@@ -3,6 +3,7 @@ import type { Camera } from '~/types/camera'
 import type { ConnectionState, RealtimePreviewClient, TransportState } from '~/composables/realtimePreviewClient'
 import { JpegFrameView } from '~/composables/realtimePreviewClient'
 import { LoaderCircle, Video, VideoOff } from '@lucide/vue'
+import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{
   camera: Camera
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   transport: [state: TransportState]
 }>()
 
+const { t } = useI18n()
 const imageElement = ref<HTMLImageElement | null>(null)
 const hasFrame = ref(false)
 let view: JpegFrameView | null = null
@@ -96,7 +98,7 @@ onUnmounted(() => {
       ref="imageElement"
       class="h-full w-full object-contain transition-[opacity,filter] duration-700 ease-out"
       :class="state === 'connected' ? 'opacity-100 blur-0' : 'opacity-0 blur-sm'"
-      :alt="camera.name + ' live preview'"
+      :alt="t('{camera} live preview', { camera: camera.name })"
     >
     <Transition
       enter-active-class="transition-opacity duration-300"
@@ -113,11 +115,11 @@ onUnmounted(() => {
           <LoaderCircle v-else-if="state === 'connecting' || state === 'reconnecting'" class="size-5 animate-spin text-primary" />
           <Video v-else class="size-5" />
         </div>
-        <p v-if="!camera.enabled" class="text-sm">Camera disabled</p>
-        <p v-else-if="state === 'reconnecting' || state === 'connecting' && !serverConnected" class="text-sm">Connecting to server…</p>
-        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">No video from camera ({{ cameraState ?? camera.status.state }})</p>
-        <p v-else-if="state === 'connecting'" class="text-sm">Waiting for video…</p>
-        <p v-else class="text-sm">Video starts when visible</p>
+        <p v-if="!camera.enabled" class="text-sm">{{ t('Camera disabled') }}</p>
+        <p v-else-if="state === 'reconnecting' || state === 'connecting' && !serverConnected" class="text-sm">{{ t('Connecting to server…') }}</p>
+        <p v-else-if="state === 'connecting' && cameraUnavailable" class="text-sm">{{ t('No video from camera ({state})', { state: cameraState ?? camera.status.state }) }}</p>
+        <p v-else-if="state === 'connecting'" class="text-sm">{{ t('Waiting for video…') }}</p>
+        <p v-else class="text-sm">{{ t('Video starts when visible') }}</p>
       </div>
     </Transition>
   </div>

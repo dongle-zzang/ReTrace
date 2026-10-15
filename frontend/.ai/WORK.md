@@ -1,5 +1,26 @@
 # Frontend current work
 
+## Train All + new-image evaluation UI (/training) — branch claude/project-thread-3a3y0r, not deployed (2026-10-15)
+
+- Training mode selector (standard / Train All; Train All forces car/truck/bus, disables patience, suggests the best epoch of a standard run on the same export), per-mode dataset check, `TrainingNewImageEval.vue` (plan + start evaluation), job panel hides validation metrics for Train All and shows evaluation jobs, history kind tags, model new-image results. Server contract: root docs/training.md §4-1.
+- Verified: npm test 52, typecheck; headless Chromium via `nuxt dev` → real Backend (SQLite demo data) at 1440/390 px, ko/en, no horizontal overflow. Not verified against the real server.
+
+## Training auth 415 fix + Parking as landing page — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
+
+- `trainingRequest` POSTs always send `Content-Type: application/json` and `{}` when there is no body (Preview proxy `read_body` returns 415 otherwise); fixes `/auth` unlock and `/jobs/{id}/stop`. No server, token or env change.
+- `/` redirects to `/parking`; CCTV monitoring moved from `pages/index.vue` to `pages/monitoring.vue` (`/monitoring`); nav item and logo updated.
+- Verified: npm test 51, typecheck, generate; local `nuxt dev` on :4444 → real `BackendAPIProxy` → mock backend: old code 415 with no payload, new code 204 with `{}`; `/` lands on /parking, /monitoring renders. Not verified against the real server.
+
+## Korean / English UI toggle — branch claude/project-thread-9dgooq (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-14)
+
+- `LocaleToggle.vue` in AppNav (beside the menu from sm; below the bar on phones because 4 tabs already fill 360px; clock now from lg). `useI18n` + `lib/i18n.ts` + `lib/i18n.ko.ts`, English text as key, choice in localStorage `retrace.locale`, browser language fallback. All pages/components incl. /training translated; server-sent text stays as sent. README "화면 언어" section.
+- Verified: npm test (51, incl. new i18n coverage test), typecheck, generate; headless Chromium against a static build + mock /api/cameras: toggle switches h1/nav/title/html lang, persists across reload, ko-KR browser defaults to Korean, no horizontal overflow at 360/390/640/768/1024/1440, no console errors. Not verified against the real server.
+
+## AI Training page (/training) — branch claude/web-yolo-finetuning-k5jypr, not deployed (2026-10-14)
+
+- New `pages/training.vue`, `TrainingJobPanel/TrainingChart/TrainingComparison.vue`, `composables/trainingApi.ts` (admin token in sessionStorage only), `lib/training.ts`, `types/training.ts`; nav item `AI Training`/`Train` (mobile nav text-xs, gap-0.5 so 4 items fit 360px). Server contract: root docs/training.md.
+- Verified: npm test, typecheck, generate; headless Chromium against a demo backend (desktop, 360/390px no overflow). Not verified against the real server API.
+
 ## Dataset editor status placement — deployment pending (2026-10-14)
 
 - Moved Reviewed/Pending/Unsaved changes badge from the page header to a fixed top-left overlay inside the annotation canvas. Dark translucent backdrop, larger padding and teal/amber contrast; pointer-events:none preserves drawing through the badge. Existing parking operations branch changes preserved.

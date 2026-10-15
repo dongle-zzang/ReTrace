@@ -1,5 +1,21 @@
 # Current work
 
+## Train All mode + new-CCTV-image evaluation (/training) — branch claude/project-thread-3a3y0r (based on claude/web-yolo-finetuning-k5jypr), not deployed (2026-10-15)
+
+- Goal: train YOLO11m (COCO80 head, car pretrained) on all 25 images (train+val+test) for the 5 parking CCTVs, measure only on images never trained on. Contract: docs/training.md §4-1, training/README.md §5 "전체 학습".
+- Done: `train_mode` standard|all (job config, dataset check per mode, model registry config); train.py `--train-all` (training copy `<root>__trainall`, val=False, patience 0, best.pt = last.pt); worker evaluate jobs (`config.kind=evaluate`, subset copy + `evaluate.py --eval-only`); Backend `/evaluations/plan`, POST `/evaluations` (excludes lineage-trained image ids and their capture sessions), `metrics.new_images` on models, `test_overlap` caveat; Preview allowlist POST `/api/training/evaluations`; frontend mode selector, epoch hint, eval section, panel/history/model display.
+- Verified (cloud sandbox): backend+training+preview tests 187, frontend npm test 52 + typecheck; real Ultralytics 8.4.176 CPU harness (train.py --train-all, evaluate.py --eval-only); browser check against a demo backend (1440/390, ko/en, no overflow).
+- Not verified: real GPU run, live PostgreSQL, Preview proxy on the server.
+- Next (operator): deploy together with PR #1 steps in docs/training.md §5 (backend rebuild, `retrace` restart for preview_web.py, frontend-dist, worker restart to load new worker.py/train.py). Then a standard run → use its best epoch for Train All → capture/label new images on other days → new export → evaluate.
+
+## Web YOLO11m fine-tuning (/training) — implemented on branch claude/web-yolo-finetuning-k5jypr, not deployed (2026-10-14)
+
+- Goal: start/monitor/stop vehicle fine-tuning from the web; training runs only in host `training/worker.py` (existing training/.venv, no new installs), never in the browser/API; production YOLO11m never auto-replaced. Contract/runbook: docs/training.md.
+- Done: Backend `/api/training` + additive tables training_jobs/training_models (one active job via active_slot unique), frozen dataset snapshots with sha256, admin/worker Bearer tokens (empty = disabled), Preview proxy allowlist (worker paths 404), GPU/Preview-FPS guard, stale/restart recovery, graceful stop; worker with safe extraction and failure classification; train.py progress/stop callbacks; evaluate.py per-image predictions; check_dataset/coco80 view accept car-only exports; frontend `/training` page.
+- Verified in the cloud sandbox only (no GPU server access): backend 152 tests, training unittests incl. worker↔real Backend integration with fake nvidia-smi/train/evaluate, Preview proxy tests, frontend tests/typecheck/generate, browser check against a demo backend (desktop + 360/390px).
+- Not verified: real GPU training via worker, PostgreSQL table creation on the live DB, Preview proxy on the server, real FPS guard thresholds under load.
+- Next (operator, sudo): set TRAINING_ADMIN_TOKEN/TRAINING_WORKER_TOKEN in private .env → `sudo docker compose up -d --build --no-deps backend` → `sudo docker compose restart retrace` (briefly interrupts video; agree timing) → upload frontend-dist → start worker per docs/training.md §5 → UI smoke (1 epoch, 640/b4) while watching Preview FPS before any full run.
+
 ## Parking label management API — deployment pending (2026-10-14)
 
 - User approved six parking operations improvements. Add PATCH/DELETE /api/parking/spaces/{id}: rename preserves zones/baselines; delete rejects attached zones with 409. Parent locking shared with zone create; Preview UUID-item write allowlist extended. No schema/data migration or live data writes.

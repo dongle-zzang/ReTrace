@@ -15,12 +15,14 @@ import { Card, CardContent } from '~/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '~/components/ui/empty'
 import { Skeleton } from '~/components/ui/skeleton'
 import { useCameras } from '~/composables/useCameras'
+import { useI18n } from '~/composables/useI18n'
 import { useParking } from '~/composables/useParking'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { compareCameras } from '~/lib/cameraSort'
 import { isParkingCamera } from '~/lib/parking'
 
-useHead({ title: 'ReTrace · Parking' })
+const { t } = useI18n()
+useHead({ title: () => `ReTrace · ${t('Parking')}` })
 
 const config = useRuntimeConfig()
 const { cameras, loading, refreshing, error, refresh } = useCameras()
@@ -47,9 +49,9 @@ const selectedSummary = computed(() => selectedSpaceId.value ? parking.summaryBy
 function compare(id: string) { selectedSpaceId.value = id; comparisonOpen.value = true }
 const missingBaselines = computed(() => allZones.value.filter(zone => zone.calibrated !== true).length)
 const freshnessText = computed(() => {
-  if (parking.disconnected.value) return 'Server disconnected · readings unavailable'
-  if (parking.delayed.value) return 'Waiting for fresh parking status'
-  return parking.lastReportAt.value ? `Status received ${Math.max(0, Math.floor((parking.now.value - parking.lastReportAt.value) / 1000))}s ago` : 'Waiting for parking status'
+  if (parking.disconnected.value) return t('Server disconnected · readings unavailable')
+  if (parking.delayed.value) return t('Waiting for fresh parking status')
+  return parking.lastReportAt.value ? t('Status received {seconds}s ago', { seconds: Math.max(0, Math.floor((parking.now.value - parking.lastReportAt.value) / 1000)) }) : t('Waiting for parking status')
 })
 
 function enterDelay(index: number, step = 70, base = 0) {
@@ -62,11 +64,11 @@ function enterDelay(index: number, step = 70, base = 0) {
     <div class="mx-auto max-w-[1500px] px-5 pt-10 sm:px-8 sm:pt-12 lg:px-10">
       <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between motion-safe:animate-fade-up">
         <div class="min-w-0">
-          <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Parking</h1>
+          <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">{{ t('Parking') }}</h1>
           <!-- div, not p: Badge renders a div. -->
           <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            Each label is one real spot; cameras that see the same label are combined.
-            <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="text-muted-foreground">Mock data</Badge>
+            {{ t('Each label is one real spot; cameras that see the same label are combined.') }}
+            <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="text-muted-foreground">{{ t('Mock data') }}</Badge>
           </div>
         </div>
         <div class="w-full lg:w-[34rem]">
@@ -75,19 +77,19 @@ function enterDelay(index: number, step = 70, base = 0) {
       </div>
     </div>
 
-    <section aria-label="Parking" class="mx-auto max-w-[1500px] px-5 pt-8 pb-16 sm:px-8 lg:px-10">
+    <section :aria-label="t('Parking')" class="mx-auto max-w-[1500px] px-5 pt-8 pb-16 sm:px-8 lg:px-10">
       <div class="mb-6 flex flex-wrap items-center gap-2">
         <p class="mr-auto text-xs" :class="parking.disconnected.value || parking.delayed.value ? 'text-amber-300' : 'text-muted-foreground'" role="status">{{ freshnessText }}</p>
-        <Button size="sm" variant="outline" @click="calibrationOpen = true">Empty baselines <span class="tabular-nums text-muted-foreground">{{ missingBaselines }}</span></Button>
-        <Button size="sm" variant="outline" @click="labelManagerOpen = true">Manage labels</Button>
-        <Button size="sm" variant="outline" :disabled="parking.loading.value" @click="parking.reload()">Refresh status</Button>
+        <Button size="sm" variant="outline" @click="calibrationOpen = true">{{ t('Empty baselines') }} <span class="tabular-nums text-muted-foreground">{{ missingBaselines }}</span></Button>
+        <Button size="sm" variant="outline" @click="labelManagerOpen = true">{{ t('Manage labels') }}</Button>
+        <Button size="sm" variant="outline" :disabled="parking.loading.value" @click="parking.reload()">{{ t('Refresh status') }}</Button>
       </div>
       <Alert v-if="error" variant="destructive" class="motion-safe:animate-fade-up mb-8 border-destructive/30 bg-destructive/10 px-4 py-3">
         <CircleAlert />
-        <AlertTitle>Couldn't load cameras</AlertTitle>
-        <AlertDescription>{{ error }}</AlertDescription>
+        <AlertTitle>{{ t("Couldn't load cameras") }}</AlertTitle>
+        <AlertDescription>{{ t(error) }}</AlertDescription>
         <AlertAction class="top-1/2 -translate-y-1/2">
-          <Button size="sm" variant="outline" :disabled="refreshing" @click="refresh">Retry</Button>
+          <Button size="sm" variant="outline" :disabled="refreshing" @click="refresh">{{ t('Retry') }}</Button>
         </AlertAction>
       </Alert>
 
@@ -97,13 +99,13 @@ function enterDelay(index: number, step = 70, base = 0) {
         role="alert"
       >
         <CircleAlert class="size-3.5 shrink-0" />
-        <span class="min-w-0 flex-1">{{ parking.error.value ?? parking.statusError.value }}</span>
+        <span class="min-w-0 flex-1">{{ t(parking.error.value ?? parking.statusError.value ?? '') }}</span>
         <Button size="sm" variant="ghost" class="h-6 shrink-0 px-2 text-xs text-red-200 hover:bg-red-400/10 hover:text-red-100" @click="parking.reload()">
-          Retry
+          {{ t('Retry') }}
         </Button>
       </div>
 
-      <div v-if="loading" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" aria-label="Loading parking cameras">
+      <div v-if="loading" class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3" :aria-label="t('Loading parking cameras')">
         <Card v-for="item in 3" :key="item" :style="enterDelay(item - 1)" class="gap-0 py-0 motion-safe:animate-fade-up">
           <Skeleton class="aspect-video w-full rounded-none" />
           <CardContent class="space-y-3 px-5 py-5">
@@ -118,13 +120,13 @@ function enterDelay(index: number, step = 70, base = 0) {
           <EmptyMedia variant="icon" class="size-12 rounded-xl">
             <SquareParking class="size-6" />
           </EmptyMedia>
-          <EmptyTitle class="text-base">No parking cameras</EmptyTitle>
-          <EmptyDescription>Cameras with '주차장' in their name show up here.</EmptyDescription>
+          <EmptyTitle class="text-base">{{ t('No parking cameras') }}</EmptyTitle>
+          <EmptyDescription>{{ t("Cameras with '주차장' in their name show up here.") }}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button variant="outline" :disabled="refreshing" @click="refresh">
             <RefreshCw :class="{ 'animate-spin': refreshing }" />
-            Refresh
+            {{ t('Refresh') }}
           </Button>
         </EmptyContent>
       </Empty>
@@ -132,7 +134,7 @@ function enterDelay(index: number, step = 70, base = 0) {
       <div v-else-if="parkingCameras.length" class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div class="min-w-0">
           <div class="mb-4 flex items-center gap-3 motion-safe:animate-fade-up">
-            <h2 class="text-lg font-semibold tracking-tight">Parking cameras</h2>
+            <h2 class="text-lg font-semibold tracking-tight">{{ t('Parking cameras') }}</h2>
             <Badge variant="secondary" class="tabular-nums">{{ parkingCameras.length }}</Badge>
           </div>
           <div class="grid gap-5 sm:grid-cols-2">
@@ -158,9 +160,9 @@ function enterDelay(index: number, step = 70, base = 0) {
         </div>
 
         <!-- Plain column split by lines: the camera cards on the left already carry the card look. -->
-        <aside class="min-w-0 motion-safe:animate-fade-up xl:sticky xl:top-24 xl:self-start" aria-label="Spaces">
+        <aside class="min-w-0 motion-safe:animate-fade-up xl:sticky xl:top-24 xl:self-start" :aria-label="t('Spaces')">
           <div class="mb-4 flex items-center gap-3">
-            <h2 class="text-lg font-semibold tracking-tight">Spaces</h2>
+            <h2 class="text-lg font-semibold tracking-tight">{{ t('Spaces') }}</h2>
             <Badge variant="secondary" class="tabular-nums">{{ parking.summaries.value.length }}</Badge>
             <Button
               v-if="conflictSpaceIds.length"
@@ -170,23 +172,23 @@ function enterDelay(index: number, step = 70, base = 0) {
               :aria-pressed="filter === 'check'"
               @click="filter = filter === 'check' ? 'all' : 'check'"
             >
-              {{ conflictSummaries.length }} to check
+              {{ t('{count} to check', { count: conflictSummaries.length }) }}
             </Button>
           </div>
           <div class="mb-3 space-y-2">
-            <Input v-model="search" type="search" aria-label="Search parking labels" placeholder="Search labels" />
-            <div class="flex flex-wrap gap-1.5"><Button v-for="option in ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</Button></div>
-            <p class="text-xs text-muted-foreground">{{ boardSummaries.length }} of {{ parking.summaries.value.length }} spaces</p>
+            <Input v-model="search" type="search" :aria-label="t('Search parking labels')" :placeholder="t('Search labels')" />
+            <div class="flex flex-wrap gap-1.5"><Button v-for="option in ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ t(option[1]) }}</Button></div>
+            <p class="text-xs text-muted-foreground">{{ t('{shown} of {total} spaces', { shown: boardSummaries.length, total: parking.summaries.value.length }) }}</p>
           </div>
           <div v-if="parking.loading.value" class="space-y-2">
             <Skeleton v-for="item in 4" :key="item" class="h-14 w-full" />
           </div>
           <p v-else-if="!parking.summaries.value.length" class="border-t border-white/10 py-6 text-sm text-muted-foreground">
-            No labelled zones yet. Open a camera with the P button to draw zones.
+            {{ t('No labelled zones yet. Open a camera with the P button to draw zones.') }}
           </p>
           <div v-else class="parking-scroll max-h-[max(12rem,calc(100dvh-23rem))] overflow-y-auto pr-2">
             <ParkingSpaceBoard :summaries="boardSummaries" :camera-names="cameraNames" :reasons="reasons" selectable @select="compare" />
-            <p v-if="!boardSummaries.length" class="py-6 text-sm text-muted-foreground">No spaces match this search or filter.</p>
+            <p v-if="!boardSummaries.length" class="py-6 text-sm text-muted-foreground">{{ t('No spaces match this search or filter.') }}</p>
           </div>
         </aside>
       </div>

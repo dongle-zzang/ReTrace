@@ -221,7 +221,7 @@ def test_status_row_count_does_not_grow(service):
         app.state.poller.poll_once()
     with app.state.sessions() as session:
         assert session.scalar(select(func.count()).select_from(CameraStatus)) == 3
-    assert set(inspect(engine).get_table_names()) == {"cameras", "camera_status", "person_tracks", "parking_spaces", "parking_events", "color_parking_spaces", "parking_zones", "dataset_images", "dataset_exports"}
+    assert set(inspect(engine).get_table_names()) == {"cameras", "camera_status", "person_tracks", "parking_spaces", "parking_events", "color_parking_spaces", "parking_zones", "dataset_images", "dataset_exports", "training_jobs", "training_models"}
 
 
 def add_history(app, track_id="77", days_ago=0):

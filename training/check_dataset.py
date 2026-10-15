@@ -26,6 +26,9 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent
 SPLITS = ("train", "val", "test")
 CLASSES = {0: "car", 1: "truck", 2: "bus"}
+# New exports are car-only (backend/app/dataset.py CLASSES); earlier ZIPs keep car/truck/bus.
+# Both use the same dataset IDs (0 car, never COCO IDs), so CLASSES stays the superset.
+ACCEPTED_CLASS_MAPS = ({0: "car"}, CLASSES)
 SESSION_GAP_SECONDS = 1800  # backend/app/dataset.py capture(): same session if gap < 30 min
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 MIN_EVAL_IMAGES = 10  # same threshold the exporter warns on
@@ -85,14 +88,15 @@ def check(root):
     data_yaml = yaml.safe_load((root / "data.yaml").read_text())
     names = data_yaml.get("names")
     names = dict(enumerate(names)) if isinstance(names, list) else {int(k): v for k, v in (names or {}).items()}
-    if names != CLASSES:
-        errors.append(f"data.yaml names {names} != expected {CLASSES}")
+    if names not in ACCEPTED_CLASS_MAPS:
+        errors.append(f"data.yaml names {names} != expected one of {list(ACCEPTED_CLASS_MAPS)}")
     if "path" in data_yaml:
         warnings.append("data.yaml has 'path'; ReTrace exports resolve splits relative to data.yaml")
     for split in SPLITS:
         if data_yaml.get(split) != f"images/{split}":
             warnings.append(f"data.yaml {split}={data_yaml.get(split)!r} (expected images/{split})")
-    nc = len(names) if names else len(CLASSES)
+    nc = len(names) if names in ACCEPTED_CLASS_MAPS else len(CLASSES)
+    info["classes"] = names
 
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else None

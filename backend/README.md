@@ -404,3 +404,12 @@ API·DB·좌표·분할·복구·용량 제한·단일 worker 경계와 운영 �
 [AI 데이터셋](../docs/datasets.md)입니다. `tests/test_datasets.py`로 CPU 검증합니다.
 
 데이터셋 후속: 새 ZIP은 `0: car`만 내보냅니다. 기존 truck/bus 라벨을 자동 변경하지 않고 해당 검수 데이터가 있으면 내보내기 오류로 안내합니다. `DELETE /api/datasets/exports/{uuid}`는 building을 거부하고 기록·ZIP만 삭제하며 원본 이미지·라벨은 보존합니다. Backend rebuild와 Preview 프록시 restart 후 사용합니다.
+
+## 웹 차량 모델 fine-tuning
+
+`app/training.py`(router `/api/training`, `TrainingService`)와 `app/training_models.py`(additive `training_jobs`,
+`training_models`)가 학습 job 생성·진행·중지·결과·모델 registry를 제공합니다. 학습은 API 요청 안에서 실행하지 않으며
+host의 `training/worker.py`가 `TRAINING_WORKER_TOKEN`으로 `/api/training/worker/*`를 호출합니다(Preview proxy는 404).
+시작·중지·다운로드는 `TRAINING_ADMIN_TOKEN` Bearer가 필요하고, 두 토큰이 비어 있으면 해당 기능은 503으로 꺼집니다.
+데이터셋 snapshot·산출물은 `DATASET_STORAGE_DIR/training/`에 둡니다. 계약·GPU 보호 기준·운영 절차는
+[웹 fine-tuning](../docs/training.md), CPU 검증은 `tests/test_training.py`입니다.

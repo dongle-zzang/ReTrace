@@ -4,12 +4,14 @@ import { DATASET_CLASSES } from '~/types/dataset'
 import { clientToNormalized } from '~/lib/videoGeometry'
 import { createDatasetBoxId } from '~/lib/datasetBoxId'
 import { useVideoStage } from '~/composables/useVideoStage'
+import { useI18n } from '~/composables/useI18n'
 
 const props = defineProps<{
   imageUrl: string; width: number; height: number; boxes: VehicleBox[]
   selectedId: string | null; classId: number; tool: 'draw' | 'select'; zoom: number; disabled: boolean
 }>()
 const emit = defineEmits<{ update: [boxes: VehicleBox[]]; select: [id: string | null]; ready: [ready: boolean]; delete: [id: string] }>()
+const { t } = useI18n()
 const stage = ref<HTMLElement | null>(null)
 const svg = ref<SVGSVGElement | null>(null)
 const loaded = ref(false)
@@ -88,10 +90,10 @@ function imageLoaded() { loaded.value = true; loadError.value = false; emit('rea
 </script>
 
 <template>
-  <div class="relative h-full min-h-0 basis-0 overflow-auto [scrollbar-gutter:stable] [overflow-anchor:none] rounded-xl bg-black/80 ring-1 ring-white/10" aria-label="Bounding box canvas">
+  <div class="relative h-full min-h-0 basis-0 overflow-auto [scrollbar-gutter:stable] [overflow-anchor:none] rounded-xl bg-black/80 ring-1 ring-white/10" :aria-label="t('Bounding box canvas')">
     <div ref="stage" class="relative" :style="{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }">
-      <img :src="imageUrl" alt="Clean captured frame for vehicle annotation" class="absolute inset-0 h-full w-full object-contain" draggable="false" @load="imageLoaded" @error="loadError = true; loaded = false; emit('ready', false)">
-      <svg v-if="loaded" ref="svg" class="absolute z-10 touch-none select-none outline-none" :class="tool === 'draw' ? 'cursor-crosshair' : ''" :style="{ ...contentStyle, pointerEvents: disabled ? 'none' : 'auto' }" :viewBox="`0 0 ${width} ${height}`" tabindex="0" role="group" aria-label="Vehicle bounding boxes" @pointerdown="start" @pointerenter="move" @pointerleave="cursor = null" @pointermove="move" @pointerup="end" @pointercancel="cancel" @keydown="key">
+      <img :src="imageUrl" :alt="t('Clean captured frame for vehicle annotation')" class="absolute inset-0 h-full w-full object-contain" draggable="false" @load="imageLoaded" @error="loadError = true; loaded = false; emit('ready', false)">
+      <svg v-if="loaded" ref="svg" class="absolute z-10 touch-none select-none outline-none" :class="tool === 'draw' ? 'cursor-crosshair' : ''" :style="{ ...contentStyle, pointerEvents: disabled ? 'none' : 'auto' }" :viewBox="`0 0 ${width} ${height}`" tabindex="0" role="group" :aria-label="t('Vehicle bounding boxes')" @pointerdown="start" @pointerenter="move" @pointerleave="cursor = null" @pointermove="move" @pointerup="end" @pointercancel="cancel" @keydown="key">
         <g v-if="cursor && tool === 'draw' && !disabled" class="pointer-events-none" stroke="white" stroke-opacity="0.55" stroke-width="1">
           <line :x1="cursor.x" y1="0" :x2="cursor.x" :y2="height" vector-effect="non-scaling-stroke" />
           <line x1="0" :y1="cursor.y" :x2="width" :y2="cursor.y" vector-effect="non-scaling-stroke" />
@@ -106,7 +108,7 @@ function imageLoaded() { loaded.value = true; loadError.value = false; emit('rea
         <rect v-if="draft" :x="draft.x" :y="draft.y" :width="draft.width" :height="draft.height" fill="var(--primary)" fill-opacity="0.1" stroke="var(--primary)" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" class="pointer-events-none" />
       </svg>
     </div>
-    <p v-if="loadError" class="absolute inset-0 grid place-items-center p-6 text-center text-sm text-red-300" role="alert">Could not load the original image. Reload to try again.</p>
-    <p v-else-if="!loaded" class="absolute inset-0 grid place-items-center text-sm text-muted-foreground" role="status">Loading original image…</p>
+    <p v-if="loadError" class="absolute inset-0 grid place-items-center p-6 text-center text-sm text-red-300" role="alert">{{ t('Could not load the original image. Reload to try again.') }}</p>
+    <p v-else-if="!loaded" class="absolute inset-0 grid place-items-center text-sm text-muted-foreground" role="status">{{ t('Loading original image…') }}</p>
   </div>
 </template>
