@@ -61,28 +61,31 @@ function enterDelay(index: number, step = 70, base = 0) {
 
 <template>
   <main class="text-foreground">
-    <div class="mx-auto max-w-[1500px] px-5 pt-10 sm:px-8 sm:pt-12 lg:px-10">
-      <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between motion-safe:animate-fade-up">
-        <div class="min-w-0">
-          <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">{{ t('Parking') }}</h1>
-          <!-- div, not p: Badge renders a div. -->
-          <div class="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {{ t('Each label is one real spot; cameras that see the same label are combined.') }}
-            <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="text-muted-foreground">{{ t('Mock data') }}</Badge>
-          </div>
-        </div>
-        <div class="w-full lg:w-[34rem]">
-          <ParkingSummary :counts="parking.totals.value" interactive :selected="filter" @select="filter = $event" />
-        </div>
-      </div>
+    <div class="mx-auto max-w-[1500px] px-5 pt-10 sm:px-8 sm:pt-12 lg:px-10 motion-safe:animate-fade-up">
+      <h1 class="sr-only">{{ t('Parking') }}</h1>
+      <Badge v-if="parking.api.kind === 'mock'" variant="outline" class="text-muted-foreground">{{ t('Mock data') }}</Badge>
     </div>
 
-    <section :aria-label="t('Parking')" class="mx-auto max-w-[1500px] px-5 pt-8 pb-16 sm:px-8 lg:px-10">
-      <div class="mb-6 flex flex-wrap items-center gap-2">
-        <p class="mr-auto text-xs" :class="parking.disconnected.value || parking.delayed.value ? 'text-amber-300' : 'text-muted-foreground'" role="status">{{ freshnessText }}</p>
-        <Button size="sm" variant="outline" @click="calibrationOpen = true">{{ t('Empty baselines') }} <span class="tabular-nums text-muted-foreground">{{ missingBaselines }}</span></Button>
-        <Button size="sm" variant="outline" @click="labelManagerOpen = true">{{ t('Manage labels') }}</Button>
-        <Button size="sm" variant="outline" :disabled="parking.loading.value" @click="parking.reload()">{{ t('Refresh status') }}</Button>
+    <section :aria-label="t('Parking')" class="mx-auto max-w-[1500px] px-5 pt-2 pb-16 sm:px-8 lg:px-10">
+      <!-- Operations: status feed, empty baselines, labels (same card look as AI Training). -->
+      <div class="mb-6 grid gap-2 sm:grid-cols-3" :aria-label="t('Parking operations')" role="group">
+        <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Status updates') }}</h2>
+            <Button size="icon-xs" variant="ghost" class="cursor-pointer text-muted-foreground" :aria-label="t('Refresh status')" :title="t('Refresh status')" :disabled="parking.loading.value" @click="parking.reload()">
+              <RefreshCw :class="{ 'animate-spin': parking.loading.value }" />
+            </Button>
+          </div>
+          <p class="text-sm font-medium" :class="parking.disconnected.value || parking.delayed.value ? 'text-amber-300' : ''" role="status">{{ freshnessText }}</p>
+        </article>
+        <button type="button" class="cursor-pointer space-y-2 text-left transition-colors hover:border-white/20 rounded-2xl border border-white/10 bg-white/[0.03] p-4" @click="calibrationOpen = true">
+          <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Empty baselines') }}</h2>
+          <p class="text-sm font-medium" :class="missingBaselines ? 'text-amber-300' : ''">{{ missingBaselines ? t('{count} zones without a baseline', { count: missingBaselines }) : t('All zones have a baseline') }}</p>
+        </button>
+        <button type="button" class="cursor-pointer space-y-2 text-left transition-colors hover:border-white/20 rounded-2xl border border-white/10 bg-white/[0.03] p-4" @click="labelManagerOpen = true">
+          <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Manage labels') }}</h2>
+          <p class="text-sm font-medium">{{ t('{count} registered labels', { count: parking.spaces.value.length }) }}</p>
+        </button>
       </div>
       <Alert v-if="error" variant="destructive" class="motion-safe:animate-fade-up mb-8 border-destructive/30 bg-destructive/10 px-4 py-3">
         <CircleAlert />
@@ -175,6 +178,7 @@ function enterDelay(index: number, step = 70, base = 0) {
               {{ t('{count} to check', { count: conflictSummaries.length }) }}
             </Button>
           </div>
+          <ParkingSummary :counts="parking.totals.value" compact class="-mt-2 mb-3" />
           <div class="mb-3 space-y-2">
             <Input v-model="search" type="search" :aria-label="t('Search parking labels')" :placeholder="t('Search labels')" />
             <div class="flex flex-wrap gap-1.5"><Button v-for="option in ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ t(option[1]) }}</Button></div>
