@@ -58,3 +58,21 @@ test('formatting and box geometry', () => {
   assert.deepEqual(plain(training.boxStyle([10, 20, 60, 70], 200, 100)), { left: '5%', top: '20%', width: '25%', height: '50%' })
   assert.ok(training.isActiveStatus('stopping') && !training.isActiveStatus('stopped'))
 })
+
+test('Train All epoch hint comes from the latest standard run on the same export', () => {
+  const job = (name, created_at, changes = {}) => ({ name, created_at, status: 'completed', export_id: 'e1', config: { kind: 'train', train_mode: 'standard' }, best: { epoch: 20, map50_95: 0.5 }, ...changes })
+  const jobs = [
+    job('old', '2026-10-01T00:00:00Z', { best: { epoch: 12, map50_95: 0.4 } }),
+    job('new', '2026-10-02T00:00:00Z', { best: { epoch: 31, map50_95: 0.6 } }),
+    job('all', '2026-10-03T00:00:00Z', { config: { train_mode: 'all' }, best: { epoch: 50, map50_95: null } }),
+    job('smoke', '2026-10-04T00:00:00Z', { config: { smoke: true } }),
+    job('other', '2026-10-05T00:00:00Z', { export_id: 'e2' }),
+    job('failed', '2026-10-06T00:00:00Z', { status: 'failed' }),
+    job('eval', '2026-10-07T00:00:00Z', { config: { kind: 'evaluate' } }),
+  ]
+  assert.deepEqual(plain(training.suggestedTrainAllEpochs(jobs, 'e1')), { epoch: 31, name: 'new' })
+  assert.equal(training.suggestedTrainAllEpochs(jobs, 'e3'), null)
+  assert.equal(training.jobKind({}), 'standard')
+  assert.equal(training.jobKind({ train_mode: 'all' }), 'all')
+  assert.equal(training.jobKind({ kind: 'evaluate' }), 'evaluate')
+})

@@ -295,15 +295,27 @@ def validated_config(spec):
         if type(value) is not int or not low <= value <= high:
             raise WorkerError("invalid_config", f"Invalid {name} in the job configuration.")
         return value
-    if config.get("class_mode") not in ("vehicle3", "single"):
-        raise WorkerError("invalid_config", "Invalid class mode in the job configuration.")
     if config.get("imgsz") not in (640, 960):
         raise WorkerError("invalid_config", "Invalid image size in the job configuration.")
     if not JOB_ID.fullmatch(str(spec.get("id", ""))):
         raise WorkerError("invalid_config", "Invalid job id.")
-    return {"epochs": integer("epochs", 1, 300), "imgsz": config["imgsz"], "batch": integer("batch", 1, 32),
-            "seed": integer("seed", 0, 2**31 - 1), "patience": integer("patience", 1, 300),
-            "class_mode": config["class_mode"], "smoke": config.get("smoke") is True}
+    if config.get("kind", "train") == "evaluate":
+        ids = config.get("eval_image_ids")
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 5000
+                or any(not isinstance(i, str) or not JOB_ID.fullmatch(i) for i in ids)):
+            raise WorkerError("invalid_config", "Invalid evaluation image list in the job configuration.")
+        return {"kind": "evaluate", "imgsz": config["imgsz"], "eval_image_ids": ids}
+    if config.get("kind", "train") != "train":
+        raise WorkerError("invalid_config", "Invalid job kind in the job configuration.")
+    if config.get("class_mode") not in ("vehicle3", "single"):
+        raise WorkerError("invalid_config", "Invalid class mode in the job configuration.")
+    train_mode = config.get("train_mode", "standard")
+    if train_mode not in ("standard", "all") or (train_mode == "all" and config["class_mode"] != "vehicle3"):
+        raise WorkerError("invalid_config", "Invalid training mode in the job configuration.")
+    return {"kind": "train", "epochs": integer("epochs", 1, 300), "imgsz": config["imgsz"],
+            "batch": integer("batch", 1, 32), "seed": integer("seed", 0, 2**31 - 1),
+            "patience": integer("patience", 1, 300), "class_mode": config["class_mode"],
+            "smoke": config.get("smoke") is True, "train_mode": train_mode}
 
 
 class Worker:
@@ -367,7 +379,7 @@ class Worker:
         if reply.get("stop") or self.shutdown:
             raise StopRequested(reply.get("stop_reason") or "Worker is shutting down.")
 
-    def prepare_dataset(self, spec, job_dir, job):
+    def prepare_dataset(self, spec, job_dir, job, require_val=True):
         self.check_stop(job, "preparing", "Downloading the frozen dataset snapshot")
         zip_path = job_dir / "dataset.zip"
         if not (zip_path.is_file() and sha256_file(zip_path) == spec["dataset_sha256"]):
@@ -380,7 +392,7 @@ class Worker:
         (job_dir / "check_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str))
         if report["errors"]:
             raise WorkerError("dataset_invalid", "Dataset validation failed: " + "; ".join(report["errors"][:5]))
-        if report["info"]["images"]["val"] == 0:
+        if require_val and report["info"]["images"]["val"] == 0:
             raise WorkerError("no_validation", "The dataset has no validation images from an independent session.")
         return root, report
 
@@ -508,42 +520,10 @@ class Worker:
             config = validated_config(spec)
             if shutil.disk_usage(self.work_dir).free // 2**20 < self.args.min_disk_mib:
                 raise WorkerError("storage_full", f"Less than {self.args.min_disk_mib} MiB free on the training host.")
-            root, report = self.prepare_dataset(spec, job_dir, job)
-            weights = self.resolve_weights(spec, job_dir)
-            gpu_before = self.wait_for_gpu(spec, job)
-            progress_file, stop_file = job_dir / "progress.json", job_dir / "stop.request"
-            stop_file.unlink(missing_ok=True)
-            cmd = [sys.executable, str(ROOT / "train.py"), "--data", str(root), "--model", str(weights),
-                   "--epochs", str(config["epochs"]), "--imgsz", str(config["imgsz"]), "--batch", str(config["batch"]),
-                   "--device", str(self.args.gpu), "--seed", str(config["seed"]), "--patience", str(config["patience"]),
-                   "--classes", "coco80" if config["class_mode"] == "vehicle3" else "single",
-                   "--project", str(job_dir), "--name", "train", "--min-free-mib", str(int(spec["required_free_mib"])),
-                   "--workers", str(self.args.dataloader_workers),
-                   "--progress-file", str(progress_file), "--stop-file", str(stop_file)]
-            if config["smoke"]:
-                cmd.append("--smoke")
-            returncode, stop_reason = self.run_child(cmd, job_dir, job, "training", progress_file, stop_file)
-            log_text = (job_dir / "train.log").read_text("utf-8", "replace")[-200_000:]
-            best = job_dir / "train" / "weights" / "best.pt"
-            result = {"gpu_before": gpu_before, "metrics_rows": read_results(job_dir / "train" / "results.csv"),
-                      "dataset_report": {"info": report["info"], "warnings": report["warnings"][:50]}}
-            if (job_dir / "train" / "run_info.json").is_file():
-                result["run_info"] = json.loads((job_dir / "train" / "run_info.json").read_text())
-            if stop_reason:
-                result.update(status="stopped", error=stop_reason)
-            elif returncode != 0:
-                code, message = classify_failure(log_text, returncode)
-                result.update(status="failed", error_code=code, error=message)
-            elif not best.is_file():
-                result.update(status="failed", error_code="model_missing", error="Training finished but best.pt was not created.")
+            if config["kind"] == "evaluate":
+                result = self.run_evaluation(spec, config, job_dir, job)
             else:
-                result["status"] = "completed"
-                if report["info"]["images"]["test"] and not config["smoke"]:
-                    result["evaluation"] = self.evaluate(spec, config, job_dir, job, root, best, weights)
-                else:
-                    result["evaluation"] = {"status": "skipped", "reason": "No independent test images; "
-                                            "improvement cannot be measured." if not report["info"]["images"]["test"]
-                                            else "Smoke run: evaluation skipped."}
+                result = self.run_training(spec, config, job_dir, job)
             self.heartbeat({**job, "phase": "saving", "message": "Uploading results"})
             result["artifacts"] = self.upload_artifacts(job_id, job_dir)
         except StopRequested as stop:
@@ -559,6 +539,81 @@ class Worker:
                       "error": f"Unexpected worker error ({error.__class__.__name__}). See the worker log."}
             print(f"job {job_id}: {error!r}", file=sys.stderr, flush=True)
         self.finish(job_id, result)
+
+    def run_training(self, spec, config, job_dir, job):
+        train_all = config["train_mode"] == "all"
+        root, report = self.prepare_dataset(spec, job_dir, job, require_val=not train_all)
+        weights = self.resolve_weights(spec, job_dir)
+        gpu_before = self.wait_for_gpu(spec, job)
+        progress_file, stop_file = job_dir / "progress.json", job_dir / "stop.request"
+        stop_file.unlink(missing_ok=True)
+        cmd = [sys.executable, str(ROOT / "train.py"), "--data", str(root), "--model", str(weights),
+               "--epochs", str(config["epochs"]), "--imgsz", str(config["imgsz"]), "--batch", str(config["batch"]),
+               "--device", str(self.args.gpu), "--seed", str(config["seed"]), "--patience", str(config["patience"]),
+               "--classes", "coco80" if config["class_mode"] == "vehicle3" else "single",
+               "--project", str(job_dir), "--name", "train", "--min-free-mib", str(int(spec["required_free_mib"])),
+               "--workers", str(self.args.dataloader_workers),
+               "--progress-file", str(progress_file), "--stop-file", str(stop_file)]
+        if config["smoke"]:
+            cmd.append("--smoke")
+        if train_all:
+            cmd.append("--train-all")
+        returncode, stop_reason = self.run_child(cmd, job_dir, job, "training", progress_file, stop_file)
+        log_text = (job_dir / "train.log").read_text("utf-8", "replace")[-200_000:]
+        best = job_dir / "train" / "weights" / "best.pt"
+        result = {"gpu_before": gpu_before, "metrics_rows": read_results(job_dir / "train" / "results.csv"),
+                  "dataset_report": {"info": report["info"], "warnings": report["warnings"][:50]}}
+        if (job_dir / "train" / "run_info.json").is_file():
+            result["run_info"] = json.loads((job_dir / "train" / "run_info.json").read_text())
+        if stop_reason:
+            result.update(status="stopped", error=stop_reason)
+        elif returncode != 0:
+            code, message = classify_failure(log_text, returncode)
+            result.update(status="failed", error_code=code, error=message)
+        elif not best.is_file():
+            result.update(status="failed", error_code="model_missing", error="Training finished but best.pt was not created.")
+        else:
+            result["status"] = "completed"
+            if train_all:
+                result["evaluation"] = {"status": "skipped", "reason": "Train All: every image of the dataset "
+                                        "was used for training, so no independent test exists. Evaluate this "
+                                        "model on newly captured CCTV images."}
+            elif report["info"]["images"]["test"] and not config["smoke"]:
+                result["evaluation"] = self.evaluate(spec, config, job_dir, job, root, best, weights)
+            else:
+                result["evaluation"] = {"status": "skipped", "reason": "No independent test images; "
+                                        "improvement cannot be measured." if not report["info"]["images"]["test"]
+                                        else "Smoke run: evaluation skipped."}
+        return result
+
+    def run_evaluation(self, spec, config, job_dir, job):
+        """Evaluation job: a registered model vs the COCO base on images it never trained on."""
+        root, _ = self.prepare_dataset(spec, job_dir, job, require_val=False)
+        import dataset_views
+        view, missing = dataset_views.subset_view(root, config["eval_image_ids"])
+        if missing:
+            raise WorkerError("dataset_invalid", f"{len(missing)} selected evaluation image(s) are not in the dataset snapshot.")
+        weights = self.resolve_weights(spec, job_dir)
+        if not BASE_WEIGHTS.is_file():
+            raise WorkerError("base_model_missing", "training/weights/yolo11m.pt is missing on the training host.")
+        gpu_before = self.wait_for_gpu(spec, job)
+        out = job_dir / "eval"
+        out.mkdir(exist_ok=True)
+        cmd = [sys.executable, str(ROOT / "evaluate.py"), "--data", str(view), "--split", "test", "--eval-only",
+               "--baseline", str(BASE_WEIGHTS), "--model", f"new={weights}", "--imgsz", str(config["imgsz"]),
+               "--device", str(self.args.gpu), "--out", str(out), "--predictions-json", str(out / "predictions.json"),
+               "--max-images", "0"]
+        returncode, stop_reason = self.run_child(cmd, job_dir, job, "evaluating", grace=30)
+        result = {"gpu_before": gpu_before}
+        if stop_reason:
+            return {**result, "status": "stopped", "error": stop_reason}
+        if returncode != 0 or not (out / "metrics.json").is_file():
+            log_text = (job_dir / "train.log").read_text("utf-8", "replace")[-200_000:]
+            code, message = classify_failure(log_text, returncode)
+            return {**result, "status": "failed", "error_code": "evaluation_failed" if code == "training_failed" else code,
+                    "error": message if code != "training_failed" else "evaluate.py failed; see the log."}
+        return {**result, "status": "completed",
+                "evaluation": {"status": "completed", "metrics": json.loads((out / "metrics.json").read_text())}}
 
     def evaluate(self, spec, config, job_dir, job, root, best, weights):
         if not BASE_WEIGHTS.is_file():
