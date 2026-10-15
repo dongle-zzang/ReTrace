@@ -107,6 +107,39 @@ class CheckDatasetTest(unittest.TestCase):
         self.assertFalse((view / "images" / "train").is_symlink())
         self.assertEqual((view / "images" / "train" / "a.jpg").resolve(), (self.root / "images/train/a.jpg").resolve())
 
+    def test_train_all_view_trains_on_every_split_and_keeps_the_export(self):
+        write_dataset(self.root, GOOD)
+        before = {f: f.read_bytes() for f in self.root.rglob("*") if f.is_file()}
+        names = {i: f"class{i}" for i in range(80)} | {2: "car", 5: "bus", 7: "truck"}
+        view = dataset_views.train_all_view(self.root, names)
+        self.assertEqual(sorted(p.name for p in (view / "images" / "train").iterdir()),
+                         ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
+        self.assertFalse((view / "images" / "val").exists() or (view / "images" / "test").exists())
+        self.assertEqual((view / "labels" / "train" / "d.txt").read_text(), "2 0.9 0.9 0.2 0.2\n")  # car -> COCO 2
+        self.assertEqual((view / "labels" / "train" / "c.txt").read_text(), "5 0.5 0.5 0.4 0.4\n")
+        data = check_dataset.yaml.safe_load((view / "data.yaml").read_text())
+        self.assertEqual((data["train"], data["val"], len(data["names"])), ("images/train", "images/train", 80))
+        info = json.loads((view / "train_all.json").read_text())
+        self.assertEqual(info["counts"], {"train": 2, "val": 1, "test": 1, "total": 4})
+        self.assertEqual(info["original_split"]["d"], "test")
+        self.assertFalse((view / "images" / "train" / "a.jpg").is_symlink())  # a real copy (hardlink), not a link
+        self.assertEqual({f: f.read_bytes() for f in self.root.rglob("*") if f.is_file()}, before)
+        self.assertEqual(check_dataset.check(self.root)["info"]["images"]["test"], 1)  # splits unchanged
+
+    def test_subset_view_holds_only_new_images_in_test(self):
+        write_dataset(self.root, GOOD)
+        view, missing = dataset_views.subset_view(self.root, ["c", "d", "zz"])
+        self.assertEqual(missing, ["zz"])
+        self.assertEqual(sorted(p.name for p in (view / "images" / "test").iterdir()), ["c.jpg", "d.jpg"])
+        self.assertEqual(list((view / "images" / "train").iterdir()), [])
+        self.assertEqual((view / "labels" / "test" / "c.txt").read_text(), "2 0.5 0.5 0.4 0.4\n")  # dataset ids
+        report = check_dataset.check(view)
+        self.assertEqual(report["errors"], ["train: no images"])  # evaluate.py --eval-only accepts exactly this
+        self.assertEqual(report["info"]["images"], {"train": 0, "val": 0, "test": 2, "total": 2})
+        # coco80_view (used by evaluate.py's Ultralytics val) works on the subset too.
+        names = {i: f"class{i}" for i in range(80)} | {2: "car", 5: "bus", 7: "truck"}
+        self.assertTrue((dataset_views.coco80_view(view, names) / "labels" / "test" / "d.txt").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
