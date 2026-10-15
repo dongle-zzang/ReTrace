@@ -1,12 +1,16 @@
 export type TrainingJobStatus = 'queued' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped'
 export type DatasetReadiness = 'ready' | 'limited' | 'blocked'
 export type ClassMode = 'vehicle3' | 'single'
+/** standard: Train/Val/Test. all: every image trains the weights (no independent score in the run). */
+export type TrainMode = 'standard' | 'all'
+export type JobKind = 'train' | 'evaluate'
 export type ImageSize = 640 | 960
 
 export interface TrainingOptions {
-  defaults: { epochs: number; imgsz: ImageSize; batch: number; seed: number; patience: number; device: 'gpu'; class_mode: ClassMode; base_model_id: string }
+  defaults: { epochs: number; imgsz: ImageSize; batch: number; seed: number; patience: number; device: 'gpu'; class_mode: ClassMode; base_model_id: string; train_mode?: TrainMode }
   limits: { epochs: [number, number]; batch: [number, number]; seed: [number, number]; patience: [number, number]; imgsz: ImageSize[] }
   class_modes: Record<ClassMode, string>
+  train_modes?: Record<TrainMode, string>
   gpu_policy: { min_free_mib: number; reserve_mib: number; max_gpu_util: number; max_fps_drop: number; guard_samples: number; require_preview: boolean; vram_estimate: { base_mib: number; per_image_mib_at_640: number } }
   control_enabled: boolean
   worker_enabled: boolean
@@ -57,6 +61,11 @@ export interface DatasetSummary {
   sessions?: Record<'train' | 'val' | 'test', number>
   limits?: string[]
   notes?: string[]
+  train_mode?: TrainMode
+  kind?: JobKind
+  /** Test images the base model already trained on (retraining from a Train All model). */
+  test_overlap?: number
+  excluded?: { trained: number; same_session: number; export_total: number }
 }
 
 export interface TrainingDataset extends DatasetSummary {
@@ -65,6 +74,7 @@ export interface TrainingDataset extends DatasetSummary {
   created_at: string
   seed: number | null
   readiness: DatasetReadiness
+  readiness_by_mode?: Partial<Record<TrainMode, DatasetReadiness>>
   issue_count: number
 }
 
@@ -78,6 +88,12 @@ export interface DatasetCheck extends TrainingDataset {
 }
 
 export interface TrainingConfig {
+  kind?: JobKind
+  train_mode?: TrainMode
+  early_stopping?: boolean
+  weights_selection?: 'best_val' | 'final_epoch'
+  /** Evaluation jobs: number of new images scored. */
+  eval_images?: number
   epochs: number
   imgsz: ImageSize
   batch: number
@@ -169,12 +185,42 @@ export interface TrainingModel {
   dataset_sha256: string | null
   class_mode: string
   config: Record<string, number | string | null> | null
-  metrics: { val?: MetricPoint | null; test?: EvaluationModelMetrics | null; test_baseline?: EvaluationModelMetrics | null; test_images?: number | null; evaluation_status?: string } | null
+  metrics: { val?: MetricPoint | null; test?: EvaluationModelMetrics | null; test_baseline?: EvaluationModelMetrics | null; test_images?: number | null; evaluation_status?: string; new_images?: NewImageEvaluation[] } | null
   evaluation_conclusive: boolean
   files: Record<string, { size?: number; sha256?: string; location?: string; download_url: string | null }>
   created_at: string
   deployment: string
   status: 'available' | 'incomplete'
+}
+
+export interface NewImageEvaluation {
+  job_id: string
+  export_id: string
+  images: number | null
+  gt_boxes?: number | null
+  sessions: number | null
+  cameras?: number | null
+  excluded?: { trained: number; same_session: number; export_total: number } | null
+  conclusive: boolean
+  new: EvaluationModelMetrics
+  baseline: EvaluationModelMetrics
+  finished_at: string | null
+}
+
+export interface EvaluationPlan {
+  model_id: string
+  export_id: string
+  imgsz: number
+  total: number
+  eligible: number
+  excluded_trained: number
+  excluded_same_session: number
+  sessions: number
+  cameras: number
+  boxes: number
+  errors: string[]
+  limits: string[]
+  readiness: DatasetReadiness
 }
 
 export interface ComparisonModelResult { tp: number; fp: number; fn: number; pred_tp?: number[][]; pred_fp?: number[][]; gt_fn?: number[][] }
@@ -186,3 +232,4 @@ export const JOB_STATUS_LABELS: Record<TrainingJobStatus, string> = {
 }
 export const READINESS_LABELS: Record<DatasetReadiness, string> = { ready: 'Ready', limited: 'Limited', blocked: 'Blocked' }
 export const CLASS_MODE_LABELS: Record<ClassMode, string> = { vehicle3: 'car / truck / bus', single: 'Single vehicle class' }
+export const TRAIN_MODE_LABELS: Record<TrainMode, string> = { standard: 'Train / Val / Test', all: 'Train All' }
