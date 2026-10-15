@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Camera as CameraIcon, LoaderCircle, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { LoaderCircle, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import DatasetSelect from '~/components/DatasetSelect.vue'
+import DatasetThumbnail from '~/components/DatasetThumbnail.vue'
 import { Button } from '~/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '~/components/ui/dialog'
 import { Badge } from '~/components/ui/badge'
@@ -72,6 +73,8 @@ function closeDeleteDialog() { closingDeleteBusy.value = !!deleting.value; delet
 function setDeleteOpen(open: boolean) { if (!open && !deleting.value) closeDeleteDialog() }
 function requestDelete(image: DatasetImage) { deleteError.value = null; closingDeleteBusy.value = false; deleteTarget.value = image; deleteDialogOpen.value = true }
 const captureResult = ref<DatasetImage | null>(null)
+// The capture notice belongs to the camera it was taken from.
+watch(cameraId, () => { captureResult.value = null; message.value = null })
 let requestVersion = 0
 let timer: ReturnType<typeof setInterval> | undefined
 const cameraOptions = computed(() => parkingCameras.value.map(item => ({ value: item.camera_id, label: item.name, disabled: !item.enabled })))
@@ -109,8 +112,12 @@ async function capture() {
   if (!camera.value || capturing.value) return
   capturing.value = true; error.value = null; message.value = null
   try {
-    captureResult.value = await datasetRequest<DatasetImage>('/capture', { method: 'POST', body: { camera_id: cameraId.value } })
-    message.value = 'Clean frame captured. Open it to label vehicles.'
+    const capturedFrom = cameraId.value
+    const result = await datasetRequest<DatasetImage>('/capture', { method: 'POST', body: { camera_id: capturedFrom } })
+    if (cameraId.value === capturedFrom) {
+      captureResult.value = result
+      message.value = 'Clean frame captured. Open it to label vehicles.'
+    }
     changingQuery = true; page.value = 1; changingQuery = false
     await refresh()
   } catch (cause) { error.value = (cause as Error).message }
@@ -145,11 +152,11 @@ onUnmounted(() => { listReady = false; window.removeEventListener('resize', resi
     <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.65fr)]">
       <section class="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
         <div class="flex flex-wrap items-center justify-between gap-3 p-4">
-          <h2 class="flex items-center gap-2 text-sm font-semibold"><CameraIcon class="size-4 text-primary" /> {{ t('Collect images') }}</h2>
+          <h2 class="text-sm font-semibold">{{ t('Collect images') }}</h2>
           <DatasetSelect v-model="cameraId" :options="cameraOptions" :label="t('Camera to capture')" :placeholder="camerasLoading ? t('Loading cameras…') : t('No enabled cameras')" :disabled="camerasLoading || capturing || !parkingCameras.some(item => item.enabled)" />
         </div>
         <div class="bg-black/60"><div class="relative mx-auto aspect-video w-full max-w-[calc(28rem*16/9)]"><CameraVideo v-if="camera" :key="camera.camera_id" :camera="camera" :realtime-client="client" :connection="connection" :camera-state="statuses[camera.camera_id]?.state ?? camera.status.state" :active="true" /><p v-else class="absolute inset-0 grid place-items-center text-sm text-muted-foreground">{{ t('Select a camera to preview') }}</p></div></div>
-        <div class="flex flex-wrap items-center justify-between gap-3 p-4"><div class="flex h-10 min-w-0 flex-1 basis-full flex-col sm:basis-0 justify-center text-xs leading-relaxed" role="status"><p v-if="!message" class="text-muted-foreground">{{ t('The live preview includes detection overlays. Captures are saved separately without overlays.') }}</p><template v-else><p class="truncate text-primary">{{ t(message) }}</p><NuxtLink v-if="captureResult" :to="`/datasets/images/${captureResult.id}`" class="w-fit text-primary underline underline-offset-4" @click="openImage($event, captureResult.id)">{{ t('Label image') }}</NuxtLink></template></div><Button :disabled="!camera || capturing || camerasLoading" @click="capture"><LoaderCircle v-if="capturing" class="animate-spin" /><CameraIcon v-else /> {{ capturing ? t('Capturing…') : t('Capture current frame') }}</Button></div>
+        <div class="flex flex-wrap items-center justify-between gap-3 p-4"><div class="flex h-10 min-w-0 flex-1 basis-full flex-col sm:basis-0 justify-center text-xs leading-relaxed" role="status"><p v-if="!message" class="text-muted-foreground">{{ t('The live preview includes detection overlays. Captures are saved separately without overlays.') }}</p><template v-else><p class="truncate text-primary">{{ t(message) }}</p><NuxtLink v-if="captureResult" :to="`/datasets/images/${captureResult.id}`" class="w-fit text-primary underline underline-offset-4" @click="openImage($event, captureResult.id)">{{ t('Label image') }}</NuxtLink></template></div><Button :disabled="!camera || capturing || camerasLoading" @click="capture"><LoaderCircle v-if="capturing" class="animate-spin" /> {{ capturing ? t('Capturing…') : t('Capture current frame') }}</Button></div>
       </section>
       <section class="relative min-w-0 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
         <div class="flex min-h-0 flex-col gap-4 lg:absolute lg:inset-5">
@@ -175,8 +182,8 @@ onUnmounted(() => { listReady = false; window.removeEventListener('resize', resi
       <p v-else-if="!loading && !images.items.length" class="rounded-2xl border border-dashed border-white/15 py-16 text-center text-sm text-muted-foreground">{{ t('No captured images here yet.') }}</p>
       <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <article v-for="image in visibleImages" :key="image.id" class="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] transition-colors hover:border-primary/40">
-          <NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)" class="block"><img :src="image.thumbnail_url" :alt="t('Captured frame from {camera}', { camera: cameraName(image.camera_id) })" loading="lazy" class="aspect-video w-full bg-black/30 object-cover"></NuxtLink>
-          <div class="space-y-3 p-3"><div class="flex min-w-0 items-center justify-between gap-2"><p class="truncate text-sm font-medium">{{ cameraName(image.camera_id) }}</p><Badge variant="outline" :class="image.status === 'reviewed' ? 'text-primary' : 'text-muted-foreground'">{{ t(DATASET_STATUS_LABELS[image.status]) }}</Badge></div><time class="block text-xs text-muted-foreground">{{ time(image.captured_at) }}</time><div class="flex items-center justify-between gap-2"><Button as-child size="sm" variant="outline"><NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)">{{ image.status === 'pending' ? t('Start labeling') : t('Open image') }}</NuxtLink></Button><Button size="icon-sm" variant="ghost" :disabled="!!deleting" :aria-label="t('Delete image captured at {time}', { time: time(image.captured_at) })" @click="requestDelete(image)"><Trash2 class="text-muted-foreground" /></Button></div></div>
+          <NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)" class="block"><DatasetThumbnail :image="image" :alt="t('Captured frame from {camera}', { camera: cameraName(image.camera_id) })" /></NuxtLink>
+          <div class="space-y-3 p-3"><div class="flex min-w-0 items-center justify-between gap-2"><p class="truncate text-sm font-medium">{{ cameraName(image.camera_id) }}</p><Badge variant="outline" :class="image.status === 'reviewed' ? 'text-primary' : 'text-muted-foreground'"><template v-if="image.box_count"><span class="tabular-nums">{{ image.box_count }}</span><span aria-hidden="true">·</span></template>{{ t(DATASET_STATUS_LABELS[image.status]) }}</Badge></div><time class="block text-xs text-muted-foreground">{{ time(image.captured_at) }}</time><div class="flex items-center justify-between gap-2"><Button as-child size="sm" variant="outline"><NuxtLink :to="`/datasets/images/${image.id}`" @click="openImage($event, image.id)">{{ image.status === 'pending' ? t('Start labeling') : t('Open image') }}</NuxtLink></Button><Button size="icon-sm" variant="ghost" :disabled="!!deleting" :aria-label="t('Delete image captured at {time}', { time: time(image.captured_at) })" @click="requestDelete(image)"><Trash2 class="text-muted-foreground" /></Button></div></div>
         </article>
       </div>
       <nav v-if="totalPages > 1" class="flex items-center justify-center gap-4" :aria-label="t('Image pagination')"><Button size="sm" variant="outline" :disabled="page <= 1 || loading || openingImage" @click="page--">{{ t('Previous') }}</Button><span class="text-xs tabular-nums text-muted-foreground">{{ page }} / {{ totalPages }}</span><Button size="sm" variant="outline" :disabled="page >= totalPages || loading || openingImage" @click="page++">{{ t('Next') }}</Button></nav>
