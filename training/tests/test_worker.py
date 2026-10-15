@@ -40,6 +40,7 @@ for name in ("--data", "--model", "--epochs", "--imgsz", "--batch", "--device", 
              "--project", "--name", "--min-free-mib", "--workers", "--progress-file", "--stop-file"):
     p.add_argument(name)
 p.add_argument("--smoke", action="store_true")
+p.add_argument("--train-all", action="store_true")
 a = p.parse_args()
 mode = Path(a.project, "mode").read_text() if Path(a.project, "mode").exists() else "ok"
 out = Path(a.project) / a.name
@@ -72,10 +73,13 @@ import argparse, json
 from pathlib import Path
 p = argparse.ArgumentParser()
 p.add_argument("--model", action="append")
+p.add_argument("--eval-only", action="store_true")
 for name in ("--data", "--split", "--baseline", "--imgsz", "--device", "--out", "--predictions-json", "--max-images"):
     p.add_argument(name)
 a = p.parse_args()
 Path(a.out).mkdir(parents=True, exist_ok=True)
+Path(a.out, "argv.json").write_text(json.dumps({"eval_only": a.eval_only, "data": a.data, "model": a.model,
+    "images": sorted(p.name for p in Path(a.data, "images", "test").iterdir())}))
 Path(a.out, "metrics.json").write_text(json.dumps({"images": 1, "dataset_warnings": [], "models": {
     "baseline": {"vehicle": {"mAP50": 0.4}, "operating_point": {"precision": 0.5, "recall": 0.4}},
     "new": {"vehicle": {"mAP50": 0.6}, "operating_point": {"precision": 0.7, "recall": 0.6}}}}))
@@ -130,6 +134,17 @@ class SafeExtractTests(unittest.TestCase):
                 worker.validated_config({**spec, "config": {**spec["config"], **change}})
         with self.assertRaises(worker.WorkerError):
             worker.validated_config({**spec, "id": "../../etc"})
+        self.assertEqual(worker.validated_config(spec)["train_mode"], "standard")
+        train_all = {**spec, "config": {**spec["config"], "train_mode": "all"}}
+        self.assertEqual(worker.validated_config(train_all)["train_mode"], "all")
+        for change in ({"train_mode": "all", "class_mode": "single"}, {"train_mode": "everything"}, {"kind": "x"}):
+            with self.assertRaises(worker.WorkerError):
+                worker.validated_config({**spec, "config": {**spec["config"], **change}})
+        evaluate = {"id": spec["id"], "config": {"kind": "evaluate", "imgsz": 640, "eval_image_ids": [str(uuid4())]}}
+        self.assertEqual(worker.validated_config(evaluate)["kind"], "evaluate")
+        for ids in ([], ["../a"], [1], "x"):
+            with self.assertRaises(worker.WorkerError):
+                worker.validated_config({**evaluate, "config": {**evaluate["config"], "eval_image_ids": ids}})
 
     def test_failure_classification(self):
         self.assertEqual(worker.classify_failure("CUDA out of memory", 1)[0], "gpu_oom")
@@ -162,7 +177,7 @@ class WorkerBackendTests(unittest.TestCase):
         (tmp / "cameras.yaml").write_text("cameras: [{id: first, floor: B1, name: B1 주차장, rtsp_env: PRIVATE_FIRST}]")
         settings = Settings(f"sqlite:///{tmp / 'db.sqlite'}", tmp / "cameras.yaml", dataset_dir=tmp / "storage",
                             training_admin_token="a" * 32, training_worker_token="w" * 32)
-        state = {"n": 0, "t": datetime(2026, 10, 1, tzinfo=timezone.utc)}
+        state = self.state = {"n": 0, "t": datetime(2026, 10, 1, tzinfo=timezone.utc)}
 
         def preview(request):
             state["n"] += 1
@@ -261,6 +276,51 @@ class WorkerBackendTests(unittest.TestCase):
         spec = self.start_job(base_model_id=model["id"], epochs=1)
         self.assertEqual(self.worker.resolve_weights(spec, self.root), self.root / "runs" / "web" / model["job_id"] /
                          "train" / "weights" / "best.pt")
+
+    def capture(self, hours, export=True):
+        self.state["t"] = datetime(2026, 10, 1, tzinfo=timezone.utc) + timedelta(hours=hours)
+        image = self.client.post("/api/datasets/capture", json={"camera_id": "first"}).json()
+        self.client.put(f"/api/datasets/images/{image['id']}/annotations", json={
+            "revision": 1, "status": "reviewed",
+            "boxes": [{"id": str(uuid4()), "class_id": 0, "x": 5, "y": 5, "width": 30, "height": 20}]})
+        return image["id"]
+
+    def test_train_all_then_evaluate_on_new_cctv_images(self):
+        spec = self.start_job(train_mode="all")
+        self.worker.run_job(spec)
+        job = self.job(spec["id"])
+        self.assertEqual(job["status"], "completed", job)
+        self.assertEqual(job["evaluation"]["status"], "skipped")
+        self.assertIn("Train All", job["evaluation"]["reason"])
+        self.assertNotIn("eval_metrics.json", job["artifacts"])
+        self.assertTrue(all(p["map50"] is None and p["val_loss"] is None for p in job["metrics"]))
+        argv = json.loads((self.root / "runs" / "web" / spec["id"] / "argv.json").read_text())
+        self.assertIn("--train-all", argv)
+        self.assertEqual(argv[argv.index("--classes") + 1], "coco80")
+        model = next(m for m in self.client.get("/api/training/models").json() if m["kind"] == "finetuned")
+        self.assertEqual(model["config"]["train_mode"], "all")
+        new_ids = {self.capture(10), self.capture(13)}
+        export = self.client.post("/api/datasets/exports", json={"seed": 1}).json()
+        for _ in range(200):
+            if next(e for e in self.client.get("/api/datasets/exports").json() if e["id"] == export["id"])["status"] == "ready":
+                break
+            time.sleep(.02)
+        response = self.client.post("/api/training/evaluations", headers={"Authorization": "Bearer " + "a" * 32},
+                                    json={"model_id": model["id"], "export_id": export["id"], "acknowledge_limits": True})
+        self.assertEqual(response.status_code, 201, response.text)
+        status, spec = self.worker.backend.request("POST", "/api/training/worker/claim", {"worker_id": self.worker.worker_id})
+        self.assertEqual(status, 200)
+        self.worker.run_job(spec)
+        job = self.job(spec["id"])
+        self.assertEqual(job["status"], "completed", job)
+        self.assertEqual(job["evaluation"]["status"], "completed")
+        self.assertIn("eval_predictions.json", job["artifacts"])
+        argv = json.loads((self.root / "runs" / "web" / spec["id"] / "eval" / "argv.json").read_text())
+        self.assertTrue(argv["eval_only"])
+        self.assertEqual(argv["images"], sorted(f"{i}.jpg" for i in new_ids))  # only never-trained images
+        self.assertTrue(argv["model"][0].endswith(f"{model['job_id']}/train/weights/best.pt"))
+        tuned = next(m for m in self.client.get("/api/training/models").json() if m["kind"] == "finetuned")
+        self.assertEqual(tuned["metrics"]["new_images"][-1]["job_id"], spec["id"])
 
     def test_stop_request_is_graceful_and_keeps_checkpoints(self):
         spec = self.start_job(epochs=20)

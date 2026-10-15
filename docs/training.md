@@ -49,18 +49,21 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 
 주요 `error_code`: `dataset_invalid`, `dataset_too_large`, `snapshot_changed`, `no_validation`, `invalid_config`,
 `base_model_missing`, `base_model_changed`, `cuda_unavailable`, `gpu_busy`, `gpu_oom`, `storage_full`, `killed`,
-`training_failed`, `download_failed`, `artifact_upload_failed`, `production_protection`, `worker_lost`, `worker_restarted`.
+`training_failed`, `download_failed`, `artifact_upload_failed`, `production_protection`, `worker_lost`, `worker_restarted`,
+`evaluation_failed`(새 이미지 평가 job).
 
 ## 4. API (`/api/training`)
 
 | 메서드·경로 | 권한 | 용도 |
 | --- | --- | --- |
 | GET `/options`, `/status?imgsz&batch` | 공개 | 설정 범위·기본값, worker/GPU/Preview/진행 job·VRAM 추정 |
-| GET `/datasets`, `/datasets/{export_id}/check` | 공개 | 학습 가능한 export와 적합성(blocked/limited/ready, 세션·split·라벨 기준) |
+| GET `/datasets`, `/datasets/{export_id}/check?train_mode=standard\|all` | 공개 | 학습 가능한 export와 학습 방식별 적합성(blocked/limited/ready, 세션·split·라벨 기준). 최상위 값은 standard, `modes`에 방식별 값 |
+| GET `/evaluations/plan?model_id&export_id` | 공개 | 새 이미지 평가 대상: 전체·제외(학습에 사용/같은 세션)·남은 이미지 수 |
 | GET `/jobs`, `/jobs/{id}`, `/jobs/{id}/comparison` | 공개 | 목록, 진행·지표·로그, test 이미지별 GT/TP/FP/FN 비교 |
 | GET `/models`, `/models/{id}`, `/models/compare?ids=` | 공개 | 모델 registry, 지표 비교 |
 | POST `/auth` | admin | 토큰 확인(204) |
-| POST `/jobs` | admin | 검증 후 job 생성. limited 데이터셋은 `acknowledge_limits: true` 필요 |
+| POST `/jobs` | admin | 검증 후 job 생성(`train_mode`: `standard` 기본, `all`). limited 데이터셋은 `acknowledge_limits: true` 필요 |
+| POST `/evaluations` | admin | 등록된 fine-tuned 모델을 새 이미지로 평가하는 job 생성(`model_id`, `export_id`, `acknowledge_limits`) |
 | POST `/jobs/{id}/stop` | admin | 안전 중지 요청 |
 | GET `/jobs/{id}/artifacts/{name}`, `/models/{id}/files/{best\|last}` | admin | 산출물·가중치 다운로드 |
 | `/worker/*` (heartbeat, claim, dataset, weights, artifacts, finish) | worker | host worker 전용, Preview에서 404 |
@@ -72,6 +75,32 @@ job별 산출물: `best.pt`, `last.pt`, `results.csv`, `results.png`, `args.yaml
 
 평가는 baseline(COCO yolo11m)과 새 모델(재학습이면 base 모델 포함)을 같은 test split에서 비교한다. test 10장 이상·
 test 세션 2개 이상·경고 없음일 때만 `conclusive`이며, 아니면 UI가 개선을 주장하지 않는다.
+
+## 4-1. 전체 학습(Train All)과 새 CCTV 이미지 평가
+
+목적은 고정 CCTV 차량 검출 향상이며 주차 판정은 학습 대상이 아니다. 데이터가 적을 때(25장: Train 20/Val 2/Test 3)
+모든 이미지를 가중치 학습에 쓰고, 성능은 학습에 쓰지 않은 새 이미지로 따로 잰다.
+
+| 항목 | 일반 학습 (`standard`) | 전체 학습 (`all`) |
+| --- | --- | --- |
+| 가중치 학습 | train | train + val + test (별도 학습용 사본, 원본 export·split 불변) |
+| 조기 종료·best 선택 | val fitness, patience | 없음. 고정 epoch, 마지막 epoch 가중치(`best.pt` = `last.pt`) |
+| 학습 중 지표 | train/val loss, val P/R/mAP | train loss만. 마지막 epoch의 학습 이미지 검증값은 저장·표시하지 않음(`metric_point`) |
+| job 직후 평가 | test에서 YOLO11m과 비교 | 생략(`evaluation.status=skipped`). 모델 registry의 val/test는 `null` |
+| 클래스 | vehicle3 또는 single | vehicle3만(COCO 80 head, car=COCO 2 사전학습 가중치) |
+
+- 데이터셋 적합성은 방식별로 다르다. 전체 학습은 val이 없어도 막지 않지만 "독립 검증 없음" 제한을 항상 표시해
+  확인(`acknowledge_limits`)을 받는다.
+- epoch 수: 조기 종료가 없으므로 같은 export의 완료된 일반 학습에서 val mAP50-95가 최고였던 epoch를 UI가 제안한다.
+- 새 이미지 평가 job(`config.kind = evaluate`)은 학습 job과 같은 큐·worker·이력·산출물·비교 화면을 쓴다. Backend는
+  모델과 그 base 모델 체인이 학습에 쓴 이미지(standard: train+val, all: 전체)와 그 촬영 세션을 평가 export에서 빼고,
+  남은 이미지 id만 job에 넣는다. worker는 snapshot에서 그 이미지만 test로 담은 사본을 만들어
+  `evaluate.py --eval-only`로 baseline(COCO yolo11m)과 비교한다. 결과는 모델의 `metrics.new_images`(최근 10개)에 붙고
+  모델을 새로 등록하지 않는다. 10장·2세션 미만이면 `conclusive=false`다.
+- 전체 학습 모델에서 이어서 일반 학습을 하면 test 이미지가 이미 학습된 것이므로 `dataset_summary.test_overlap`에
+  기록하고 평가를 non-conclusive로 표시한다.
+- 고정 카메라는 다른 날 이미지도 비슷할 수 있다. 새 이미지는 다른 날·시간대·날씨에서 모은다.
+- DeepStream 운영 모델은 바꾸지 않는다(§1과 동일).
 
 ## 5. 운영 절차 (GPU 서버, 운영자 수행)
 

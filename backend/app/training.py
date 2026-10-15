@@ -49,7 +49,15 @@ CLASS_MODES = {
                 'COCO head (car 2, truck 7, bus 5); production 80-label layout is kept.',
     'single': 'one vehicle class (Ultralytics single_cls); new 1-class head, original labels untouched.',
 }
+TRAIN_MODES = {
+    'standard': 'Train / Val / Test (default): train split trains the weights, val picks the best epoch and stops '
+                'early, test is compared with the current YOLO11m.',
+    'all': 'Train All: train, val and test images all train the weights (separate training copy; the export and '
+           'its splits are unchanged). Fixed epoch count, no early stopping, final-epoch weights. No independent '
+           'score in this run: evaluate on newly captured CCTV images afterwards.',
+}
 MIN_EVAL_IMAGES = 10
+MAX_EVAL_IMAGES = 5000
 # Archive inspection limits (exports hold at most 5000 images + labels).
 MAX_MEMBERS = 12_000
 MAX_MEMBER_BYTES = 64 * 2**20
@@ -252,10 +260,19 @@ def inspect_archive(path):
             errors.append('No training images.')
         elif boxes['train'] == 0:
             errors.append('Training images contain no vehicle labels.')
+        # Train All (every split trains the weights) is judged on all images together; it never
+        # has an independent check, which is always a limitation the user must confirm.
+        total_images, total_boxes = sum(counts.values()), sum(boxes.values())
+        all_limits = ['Train All uses every image (train, val and test) for training: this run has no independent '
+                      'validation or test. Measure the model on newly captured CCTV images afterwards.']
+        all_sessions = set().union(*sessions.values())
+        if len(all_sessions) < 3:
+            all_limits.append(f'All images come from only {len(all_sessions)} capture session(s).')
+        if total_boxes < 100:
+            all_limits.append(f'Only {total_boxes} vehicle boxes in total; fine-tuning may overfit.')
         if counts['val'] == 0:
             errors.append('No validation images: the export has no independent validation session. '
                           'Capture more sessions (other times/days) and create a new export.')
-        total_images = sum(counts.values())
         if counts['val'] and counts['val'] < MIN_EVAL_IMAGES:
             limits.append(f'Validation has only {counts["val"]} images; model selection is unreliable.')
         if counts['val'] and len(sessions['val']) < 2:
@@ -269,10 +286,13 @@ def inspect_archive(path):
             limits.append(f'Training images come from only {len(sessions["train"])} capture session(s).')
         if boxes['train'] and boxes['train'] < 100:
             limits.append(f'Only {boxes["train"]} training boxes; fine-tuning may overfit.')
+        shared = []
         if total_images and sum(empty.values()) / total_images > 0.5:
-            limits.append('More than half of the images have no vehicles; confirm they are truly empty.')
+            shared.append('More than half of the images have no vehicles; confirm they are truly empty.')
         if boxes['train'] and tiny / max(sum(boxes.values()), 1) > 0.1:
-            limits.append('Many boxes are tiny; check the labels.')
+            shared.append('Many boxes are tiny; check the labels.')
+        limits.extend(shared)
+        all_limits.extend(shared)
         limits.extend(f'Export: {warning}' for warning in manifest.get('warnings') or [] if isinstance(warning, str))
         absent = [label for label in names.values() if not any(per_class[s].get(label) for s in SPLITS)]
         if absent:
@@ -288,13 +308,33 @@ def inspect_archive(path):
                       labels_per_class=per_class, labels_per_class_total=totals, empty_images=empty,
                       sessions={s: len(sessions[s]) for s in SPLITS}, cameras={s: len(cameras[s]) for s in SPLITS},
                       seed=manifest.get('seed'))
+    # Top-level errors/limits/readiness describe the standard Train/Val/Test run (unchanged contract).
     result['readiness'] = 'blocked' if errors else 'limited' if limits else 'ready'
+    if 'counts' in result:
+        all_errors = [e for e in errors if not e.startswith('No validation images')]
+        result['modes'] = {
+            'standard': {'errors': list(errors), 'limits': list(limits), 'readiness': result['readiness']},
+            'all': {'errors': all_errors, 'limits': all_limits,
+                    'readiness': 'blocked' if all_errors else 'limited' if all_limits else 'ready'},
+        }
     return result
 
 
-def metric_point(row):
-    """Ultralytics results.csv row -> stable JSON for the chart/table."""
+def for_mode(check, train_mode):
+    """The dataset check as seen by one training mode (top level = standard)."""
+    mode = (check.get('modes') or {}).get(train_mode)
+    return {**check, **mode, 'train_mode': train_mode} if mode else {**check, 'train_mode': train_mode}
+
+
+def metric_point(row, train_all=False):
+    """Ultralytics results.csv row -> stable JSON for the chart/table.
+
+    Train All validates (if at all) on its own training images, so validation losses and
+    P/R/mAP are dropped: they are training fit and must never read as an independent score.
+    """
     def value(key):
+        if train_all and (key.startswith('val/') or key.startswith('metrics/')):
+            return None
         v = row.get(key)
         return float(v) if isinstance(v, (int, float)) else None
 
@@ -324,19 +364,43 @@ def evaluation_summary(evaluation, dataset_summary):
     caveats = list(metrics.get('dataset_warnings') or [])
     images = int(metrics.get('images') or 0)
     test_sessions = (dataset_summary.get('sessions') or {}).get('test', 0)
+    overlap = int(dataset_summary.get('test_overlap') or 0)
     if images < MIN_EVAL_IMAGES:
         caveats.append(f'Only {images} test images; differences are not statistically meaningful.')
     if test_sessions < 2:
         caveats.append('Test images come from fewer than 2 capture sessions.')
+    if overlap:
+        caveats.append(f'{overlap} test image(s) were already used to train the base model of this run; '
+                       'the test is not independent.')
+    if dataset_summary.get('kind') == 'evaluate':
+        caveats.append('Fixed cameras: new frames can still resemble training frames; prefer images from other days, '
+                       'times and weather.')
     caveats.append('Offline Ultralytics inference at the training image size; not a DeepStream/TensorRT measurement.')
-    conclusive = images >= MIN_EVAL_IMAGES and test_sessions >= 2 and not metrics.get('dataset_warnings')
+    conclusive = (images >= MIN_EVAL_IMAGES and test_sessions >= 2 and not overlap
+                  and not metrics.get('dataset_warnings'))
     return {**evaluation, 'conclusive': conclusive, 'caveats': caveats}
+
+
+def public_config(config):
+    """Job config for the web: the evaluation image list is replaced by its size."""
+    config = dict(config or {})
+    ids = config.pop('eval_image_ids', None)
+    if ids is not None:
+        config['eval_images'] = len(ids)
+    config.setdefault('kind', 'train')
+    if config['kind'] == 'train':
+        config.setdefault('train_mode', 'standard')
+    return config
+
+
+def is_train_all(job):
+    return (job.config or {}).get('train_mode') == 'all'
 
 
 def job_out(job, detail=False):
     data = {'id': job.id, 'name': job.name, 'status': job.status, 'phase': job.phase, 'message': job.message,
             'export_id': job.export_id, 'dataset_sha256': job.dataset_sha256, 'base_model_id': job.base_model_id,
-            'config': job.config, 'created_at': aware(job.created_at).isoformat(),
+            'config': public_config(job.config), 'created_at': aware(job.created_at).isoformat(),
             'started_at': aware(job.started_at).isoformat() if job.started_at else None,
             'finished_at': aware(job.finished_at).isoformat() if job.finished_at else None,
             'heartbeat_at': aware(job.heartbeat_at).isoformat() if job.heartbeat_at else None,
@@ -375,12 +439,34 @@ def model_out(model):
             'status': 'available' if model.kind == 'base' or 'best.pt' in (model.files or {}) else 'incomplete'}
 
 
+def attach_new_image_evaluation(session, job):
+    """Keep the latest new-CCTV-image results on the evaluated model (registry stays the source)."""
+    model = session.get(TrainingModel, job.base_model_id, with_for_update=True)
+    if model is None:
+        return
+    evaluation = job.evaluation or {}
+    metrics = evaluation.get('metrics') or {}
+    models = metrics.get('models') or {}
+    summary = job.dataset_summary or {}
+    entry = {'job_id': job.id, 'export_id': job.export_id, 'images': metrics.get('images'),
+             'gt_boxes': metrics.get('gt_boxes'), 'sessions': (summary.get('sessions') or {}).get('test'),
+             'cameras': (summary.get('cameras') or {}).get('test'),
+             'excluded': summary.get('excluded'), 'conclusive': bool(evaluation.get('conclusive')),
+             'new': {k: (models.get('new') or {}).get(k) for k in ('vehicle', 'operating_point')},
+             'baseline': {k: (models.get('baseline') or {}).get(k) for k in ('vehicle', 'operating_point')},
+             'finished_at': aware(job.finished_at).isoformat() if job.finished_at else None}
+    current = dict(model.metrics or {})
+    current['new_images'] = [*(current.get('new_images') or []), entry][-10:]
+    model.metrics = current  # new object: JSON columns only track reassignment
+
+
 class JobCreate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     export_id: UUID
     base_model_id: str = Field(default=BASE_MODEL_ID, min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
     name: str = Field(default='yolo11m-ft', min_length=1, max_length=48, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
     class_mode: Literal['vehicle3', 'single'] = 'vehicle3'
+    train_mode: Literal['standard', 'all'] = 'standard'
     epochs: int = Field(default=50, ge=1, le=300, strict=True)
     imgsz: Literal[640, 960] = 640
     batch: int = Field(default=4, ge=1, le=32, strict=True)
@@ -388,6 +474,13 @@ class JobCreate(BaseModel):
     patience: int = Field(default=15, ge=1, le=300, strict=True)
     device: Literal['gpu'] = 'gpu'
     smoke: bool = False
+    acknowledge_limits: bool = False
+
+
+class EvaluationCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: str = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
+    export_id: UUID
     acknowledge_limits: bool = False
 
 
@@ -557,6 +650,89 @@ class TrainingService:
             sidecar.write_text(digest.hexdigest())
             return target, digest.hexdigest()
 
+    def manifest_images(self, export_id, frozen=True):
+        """manifest.json image entries of a frozen snapshot (or the live export); None if unreadable."""
+        path = self.path('snapshots', f'{export_id}.zip') if frozen else self.export_zip(export_id)
+        try:
+            st = path.stat()
+            key = ('manifest', str(path), st.st_size, st.st_mtime_ns)
+            cached = self.inspections.get(key)
+            if cached is not None:
+                return cached
+            with zipfile.ZipFile(path) as archive:
+                names = [n for n in archive.namelist() if n == 'manifest.json'
+                         or (n.endswith('/manifest.json') and n.count('/') == 1)]
+                if len(names) != 1 or archive.getinfo(names[0]).file_size > 32 * 2**20:
+                    return None
+                images = json.loads(archive.read(names[0])).get('images') or []
+        except (OSError, ValueError, zipfile.BadZipFile, HTTPException):
+            return None
+        images = [entry for entry in images if isinstance(entry, dict) and entry.get('id')]
+        self.inspections[key] = images
+        return images
+
+    def lineage_seen(self, session, model_id):
+        """Image ids and capture sessions that shaped a model, through its whole fine-tuning chain.
+
+        Standard runs: train (weights) + val (epoch selection / early stop). Train All: every split.
+        complete=False when a snapshot cannot be read, so independence cannot be guaranteed.
+        """
+        ids, sessions, complete, visited = set(), set(), True, set()
+        while model_id and model_id not in visited:
+            visited.add(model_id)
+            model = session.get(TrainingModel, model_id)
+            if model is None or model.kind != 'finetuned':
+                break
+            job = session.get(TrainingJob, model.job_id) if model.job_id else None
+            images = self.manifest_images(job.export_id) if job else None
+            if images is None:
+                complete = False
+            else:
+                used = SPLITS if is_train_all(job) else ('train', 'val')
+                for entry in images:
+                    if entry.get('split') in used:
+                        ids.add(str(entry['id']))
+                        if entry.get('session'):
+                            sessions.add(str(entry['session']))
+            model_id = model.base_model_id
+        return ids, sessions, complete
+
+    def evaluation_plan(self, session, model, export_id):
+        """Which images of an export can score `model` independently (never trained on, other sessions)."""
+        seen_ids, seen_sessions, complete = self.lineage_seen(session, model.id)
+        check = self.inspection(export_id)
+        errors = [e for e in for_mode(check, 'all').get('errors', [])]
+        images = self.manifest_images(export_id, frozen=False)
+        if images is None:
+            errors.append('The dataset manifest cannot be read.')
+            images = []
+        if not complete:
+            errors.append('The training data of this model (or its base) cannot be read, so new images cannot be '
+                          'separated from training images.')
+        trained = [e for e in images if str(e['id']) in seen_ids]
+        same_session = [e for e in images if str(e['id']) not in seen_ids and str(e.get('session')) in seen_sessions]
+        eligible = [e for e in images if str(e['id']) not in seen_ids and str(e.get('session')) not in seen_sessions]
+        sessions = {str(e.get('session')) for e in eligible}
+        cameras = {str(e.get('camera_id')) for e in eligible}
+        limits = []
+        if not eligible:
+            errors.append('No new images: every image of this dataset was used to train the model or comes from the '
+                          'same capture sessions. Capture and label new CCTV images, then create a new export.')
+        elif len(eligible) > MAX_EVAL_IMAGES:
+            errors.append(f'More than {MAX_EVAL_IMAGES} new images; create a smaller export.')
+        else:
+            if len(eligible) < MIN_EVAL_IMAGES:
+                limits.append(f'Only {len(eligible)} new images; differences are not statistically meaningful.')
+            if len(sessions) < 2:
+                limits.append('New images come from fewer than 2 capture sessions.')
+        return {'model_id': model.id, 'export_id': export_id, 'imgsz': (model.config or {}).get('imgsz', 640),
+                'total': len(images), 'eligible': len(eligible), 'excluded_trained': len(trained),
+                'excluded_same_session': len(same_session), 'sessions': len(sessions), 'cameras': len(cameras),
+                'boxes': sum(int(e.get('box_count') or 0) for e in eligible),
+                'errors': errors, 'limits': limits,
+                'readiness': 'blocked' if errors else 'limited' if limits else 'ready',
+                'image_ids': sorted(str(e['id']) for e in eligible)}
+
     # ----- guard ------------------------------------------------------------------------
     def guard(self, session, job, gpu):
         """Compare live Preview FPS (cameras online at baseline) and GPU headroom; maybe stop."""
@@ -609,10 +785,10 @@ def find_job(session, job_id, lock=False):
 def options(request: Request):
     config = request.app.state.config
     return {'defaults': {'epochs': 50, 'imgsz': 640, 'batch': 4, 'seed': 42, 'patience': 15, 'device': 'gpu',
-                         'class_mode': 'vehicle3', 'base_model_id': BASE_MODEL_ID},
+                         'class_mode': 'vehicle3', 'base_model_id': BASE_MODEL_ID, 'train_mode': 'standard'},
             'limits': {'epochs': [1, 300], 'batch': [1, 32], 'seed': [0, 2147483647], 'patience': [1, 300],
                        'imgsz': [640, 960]},
-            'class_modes': CLASS_MODES,
+            'class_modes': CLASS_MODES, 'train_modes': TRAIN_MODES,
             'gpu_policy': {'min_free_mib': config.training_min_free_mib, 'reserve_mib': config.training_gpu_reserve_mib,
                            'max_gpu_util': config.training_max_gpu_util, 'max_fps_drop': config.training_max_fps_drop,
                            'guard_samples': config.training_guard_samples,
@@ -653,12 +829,13 @@ def datasets(request: Request):
         result.append({'id': export_id, 'name': f'dataset_{export_id[:8]}', 'created_at': created_at, 'seed': seed,
                        **{k: check.get(k) for k in ('readiness', 'counts', 'boxes', 'labels_per_class_total',
                                                     'classes', 'sessions')},
+                       'readiness_by_mode': {mode: value['readiness'] for mode, value in (check.get('modes') or {}).items()},
                        'issue_count': len(check.get('errors', [])) + len(check.get('limits', []))})
     return result
 
 
 @router.get('/datasets/{export_id}/check')
-def dataset_check(request: Request, export_id: UUID):
+def dataset_check(request: Request, export_id: UUID, train_mode: Literal['standard', 'all'] = 'standard'):
     with request.app.state.sessions() as session:
         job = session.get(DatasetExport, str(export_id))
         if job is None:
@@ -667,7 +844,7 @@ def dataset_check(request: Request, export_id: UUID):
             raise HTTPException(409, 'Dataset export is not ready')
         created_at = aware(job.created_at).isoformat()
     return {'id': str(export_id), 'name': f'dataset_{str(export_id)[:8]}', 'created_at': created_at,
-            **service(request).inspection(str(export_id))}
+            **for_mode(service(request).inspection(str(export_id)), train_mode)}
 
 
 @router.get('/jobs')
@@ -765,11 +942,13 @@ def create_job(request: Request, body: JobCreate):
         if base is None:
             raise HTTPException(404, 'Base model not found')
         base_info = model_out(base)
-    check = svc.inspection(export_id)
+    check = for_mode(svc.inspection(export_id), body.train_mode)
     if check['readiness'] == 'blocked':
         raise HTTPException(422, 'Dataset cannot be used for training: ' + ' '.join(check['errors'][:3]))
     if check['readiness'] == 'limited' and not body.acknowledge_limits:
         raise HTTPException(422, 'This dataset has training limitations. Review them and confirm to continue.')
+    if body.train_mode == 'all' and body.class_mode != 'vehicle3':
+        raise HTTPException(422, 'Train All keeps the pretrained COCO 80-class head: use car/truck/bus mode.')
     if base_info['kind'] == 'finetuned':
         if base_info['status'] != 'available':
             raise HTTPException(409, 'The selected model has no stored best.pt.')
@@ -795,13 +974,22 @@ def create_job(request: Request, body: JobCreate):
     except OSError:
         raise HTTPException(503, 'Could not freeze the dataset snapshot (storage error).') from None
     epochs = 1 if body.smoke else body.epochs
-    job_config = {'epochs': epochs, 'imgsz': body.imgsz, 'batch': body.batch, 'seed': body.seed,
-                  'patience': body.patience, 'class_mode': body.class_mode, 'device': 'gpu', 'smoke': body.smoke,
+    train_all = body.train_mode == 'all'
+    job_config = {'kind': 'train', 'train_mode': body.train_mode, 'epochs': epochs, 'imgsz': body.imgsz,
+                  'batch': body.batch, 'seed': body.seed, 'patience': body.patience, 'class_mode': body.class_mode,
+                  'device': 'gpu', 'smoke': body.smoke,
+                  'early_stopping': not train_all, 'weights_selection': 'final_epoch' if train_all else 'best_val',
                   'acknowledged_limits': check['limits'] if body.acknowledge_limits else [],
                   'required_free_mib': required_free_mib(config, body.imgsz, body.batch),
                   'estimated_training_mib': estimate_vram_mib(body.imgsz, body.batch)}
     summary = {k: check.get(k) for k in ('readiness', 'counts', 'boxes', 'labels_per_class_total', 'classes',
-                                         'sessions', 'limits', 'notes')}
+                                         'sessions', 'limits', 'notes', 'train_mode')}
+    if base_info['kind'] == 'finetuned' and not train_all:
+        # A base model that already trained on this export's test images makes the test non-independent.
+        with request.app.state.sessions() as session:
+            seen_ids, _, complete = svc.lineage_seen(session, body.base_model_id)
+        test_ids = {str(e['id']) for e in svc.manifest_images(export_id, frozen=True) or [] if e.get('split') == 'test'}
+        summary['test_overlap'] = len(test_ids & seen_ids) if complete else len(test_ids)
     try:
         with request.app.state.sessions.begin() as session:
             svc.expire_stale(session)
@@ -809,6 +997,90 @@ def create_job(request: Request, body: JobCreate):
                               message='Waiting for the GPU worker', active_slot=1, export_id=export_id,
                               dataset_sha256=digest, dataset_summary=summary, base_model_id=body.base_model_id,
                               config=job_config, epochs=epochs, metrics=[], log_tail=[], artifacts={})
+            session.add(job)
+            session.flush()
+            return job_out(job, detail=True)
+    except IntegrityError:
+        raise HTTPException(409, 'Another training job is already queued or running. Wait for it or stop it first.') from None
+
+
+def find_evaluable_model(session, model_id):
+    model = session.get(TrainingModel, model_id)
+    if model is None:
+        raise HTTPException(404, 'Model not found')
+    if model.kind != 'finetuned' or 'best.pt' not in (model.files or {}):
+        raise HTTPException(409, 'Only a fine-tuned model with stored best.pt can be evaluated on new images.')
+    return model
+
+
+def ready_export(session, export_id):
+    export = session.get(DatasetExport, export_id)
+    if export is None:
+        raise HTTPException(404, 'Dataset export not found')
+    if export.status != 'ready':
+        raise HTTPException(409, 'Dataset export is not ready')
+    return export
+
+
+@router.get('/evaluations/plan')
+def evaluation_plan(request: Request, model_id: str = Query(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$'),
+                    export_id: UUID = Query()):
+    """Which images of a dataset export can evaluate a model independently (read-only preview)."""
+    with request.app.state.sessions() as session:
+        model = find_evaluable_model(session, model_id)
+        ready_export(session, str(export_id))
+        plan = service(request).evaluation_plan(session, model, str(export_id))
+    plan.pop('image_ids')
+    return plan
+
+
+@router.post('/evaluations', status_code=201)
+def create_evaluation(request: Request, body: EvaluationCreate):
+    """Queue a GPU job that scores a model on new CCTV images (never trained on) against the COCO base."""
+    require_admin(request)
+    config, svc = request.app.state.config, service(request)
+    export_id = str(body.export_id)
+    with request.app.state.sessions() as session:
+        model = find_evaluable_model(session, body.model_id)
+        ready_export(session, export_id)
+        try:
+            svc.snapshot(export_id)
+        except OSError:
+            raise HTTPException(503, 'Could not freeze the dataset snapshot (storage error).') from None
+        plan = svc.evaluation_plan(session, model, export_id)
+        name, imgsz = f'{model.name}-v{model.version}'[:48], plan['imgsz']
+    if plan['readiness'] == 'blocked':
+        raise HTTPException(422, ' '.join(plan['errors'][:3]))
+    if plan['readiness'] == 'limited' and not body.acknowledge_limits:
+        raise HTTPException(422, 'This evaluation has limitations. Review them and confirm to continue.')
+    if imgsz not in (640, 960):
+        imgsz = 640
+    blocker = svc.gpu_check(svc.worker_state(), imgsz, 4)
+    if blocker:
+        raise HTTPException(503 if not svc.worker_state()['online'] else 409, blocker)
+    digest = svc.snapshot(export_id)[1]
+    # The frozen snapshot must hold exactly the planned images (exports are immutable; guard anyway).
+    frozen = {str(e['id']) for e in svc.manifest_images(export_id) or []}
+    if not set(plan['image_ids']) <= frozen:
+        raise HTTPException(409, 'The dataset snapshot does not match the export. Create a new export.')
+    job_config = {'kind': 'evaluate', 'imgsz': imgsz, 'batch': 4, 'device': 'gpu', 'smoke': False,
+                  'class_mode': model.class_mode, 'eval_image_ids': plan['image_ids'],
+                  'acknowledged_limits': plan['limits'] if body.acknowledge_limits else [],
+                  'required_free_mib': required_free_mib(config, imgsz, 4),
+                  'estimated_training_mib': estimate_vram_mib(imgsz, 4)}
+    summary = {'kind': 'evaluate', 'readiness': plan['readiness'], 'limits': plan['limits'],
+               'counts': {'train': 0, 'val': 0, 'test': plan['eligible'], 'total': plan['eligible']},
+               'boxes': {'train': 0, 'val': 0, 'test': plan['boxes'], 'total': plan['boxes']},
+               'sessions': {'train': 0, 'val': 0, 'test': plan['sessions']}, 'cameras': {'test': plan['cameras']},
+               'excluded': {'trained': plan['excluded_trained'], 'same_session': plan['excluded_same_session'],
+                            'export_total': plan['total']}}
+    try:
+        with request.app.state.sessions.begin() as session:
+            svc.expire_stale(session)
+            job = TrainingJob(id=str(uuid4()), name=name, status='queued', phase='queued',
+                              message='Waiting for the GPU worker', active_slot=1, export_id=export_id,
+                              dataset_sha256=digest, dataset_summary=summary, base_model_id=body.model_id,
+                              config=job_config, epochs=1, metrics=[], log_tail=[], artifacts={})
             session.add(job)
             session.flush()
             return job_out(job, detail=True)
@@ -902,7 +1174,8 @@ def worker_heartbeat(request: Request, body: Beat):
         rows = update.get('metrics_rows') if isinstance(update.get('metrics_rows'), list) else []
         offset = update.get('metrics_offset') if isinstance(update.get('metrics_offset'), int) else None
         if rows and offset is not None and 0 <= offset <= len(job.metrics or []):
-            job.metrics = (job.metrics or [])[:offset] + [metric_point(r) for r in rows[:1000] if isinstance(r, dict)]
+            job.metrics = (job.metrics or [])[:offset] + [metric_point(r, is_train_all(job)) for r in rows[:1000]
+                                                          if isinstance(r, dict)]
         done = len(job.metrics or [])
         epoch = progress.get('epoch') if isinstance(progress.get('epoch'), int) else done
         batch, batches = progress.get('batch'), progress.get('batches')
@@ -1035,7 +1308,7 @@ def worker_finish(request: Request, job_id: UUID, body: Finish):
         if job.status not in ('running', 'stopping'):
             raise HTTPException(409, 'Job already finished')
         if body.metrics_rows:
-            job.metrics = [metric_point(row) for row in body.metrics_rows]
+            job.metrics = [metric_point(row, is_train_all(job)) for row in body.metrics_rows]
         job.epoch = len(job.metrics or [])
         job.run_info = body.run_info
         summary = dict(job.dataset_summary or {})
@@ -1046,12 +1319,17 @@ def worker_finish(request: Request, job_id: UUID, body: Finish):
         status, code, error = body.status, body.error_code, body.error
         if status == 'stopped' and (job.monitor or {}).get('protection_stop'):
             code = 'production_protection'
-        if status == 'completed' and 'best.pt' not in (job.artifacts or {}):
+        evaluating = job.config.get('kind') == 'evaluate'
+        if status == 'completed' and not evaluating and 'best.pt' not in (job.artifacts or {}):
             status, code, error = 'failed', 'model_missing', 'best.pt was not stored on the Backend.'
+        if status == 'completed' and evaluating and (job.evaluation or {}).get('status') != 'completed':
+            status, code, error = 'failed', 'evaluation_failed', 'The evaluation produced no metrics.'
         if status == 'completed':
             job.progress = 1.0
         TrainingService.close_job(job, status, code, error)
-        if status == 'completed' and not job.config.get('smoke'):
+        if status == 'completed' and evaluating:
+            attach_new_image_evaluation(session, job)
+        elif status == 'completed' and not job.config.get('smoke'):
             version = 1 + max(session.scalars(select(TrainingModel.version).where(TrainingModel.name == job.name)),
                               default=0)
             evaluation = job.evaluation or {}
@@ -1061,11 +1339,16 @@ def worker_finish(request: Request, job_id: UUID, body: Finish):
                 job_id=job.id, export_id=job.export_id, dataset_sha256=job.dataset_sha256,
                 class_mode=job.config['class_mode'], names=(body.run_info or {}).get('names'),
                 config={k: job.config.get(k) for k in ('epochs', 'imgsz', 'batch', 'seed', 'patience', 'class_mode')}
-                | {'epochs_run': job.epoch, 'final_batch': (body.run_info or {}).get('final_batch')},
-                metrics={'val': best_point(job.metrics or []), 'test': new,
+                | {'epochs_run': job.epoch, 'final_batch': (body.run_info or {}).get('final_batch'),
+                   'train_mode': job.config.get('train_mode', 'standard'),
+                   'weights_selection': job.config.get('weights_selection', 'best_val'),
+                   'train_images': (job.dataset_summary or {}).get('counts', {}).get('total') if is_train_all(job)
+                   else (job.dataset_summary or {}).get('counts', {}).get('train')},
+                # Train All has no independent split: no val/test numbers are recorded for it.
+                metrics={'val': None if is_train_all(job) else best_point(job.metrics or []), 'test': new,
                          'test_baseline': ((evaluation.get('metrics') or {}).get('models') or {}).get('baseline'),
                          'test_images': (evaluation.get('metrics') or {}).get('images'),
-                         'evaluation_status': evaluation.get('status')},
+                         'evaluation_status': evaluation.get('status'), 'new_images': []},
                 evaluation_conclusive=bool(evaluation.get('conclusive')),
                 files={name: job.artifacts[name] for name in ('best.pt', 'last.pt') if name in job.artifacts})
             session.add(model)
