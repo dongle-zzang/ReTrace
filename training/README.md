@@ -11,7 +11,8 @@ training/
   dataset_views.py   # 원본을 건드리지 않는 파생 view (coco80 라벨 재매핑)
   train.py           # GPU 전용 학습 (검증·VRAM 가드 포함)
   evaluate.py        # 기존 모델 vs 새 모델 비교 표/이미지
-  tests/             # CPU unittest (합성 이미지)
+  worker.py          # 웹(/training) job 실행 worker (host, stdlib만 사용): docs/training.md
+  tests/             # CPU unittest (합성 이미지, worker 통합 테스트)
   .venv/ .ultralytics/ weights/ datasets/ runs/        # Git 제외: 환경·CCTV 데이터·가중치·결과
 ```
 
@@ -70,7 +71,8 @@ CPU fallback은 없다. CUDA가 없으면 종료한다.
 
 ZIP 구조는 `backend/app/dataset.py`가 만든다(루트에 `data.yaml`, `manifest.json`,
 `images|labels/{train,val,test}`. 상위 `dataset/` 폴더 하나로 감싼 ZIP도 허용).
-클래스는 데이터셋 전용 `0 car / 1 truck / 2 bus`이다(COCO ID 아님). 세부 계약은 [docs/datasets.md](../docs/datasets.md).
+클래스는 데이터셋 전용 `0 car / 1 truck / 2 bus`이다(COCO ID 아님). 현재 exporter는 `0 car`만 내보내며(car-only),
+`check_dataset.py`는 두 형식을 모두 받는다. coco80 view는 data.yaml의 이름으로 COCO ID를 찾는다(car→2). 세부 계약은 [docs/datasets.md](../docs/datasets.md).
 
 ```bash
 cd training
@@ -109,6 +111,9 @@ single을 둘 다 학습해 `evaluate.py`로 비교하는 것을 권장한다. m
 
 ## 5. 학습 실행
 
+웹 UI(`/training`)에서 시작하면 host의 `worker.py`가 아래와 같은 인자로 `train.py`/`evaluate.py`를 실행한다
+(진행률·중지 파일 `--progress-file`/`--stop-file`, 평가 `--predictions-json` 추가). 절차는 [웹 fine-tuning](../docs/training.md).
+
 ```bash
 cd training
 # 1) 짧은 smoke (1 epoch): 오류·VRAM 확인용, 결과 모델은 사용하지 않음
@@ -128,6 +133,25 @@ OOM이 나면 `--batch 2`로 낮춘다. 장시간 학습은 `nohup ... > runs/tr
 `results.png`, PR/F1 curve, confusion matrix, `args.yaml`, `run_info.json`(버전·데이터 counts·경고·peak VRAM).
 과적합 판단: `results.csv`에서 train loss는 계속 내려가는데 val box/cls loss가 오르거나 val mAP가 정체되는지 본다.
 
+### 전체 학습 (Train All, `--train-all`)
+
+데이터가 적을 때(예: 25장) Train/Val/Test 이미지를 모두 가중치 학습에 쓴다. `coco80` 전용이다(COCO 80클래스
+head 유지, car는 COCO 2의 사전학습 가중치에서 시작).
+
+```bash
+.venv/bin/python train.py --data datasets/<name> --train-all --epochs <일반 학습의 best epoch> --imgsz 640 --batch 4
+```
+
+- 원본 export·분할은 바꾸지 않는다. `<name>__trainall/`에 학습용 사본(이미지 hardlink 또는 복사, label은 COCO id로
+  변환, `train_all.json`에 원래 split 기록)을 만들어 학습한다.
+- 독립 검증이 없으므로 `val=False`(epoch별 검증 없음), `patience=0`(조기 종료 없음, 지정 epoch 모두 실행),
+  최종 가중치는 마지막 epoch(`best.pt`를 `last.pt`로 덮어씀)다. epoch 수는 같은 데이터의 일반 학습에서
+  val mAP50-95가 가장 높았던 epoch를 쓰는 것이 기준이다(웹 UI가 제안).
+- Ultralytics는 마지막 epoch 뒤 `val`(=학습 이미지)로 한 번 검증한다. 이 값은 학습 적합도이며 성능이 아니다.
+  웹은 이 값을 표시하지 않는다. 성능은 아래 새 이미지 평가로만 잰다.
+- 2026-10-15 CPU harness(yolo11n, 합성 이미지 12장, Ultralytics 8.4.176, torch 2.14 CPU — 서버 torch 2.6과 다름)로 확인: epoch 1–2 검증 생략,
+  마지막 epoch만 검증, `best.pt`=`last.pt`, head nc 80, 원본 파일 sha256 불변. GPU 실학습은 미검증.
+
 ## 6. 평가와 기존 모델 비교
 
 ```bash
@@ -143,6 +167,8 @@ OOM이 나면 `--batch 2`로 낮춘다. 장시간 학습은 `nohup ... > runs/tr
   `images/`(모델별 패널. 초록 GT, 파랑 TP, 주황 FP, 빨강 미검출)이다.
 - 비교는 test(독립 세션)로 한다. val은 `best.pt` 선택에 쓰였으므로 낙관적이다. test가 10장 미만이거나
   near-duplicate 경고가 있으면 개선을 단정하지 않는다(보고서에 caveat로 출력).
+- 새 CCTV 이미지 평가: `--eval-only`는 학습 split이 빈 평가 전용 데이터셋을 허용한다. 웹은 모델이 학습한 이미지와
+  같은 촬영 세션 이미지를 뺀 사본(`dataset_views.subset_view`, 모두 test)을 만들어 이 옵션으로 실행한다.
 - Ultralytics 오프라인 추론이며 DeepStream(nvinfer 스케일링, TensorRT FP16, 1920×1080 mux)과 다르다.
   최종 판단은 아래 GPU 검증 절차로 한다.
 

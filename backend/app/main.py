@@ -17,6 +17,7 @@ from .schemas import (CameraOut, HealthOut, LiveTrackOut, StatusOut, StatusSumma
 from .settings import Settings
 from .dataset import DatasetService, router as dataset_router
 from .color_parking import ColorParkingWorker, router as color_parking_router
+from .training import TrainingService, router as training_router
 
 
 def create_app(settings=None, engine=None, transport=None, start_poller=True):
@@ -37,6 +38,12 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
         app.state.datasets = datasets
         try:
             datasets.initialize()
+        except (SQLAlchemyError, OSError):
+            pass
+        training = TrainingService(config, sessions, poller)
+        app.state.training = training
+        try:
+            training.initialize()
         except (SQLAlchemyError, OSError):
             pass
         color_parking = ColorParkingWorker(config, sessions, transport)
@@ -64,6 +71,7 @@ def create_app(settings=None, engine=None, transport=None, start_poller=True):
     app = FastAPI(title="ReTrace Backend", lifespan=lifespan)
     app.include_router(color_parking_router)
     app.include_router(dataset_router)
+    app.include_router(training_router)
     origins = settings.cors_origins if settings is not None else Settings.cors_origins_from_env()
     if origins:
         app.add_middleware(CORSMiddleware, allow_origins=list(origins),

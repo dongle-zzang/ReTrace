@@ -26,6 +26,7 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 
 ## 연결 구조
 
+- 첫 화면은 `/parking`입니다. `/`는 `/parking`으로 이동하고, CCTV 모니터링은 `/monitoring`입니다.
 - `GET /api/cameras`는 10초마다 카메라 목록과 상태를 갱신합니다.
 - 페이지당 WebSocket `/ws` 하나(`useRealtimePreview.ts` → `realtimePreviewClient.ts`)로 모든 카메라의 영상·상태를 받습니다. 카메라마다 `<img src=/mjpeg/...>`를 쓰면 브라우저의 origin당 HTTP/1.1 연결 6개 제한에 걸리므로 사용하지 않습니다.
 - 화면에 보이는(IntersectionObserver, 120px 여유) 카드 또는 전체 화면 카드만 `subscribe`합니다. 필터·검색·스크롤로 카드가 바뀌면 구독 목록 전체를 다시 보냅니다: `{"version":1,"type":"subscribe","cameraIds":[...],"video":true,"videoFps":10}`.
@@ -82,6 +83,19 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 새 설정 주소나 프론트 Mock 데이터는 없습니다. API·DB·볼륨·캡처·분할·운영 적용 원문은
 [AI 데이터셋 계약](../docs/datasets.md)을 따릅니다. 핵심 구현은 `DatasetBoxEditor.vue`,
 `pages/datasets/`, `composables/datasetApi.ts`, `types/dataset.ts`입니다.
+
+내비게이션 `AI Training` → `/training`에서 데이터셋 export 선택·적합성 확인, 학습 설정·시작·중지, 진행(epoch·loss·mAP·GPU·로그),
+기존 모델과의 같은 test 이미지 비교, 모델 registry를 제공합니다. 시작·중지·다운로드는 서버 `TRAINING_ADMIN_TOKEN`을 입력해야 하며
+토큰은 sessionStorage에만 둡니다. Preview proxy는 body 없는 POST를 415로 거부하므로 `/auth`, `/stop`도 `Content-Type: application/json`과 `{}`를 보냅니다. 계약은 [웹 fine-tuning](../docs/training.md), 구현은 `pages/training.vue`,
+`components/Training*.vue`, `composables/trainingApi.ts`, `lib/training.ts`입니다.
+
+## 화면 언어 (한국어 / English)
+
+상단 바 오른쪽(휴대폰은 바 아래)의 `한 | EN` 토글로 UI 문구를 바꿉니다. 선택은 `localStorage`의 `retrace.locale`에 저장되고,
+저장된 값이 없으면 브라우저 언어가 한국어일 때 한국어, 그 밖에는 영어로 시작합니다. 새 dependency 없이 `composables/useI18n.ts`의
+`t('English text', { name })`를 씁니다. 영어 원문이 key이고 한국어는 `lib/i18n.ko.ts`에 있으며, 사전에 없는 문구(서버가 보낸 오류·경고,
+카메라 이름 등)는 받은 그대로 보입니다. 화면 문구를 추가하면 `lib/i18n.ko.ts`에도 넣습니다. `tests/i18n.test.cjs`가 문자열 리터럴로 쓴
+`t('…')` key의 번역 누락과 `{placeholder}` 불일치를 잡습니다(변수로 넘기는 lib/API 메시지는 직접 확인).
 
 ## 정적 배포
 

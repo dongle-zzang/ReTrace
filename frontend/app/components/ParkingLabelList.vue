@@ -3,6 +3,7 @@ import type { ParkingSpace, ParkingStatus, ParkingZone } from '~/types/parking'
 import { LoaderCircle, Plus, Trash2, TriangleAlert } from '@lucide/vue'
 import { Button } from '~/components/ui/button'
 import { compareLabels, findSpaceByLabel, labelKey, parkingStatusLabel, validateLabel } from '~/lib/parking'
+import { useI18n } from '~/composables/useI18n'
 
 /**
  * The one place labels are chosen. Every parking space (label) is a row; a label drawn on this
@@ -29,6 +30,7 @@ const emit = defineEmits<{
   'remove-zone': [zoneId: string]
 }>()
 
+const { t } = useI18n()
 const query = ref('')
 const creating = ref(false)
 const error = ref<string | null>(null)
@@ -62,7 +64,7 @@ async function submit() {
   }
   const problem = validateLabel(label)
   if (problem) {
-    error.value = problem
+    error.value = t(problem)
     return
   }
   creating.value = true
@@ -72,7 +74,7 @@ async function submit() {
     query.value = ''
     emit('pick', space.id)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Couldn't add the label."
+    error.value = t(cause instanceof Error ? cause.message : "Couldn't add the label.")
   } finally {
     creating.value = false
   }
@@ -83,7 +85,7 @@ watch(query, () => (error.value = null))
 
 <template>
   <div class="flex min-h-0 flex-col gap-1.5">
-    <ul class="-mx-1 min-h-0 flex-1 space-y-1.5 overflow-y-auto px-1" aria-label="Labels">
+    <ul class="-mx-1 min-h-0 flex-1 space-y-1.5 overflow-y-auto px-1" :aria-label="t('Labels')">
       <li v-for="zone in unlabeled" :key="zone.id">
         <button
           type="button"
@@ -94,8 +96,8 @@ watch(query, () => (error.value = null))
           @click="emit('select-zone', zone.id)"
         >
           <span class="size-3 shrink-0 rounded-full border border-dashed border-amber-300" aria-hidden="true" />
-          <span class="flex-1 text-amber-200">New zone</span>
-          <span class="text-xs text-muted-foreground">pick a label</span>
+          <span class="flex-1 text-amber-200">{{ t('New zone') }}</span>
+          <span class="text-xs text-muted-foreground">{{ t('pick a label') }}</span>
         </button>
       </li>
 
@@ -118,34 +120,34 @@ watch(query, () => (error.value = null))
             aria-hidden="true"
           />
           <span :class="['min-w-0 flex-1 truncate font-medium', zoneBySpace.get(space.id) ? '' : 'text-muted-foreground']">{{ space.label }}</span>
-          <TriangleAlert v-if="conflictSpaceIds.includes(space.id)" class="size-3.5 shrink-0 text-amber-300" aria-label="Cameras disagree" />
+          <TriangleAlert v-if="conflictSpaceIds.includes(space.id)" class="size-3.5 shrink-0 text-amber-300" :aria-label="t('Cameras disagree')" />
           <span v-if="zoneBySpace.get(space.id)" :class="['shrink-0 text-xs', text[statuses[zoneBySpace.get(space.id)!.id] ?? 'unknown']]">
-            {{ parkingStatusLabel[statuses[zoneBySpace.get(space.id)!.id] ?? 'unknown'] }}
+            {{ t(parkingStatusLabel[statuses[zoneBySpace.get(space.id)!.id] ?? 'unknown']) }}
             <span v-if="scores[zoneBySpace.get(space.id)!.id] != null" class="font-mono text-muted-foreground tabular-nums">{{ scores[zoneBySpace.get(space.id)!.id]!.toFixed(2) }}</span>
           </span>
-          <span v-else class="shrink-0 text-xs text-muted-foreground/70">not on this camera</span>
+          <span v-else class="shrink-0 text-xs text-muted-foreground/70">{{ t('not on this camera') }}</span>
         </button>
         <Button
           v-if="editing && zoneBySpace.get(space.id)"
           size="icon-sm"
           variant="ghost"
           class="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground hover:text-destructive"
-          :aria-label="'Remove ' + space.label + ' from this camera'"
+          :aria-label="t('Remove {label} from this camera', { label: space.label })"
           @click="emit('remove-zone', zoneBySpace.get(space.id)!.id)"
         >
           <Trash2 />
         </Button>
       </li>
     </ul>
-    <p v-if="query.trim() && !rows.length" class="px-1 text-xs text-muted-foreground">No label matches “{{ query.trim() }}”.</p>
+    <p v-if="query.trim() && !rows.length" class="px-1 text-xs text-muted-foreground">{{ t('No label matches “{query}”.', { query: query.trim() }) }}</p>
 
     <form class="relative shrink-0" @submit.prevent="submit">
       <input
         v-model="query"
         type="text"
         maxlength="60"
-        placeholder="Add label"
-        aria-label="Search or add a label"
+        :placeholder="t('Add label')"
+        :aria-label="t('Search or add a label')"
         class="h-11 w-full rounded-xl border border-dashed border-white/10 bg-white/[0.02] pr-11 pl-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:bg-white/[0.05] focus:border-primary/50 focus:bg-white/[0.05]"
       >
       <Button
@@ -154,7 +156,7 @@ watch(query, () => (error.value = null))
         variant="ghost"
         class="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground"
         :disabled="!query.trim() || creating"
-        aria-label="Add label"
+        :aria-label="t('Add label')"
       >
         <LoaderCircle v-if="creating" class="animate-spin" />
         <Plus v-else />
@@ -162,7 +164,7 @@ watch(query, () => (error.value = null))
     </form>
     <p v-if="error" class="px-1 text-xs text-red-300" role="alert">{{ error }}</p>
     <p v-else-if="query.trim() && !findSpaceByLabel(spaces, query)" class="px-1 text-xs text-muted-foreground">
-      Enter to add “{{ query.trim() }}” as a new label
+      {{ t('Enter to add “{query}” as a new label', { query: query.trim() }) }}
     </p>
   </div>
 </template>

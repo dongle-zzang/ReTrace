@@ -10,10 +10,19 @@ Class strategy (--classes, see README for the trade-offs):
           80-label ONNX/labels.txt layout. Original export untouched.
   single  every box is one class (Ultralytics single_cls, names {0: item}); new 1-class head
   multi   0 car / 1 truck / 2 bus; new 3-class head
+
+Train All (--train-all, coco80 only): every train/val/test image of the export becomes a training
+image in a separate copy (dataset_views.train_all_view); the export and its splits stay as they are.
+Nothing independent is left to select or stop on, so validation-driven behaviour is switched off:
+no per-epoch validation and no early stopping (a fixed --epochs schedule), and the final epoch's
+weights are the result (best.pt is overwritten with last.pt). Ultralytics still validates once
+after the last epoch on the same training images; that is training fit, not a test score.
+Measure the model on newly captured CCTV images (evaluate.py --eval-only) instead.
 """
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -43,6 +52,46 @@ def configure_ultralytics():
                      "runs_dir": str(ROOT / "runs")})
 
 
+def add_worker_callbacks(model, progress_file, stop_file, index):
+    """Progress for training/worker.py and a cooperative stop.
+
+    Ultralytics checks trainer.stop after every batch (8.4.x): the run then validates, saves
+    last.pt/best.pt and exits normally, so a stopped run still keeps its checkpoints.
+    """
+    import torch
+    state = {"batch": 0, "written": 0.0}
+
+    def write(trainer, final=False):
+        if not progress_file:
+            return
+        now = time.time()
+        if not final and now - state["written"] < 1.0:
+            return
+        state["written"] = now
+        loss = trainer.label_loss_items(trainer.tloss, prefix="train") if trainer.tloss is not None else {}
+        data = {"epoch": trainer.epoch + 1, "epochs": trainer.epochs, "batch": state["batch"],
+                "batches": len(trainer.train_loader) if getattr(trainer, "train_loader", None) else None,
+                "batch_size": trainer.batch_size, "train_loss": {k: float(v) for k, v in loss.items()},
+                "torch_reserved_mib": torch.cuda.memory_reserved(index) // 2**20, "time": now}
+        tmp = progress_file.with_name(progress_file.name + ".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(progress_file)
+
+    def epoch_start(trainer):
+        state["batch"] = 0
+
+    def batch_end(trainer):
+        state["batch"] += 1
+        write(trainer)
+        if stop_file and stop_file.exists() and not trainer.stop:
+            print("Stop requested: finishing this batch, validating and saving checkpoints.", flush=True)
+            trainer.stop = True
+
+    model.add_callback("on_train_epoch_start", epoch_start)
+    model.add_callback("on_train_batch_end", batch_end)
+    model.add_callback("on_fit_epoch_end", lambda trainer: write(trainer, final=True))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data", type=Path, required=True, help="extracted dataset dir or its data.yaml")
@@ -62,7 +111,14 @@ def main(argv=None):
     p.add_argument("--allow-no-val", action="store_true",
                    help="smoke only: permit a dataset without val images (never for a real run)")
     p.add_argument("--skip-check", action="store_true", help="do not re-run check_dataset.py (e.g. public smoke data)")
+    p.add_argument("--train-all", action="store_true",
+                   help="train on train+val+test (coco80 only): no validation/early stopping, final-epoch weights")
+    p.add_argument("--progress-file", type=Path, help="JSON progress written for worker.py (epoch/batch/losses)")
+    p.add_argument("--stop-file", type=Path, help="graceful stop between batches once this file exists")
     args = p.parse_args(argv)
+    if args.train_all and (args.classes != "coco80" or args.skip_check):
+        print("--train-all keeps the pretrained COCO head: use --classes coco80 on a checked ReTrace export.")
+        return 1
 
     data_yaml = args.data if args.data.suffix in (".yaml", ".yml") else args.data / "data.yaml"
     data_dir = data_yaml.parent
@@ -72,7 +128,7 @@ def main(argv=None):
         if report["errors"]:
             print("\n".join(["Dataset errors (run check_dataset.py for the full report):"] + report["errors"][:20]))
             return 1
-        if report["info"]["images"]["val"] == 0 and not (args.smoke and args.allow_no_val):
+        if report["info"]["images"]["val"] == 0 and not (args.smoke and args.allow_no_val) and not args.train_all:
             print("val split is empty: collect another independent capture session. Refusing to train.")
             return 1
     classes = args.classes if report else "as_given"  # unchecked (public smoke) data: train labels as given
@@ -93,25 +149,39 @@ def main(argv=None):
     import ultralytics
 
     epochs = 1 if args.smoke else args.epochs
-    name = args.name or f"{'smoke' if args.smoke else 'ft'}_{classes}_{args.imgsz}_{time.strftime('%Y%m%d_%H%M%S')}"
+    kind = "smoke" if args.smoke else "all" if args.train_all else "ft"
+    name = args.name or f"{kind}_{classes}_{args.imgsz}_{time.strftime('%Y%m%d_%H%M%S')}"
     model = YOLO(args.model)
+    if args.progress_file or args.stop_file:
+        add_worker_callbacks(model, args.progress_file, args.stop_file, index)
     train_yaml = data_yaml
-    if classes == "coco80":
+    if args.train_all:
+        train_yaml = dataset_views.train_all_view(data_dir, model.names) / "data.yaml"
+        print(f"Train All copy (train+val+test as training images, original export untouched): {train_yaml}")
+    elif classes == "coco80":
         train_yaml = dataset_views.coco80_view(data_dir, model.names) / "data.yaml"
         print(f"coco80 view: {train_yaml}")
     started = time.time()
     model.train(
         data=str(train_yaml), epochs=epochs, imgsz=args.imgsz, batch=args.batch, device=args.device,
-        seed=args.seed, deterministic=True, workers=args.workers, patience=args.patience,
+        seed=args.seed, deterministic=True, workers=args.workers,
+        # Train All has no independent validation: patience 0 disables early stopping (Ultralytics
+        # treats it as infinite) and val=False skips per-epoch validation of training images.
+        patience=0 if args.train_all else args.patience,
         project=args.project, name=name, exist_ok=False, single_cls=classes == "single",
         pretrained=True, optimizer="auto", amp=True, cos_lr=False, close_mosaic=min(10, epochs),
         # Fixed CCTV viewpoint: no rotation/shear/perspective; keep scale (small far cars),
         # HSV (day/night, shadows), horizontal flip and mosaic (crowding/occlusion).
         degrees=0.0, shear=0.0, perspective=0.0, flipud=0.0, fliplr=0.5, scale=0.5,
         translate=0.1, hsv_h=0.015, hsv_s=0.7, hsv_v=0.4, mosaic=1.0, mixup=0.0,
-        plots=True, val=True, cache=False, verbose=True,
+        plots=True, val=not args.train_all, cache=False, verbose=True,
     )
     save_dir = Path(model.trainer.save_dir)
+    weights_dir = save_dir / "weights"
+    if args.train_all and (weights_dir / "last.pt").is_file():
+        # No validation picks a "best" epoch: the result is the final epoch (last.pt, already
+        # stripped of optimizer state by Ultralytics). Keep the best.pt name for the registry.
+        shutil.copyfile(weights_dir / "last.pt", weights_dir / "best.pt")
     peak = torch.cuda.max_memory_reserved(index) // 2**20
     info = {
         "smoke": args.smoke, "classes": classes, "epochs": epochs, "imgsz": args.imgsz, "batch": args.batch,
@@ -122,6 +192,14 @@ def main(argv=None):
         "gpu_mib_before": used, "torch_peak_reserved_mib": peak,
         "dataset_counts": report["info"]["images"] if report else None,
         "dataset_warnings": report["warnings"] if report else None,
+        "stopped_early": bool(args.stop_file and args.stop_file.exists()),
+        "final_batch": model.trainer.batch_size,  # Ultralytics halves it on a first-epoch CUDA OOM
+        "names": {int(k): str(v) for k, v in model.names.items()},
+        "train_mode": "all" if args.train_all else "standard",
+        "weights_selection": "final_epoch" if args.train_all else "best_val_fitness",
+        "early_stopping": "disabled" if args.train_all else {"patience": args.patience},
+        "train_images": (json.loads((train_yaml.parent / "train_all.json").read_text())["counts"] if args.train_all
+                         else report["info"]["images"]["train"] if report else None),
     }
     (save_dir / "run_info.json").write_text(json.dumps(info, indent=2, ensure_ascii=False))
     print(json.dumps(info, indent=2, ensure_ascii=False))
