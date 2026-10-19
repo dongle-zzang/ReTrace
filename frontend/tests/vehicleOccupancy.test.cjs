@@ -60,6 +60,25 @@ test('a car counts for the zone under its ground footprint, not the one its roof
   assert.equal(readings.get('roof').overlap, 0)
 })
 
+test('cars whose box runs past the painted line or the frame edge still fill their spot (1F outdoor lot)', () => {
+  // Real boxes and zones from 1f_outdoor_parking: P101 and P201 read empty while the car's box
+  // bottom edge lay just below the zone; P102 next to P101 must stay empty.
+  const P101 = zone('P101', [{ x: 0.4913, y: 0.0620 }, { x: 0.5262, y: 0.2946 }, { x: 0.6483, y: 0.3049 }, { x: 0.5911, y: 0.0672 }])
+  const P102 = zone('P102', [{ x: 0.5988, y: 0.0698 }, { x: 0.6502, y: 0.3066 }, { x: 0.7568, y: 0.3127 }, { x: 0.7054, y: 0.0887 }])
+  const P201 = zone('P201', [{ x: 0.5945, y: 0.7442 }, { x: 0.6332, y: 0.9897 }, { x: 0.7854, y: 0.9966 }, { x: 0.7432, y: 0.7304 }])
+  const real = parseVehicleFrame('cam', {
+    timestamp: 't1', bbox_width: 1920, bbox_height: 1080, vehicle_detection_enabled: true, vehicle_inference_done: true,
+    vehicles: [
+      { track_id: '4', confidence: 0.94, bbox: { x: 963.6, y: 30.4, width: 259.5, height: 307.5 } },
+      { track_id: '1098', confidence: 0.93, bbox: { x: 1105.0, y: 673.4, width: 356.9, height: 406.6 } },
+    ],
+  })
+  const readings = readZones(real, [P101, P102, P201])
+  assert.ok(readings.get('P101').overlap >= 0.55, JSON.stringify([...readings]))
+  assert.ok(readings.get('P201').overlap >= 0.55)
+  assert.equal(readings.get('P102').overlap, 0)
+})
+
 test('a car between two spots fills at most one of them', () => {
   // Footprint x 0.12–0.28: 0.11 of its 0.16 width on the left spot, 0.05 on the right one.
   const left = zone('left', square(0, 0.5, 0.23, 0.7)), right = zone('right', square(0.23, 0.5, 0.5, 0.7))

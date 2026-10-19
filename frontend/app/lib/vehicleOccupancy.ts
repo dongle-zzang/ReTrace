@@ -52,7 +52,10 @@ export interface OccupancyPolicy {
    * and keep it from turning empty.
    */
   minConfidence: number
-  /** The footprint's bottom-centre point must lie inside the zone. */
+  /**
+   * The footprint's centre must lie inside the zone. Not the box's bottom edge: on oblique
+   * cameras a parked car's box runs past the painted line, and boxes are clipped at the frame edge.
+   */
   requireAnchor: boolean
   /** Consecutive new frames with the same reading before the status changes. */
   occupiedFrames: number
@@ -168,7 +171,7 @@ export function matchVehicleToZone(vehicle: DetectedVehicle, polygon: Point[], p
   return {
     overlap: Math.min(1, intersection / footprintArea),
     coverage: Math.min(1, intersection / zoneArea),
-    anchored: pointInPolygon({ x: (footprint.x0 + footprint.x1) / 2, y: footprint.y1 }, polygon),
+    anchored: pointInPolygon({ x: (footprint.x0 + footprint.x1) / 2, y: (footprint.y0 + footprint.y1) / 2 }, polygon),
   }
 }
 
