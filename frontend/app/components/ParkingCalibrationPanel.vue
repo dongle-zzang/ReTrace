@@ -9,16 +9,18 @@ import { useI18n } from '~/composables/useI18n'
 
 /**
  * Empty-spot baseline for one zone. The color detector compares the live view against this
- * baseline, so it must be registered while the spot is actually empty.
+ * baseline, so it must be registered while the spot is actually empty. With `baseline: false`
+ * (vehicle-detection occupancy) only the zone's status is shown.
  */
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   label: string
   status: ParkingStatus
   score: number | null
   /** The zone's `calibrated` flag from the server; null when it isn't known yet. */
   calibrated: boolean | null
   calibrate: (register: boolean) => Promise<void>
-}>()
+  baseline?: boolean
+}>(), { baseline: true })
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -68,14 +70,21 @@ watch(() => props.label, () => {
     <dl class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-xs">
       <dt class="text-muted-foreground">{{ t('Status (this camera)') }}</dt>
       <dd class="justify-self-end"><ParkingStatusBadge :status="status" :score="score" /></dd>
+      <template v-if="baseline">
       <dt class="text-muted-foreground">{{ t('Empty baseline') }}</dt>
       <dd class="justify-self-end">
         <Badge v-if="calibrated === true" class="bg-green-500/15 text-green-300">{{ t('Registered') }}</Badge>
         <Badge v-else-if="calibrated === false" variant="outline" class="text-muted-foreground">{{ t('Not registered') }}</Badge>
         <span v-else class="text-muted-foreground">{{ t('Not reported by the server') }}</span>
       </dd>
+      </template>
     </dl>
 
+    <p v-if="!baseline" class="text-xs leading-relaxed text-muted-foreground">
+      {{ t('Decided by vehicle detection: occupied while a detected vehicle’s bottom area sits on this zone. The number is how much of that area overlaps the zone.') }}
+    </p>
+
+    <template v-else>
     <p class="text-xs leading-relaxed text-amber-200/90">
       {{ t('Register the baseline only while this spot is actually empty — no car, nothing parked on the lines. The current camera view becomes the reference for “empty”.') }}
     </p>
@@ -88,6 +97,7 @@ watch(() => props.label, () => {
         <RotateCcw /> {{ busy === 'reset' ? t('Resetting…') : t('Reset baseline') }}
       </Button>
     </div>
+    </template>
 
     <p v-if="done" class="text-xs text-green-300" role="status">{{ done }}</p>
     <Alert v-if="error" variant="destructive" class="border-destructive/30 bg-destructive/10 px-3 py-2">

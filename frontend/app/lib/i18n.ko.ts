@@ -161,6 +161,7 @@ export const ko: Catalog = {
     'Camera offline or unavailable': '카메라가 오프라인이거나 사용할 수 없음',
     'Waiting for fresh status': '최신 상태를 기다리는 중',
     'Waiting for a stable reading': '안정된 판독을 기다리는 중',
+    'Vehicle detection is off for this camera': '이 카메라는 차량 탐지가 꺼져 있음',
 
     // ---- parking page -------------------------------------------------------------------------
     'Server disconnected · readings unavailable': '서버 연결 끊김 · 판독 불가',
@@ -173,6 +174,14 @@ export const ko: Catalog = {
     'Refresh status': '상태 새로고침',
     'Parking operations': '주차 운영',
     'Status updates': '상태 수신',
+    'Occupancy method': '주차 판정 방식',
+    'Vehicle detection': '차량 탐지',
+    'Color': '색상',
+    'Occupied while a detected vehicle sits on the zone.': '탐지된 차량이 구역 위에 있으면 주차로 판정합니다.',
+    'Compares each zone with its empty baseline.': '각 구역을 빈자리 기준 이미지와 비교합니다.',
+    'Waiting for vehicle detections': '차량 탐지 결과를 기다리는 중',
+    "Couldn't load vehicle detections.": '차량 탐지 결과를 불러오지 못했습니다.',
+    'Decided by vehicle detection: occupied while a detected vehicle’s bottom area sits on this zone. The number is how much of that area overlaps the zone.': '차량 탐지로 판정합니다. 탐지된 차량 박스의 아래쪽 영역이 이 구역 위에 있으면 주차입니다. 숫자는 그 영역이 구역과 겹치는 비율입니다.',
     '{count} zones without a baseline': '기준 없는 구역 {count}개',
     'All zones have a baseline': '모든 구역에 기준이 있습니다',
     '{count} registered labels': '등록된 라벨 {count}개',

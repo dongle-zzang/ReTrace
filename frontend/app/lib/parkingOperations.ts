@@ -10,11 +10,12 @@ export function filterParkingSpaces(rows: ParkingSpaceSummary[], query: string, 
     || filter === 'uncalibrated' && zones.some(zone => row.spaceIds.includes(zone.parkingSpaceId) && zone.calibrated === false)
   ))
 }
-export function unknownReason(row: ParkingSpaceSummary, disconnected: boolean, delayed: boolean, offlineCameraIds: Set<string>): string | null {
+export function unknownReason(row: ParkingSpaceSummary, disconnected: boolean, delayed: boolean, offlineCameraIds: Set<string>, detectorOffCameraIds: Set<string> = new Set()): string | null {
   if (row.status !== 'unknown') return null
   if (!row.zones.length) return 'No camera zone assigned'
   if (disconnected) return 'Server disconnected'
   if (row.zones.every(zone => offlineCameraIds.has(zone.cameraId))) return 'Camera offline or unavailable'
+  if (row.zones.every(zone => detectorOffCameraIds.has(zone.cameraId))) return 'Vehicle detection is off for this camera'
   if (delayed) return 'Waiting for fresh status'
   return 'Waiting for a stable reading'
 }

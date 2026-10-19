@@ -15,6 +15,7 @@ import { ParkingApiError } from '~/composables/parkingApi'
 import { useCameras } from '~/composables/useCameras'
 import { useParking } from '~/composables/useParking'
 import { useParkingEditor } from '~/composables/useParkingEditor'
+import { useParkingOccupancyMode } from '~/composables/useParkingOccupancyMode'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { useVideoStage } from '~/composables/useVideoStage'
 import { useI18n } from '~/composables/useI18n'
@@ -32,7 +33,8 @@ const cameraId = computed(() => String(route.params.cameraId ?? ''))
 const config = useRuntimeConfig()
 const { cameras, loading: camerasLoading } = useCameras()
 const { client: realtimeClient, connection, statuses: liveStatuses, onMessage } = useRealtimePreview(config.public.previewVideoFps)
-const parking = useParking({ realtime: { connection, onMessage }, cameraIds: computed(() => [cameraId.value]) })
+const { mode: occupancyMode } = useParkingOccupancyMode()
+const parking = useParking({ realtime: { connection, onMessage }, cameraIds: computed(() => [cameraId.value]), mode: occupancyMode })
 const editor = useParkingEditor(cameraId, parking.spaces)
 
 const camera = computed(() => cameras.value.find((item) => item.camera_id === cameraId.value) ?? null)
@@ -402,6 +404,7 @@ onUnmounted(() => {
                   :score="zoneScores[focusedZone.id] ?? null"
                   :calibrated="parking.calibrated.value[focusedZone.id] ?? null"
                   :calibrate="(register) => parking.calibrate(focusedZone!.id, register)"
+                  :baseline="!parking.detecting.value"
                   @close="focusedZoneId = null"
                 />
                 <ParkingSpaceBoard v-if="focusedSummary && focusedSummary.zones.length > 1" :summaries="[focusedSummary]" :camera-names="cameraNames" />

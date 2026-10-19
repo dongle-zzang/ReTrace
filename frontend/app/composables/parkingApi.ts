@@ -3,6 +3,8 @@ import type {
   ParkingSpace, ParkingSpaceDto, ParkingStatus, ParkingStatusReport, ParkingZone, ParkingZoneDto, ParkingZoneUpdate,
 } from '~/types/parking'
 import { findSpaceByLabel, isClientZoneId, parseStatusReport, randomId, validateLabel, validateZones } from '~/lib/parking'
+import { parseVehicleFrame, type VehicleFrame } from '~/lib/vehicleOccupancy'
+import { polygonCentroid } from '~/lib/videoGeometry'
 
 /** Data access for parking. Screens only use this interface, never fetch directly. */
 export interface ParkingApi {
@@ -19,6 +21,8 @@ export interface ParkingApi {
   /** Registers the zone's current view as its empty baseline. Run only while the spot is empty. */
   calibrateZone(zoneId: string): Promise<ParkingZone>
   resetCalibration(zoneId: string): Promise<void>
+  /** Latest vehicle boxes of one camera, for vehicle-detection occupancy (lib/vehicleOccupancy). */
+  getVehicles(cameraId: string): Promise<VehicleFrame>
 }
 
 export type ParkingApiErrorCode = 'duplicate' | 'invalid' | 'unavailable' | 'partial' | 'not-found'
@@ -192,6 +196,9 @@ export function createHttpParkingApi(request: Request): ParkingApi {
     async resetCalibration(zoneId) {
       await call(`/api/parking/zones/${encodeURIComponent(zoneId)}/calibrate`, { method: 'DELETE' })
     },
+    async getVehicles(cameraId) {
+      return parseVehicleFrame(cameraId, await call(`/api/cameras/${encodeURIComponent(cameraId)}/vehicles`))
+    },
   }
 }
 
@@ -269,6 +276,23 @@ function mockZoneStatus(zone: ParkingZone, bucket: number): { status: ParkingSta
   if (roll < 12) return { status: 'unknown', score: null }
   if (roll < 18) return { status: truth === 'occupied' ? 'empty' : 'occupied', score: Number((score - 0.2).toFixed(2)) }
   return { status: truth, score: Number(score.toFixed(2)) }
+}
+
+/** A parked car for each mock-occupied zone: its box's bottom part sits inside the zone. */
+function mockVehicles(zones: ParkingZone[], bucket: number) {
+  const width = 1920, height = 1080
+  return zones.filter(zone => mockZoneStatus(zone, bucket).status === 'occupied').map((zone, index) => {
+    const xs = zone.polygon.map(point => point.x), ys = zone.polygon.map(point => point.y)
+    const center = polygonCentroid(zone.polygon)
+    const zoneHeight = Math.max(...ys) - Math.min(...ys)
+    const boxWidth = (Math.max(...xs) - Math.min(...xs)) * 0.75
+    const bottom = Math.max(...ys) - zoneHeight * 0.15
+    const boxHeight = zoneHeight * 1.8
+    return {
+      track_id: index + 1, class_id: 2, confidence: 0.8, tracker_confidence: 0.9,
+      bbox: { x: (center.x - boxWidth / 2) * width, y: (bottom - boxHeight) * height, width: boxWidth * width, height: boxHeight * height },
+    }
+  })
 }
 
 function clone<T>(value: T): T {
@@ -396,6 +420,15 @@ export function createMockParkingApi(options: MockOptions = {}): ParkingApi {
     calibrateZone: (zoneId) => delay(() => clone(setMockCalibrated(zoneId, true))),
     resetCalibration: (zoneId) => delay(() => {
       setMockCalibrated(zoneId, false)
+    }),
+    getVehicles: (cameraId) => delay(() => {
+      const bucket = Math.floor(now() / MOCK_STATUS_PERIOD_MS)
+      // A new frame every 2 s, like the server's vehicle poller.
+      const timestamp = new Date(Math.floor(now() / 2000) * 2000).toISOString()
+      const vehicles = mockVehicles(load().zones.filter(zone => zone.cameraId === cameraId), bucket)
+      return parseVehicleFrame(cameraId, {
+        timestamp, bbox_width: 1920, bbox_height: 1080, vehicle_detection_enabled: true, vehicle_inference_done: true, vehicles,
+      })
     }),
   }
 }
