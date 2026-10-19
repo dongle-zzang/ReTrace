@@ -20,9 +20,18 @@ const props = withDefaults(defineProps<{
   calibrated: boolean | null
   calibrate: (register: boolean) => Promise<void>
   baseline?: boolean
-}>(), { baseline: true })
+  /** Detection mode: this zone's own "occupied from" overlap (0–1), or null for the default. */
+  threshold?: number | null
+  defaultThreshold?: number
+}>(), { baseline: true, threshold: null, defaultThreshold: 0.55 })
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; 'update:threshold': [value: number | null] }>()
+const percent = (value: number) => Math.round(value * 100)
+const thresholdPercent = computed(() => percent(props.threshold ?? props.defaultThreshold))
+function onThreshold(event: Event) {
+  const value = Number((event.target as HTMLInputElement).value) / 100
+  emit('update:threshold', percent(value) === percent(props.defaultThreshold) ? null : value)
+}
 
 const busy = ref<'register' | 'reset' | null>(null)
 const error = ref<string | null>(null)
@@ -80,9 +89,23 @@ watch(() => props.label, () => {
       </template>
     </dl>
 
-    <p v-if="!baseline" class="text-xs leading-relaxed text-muted-foreground">
-      {{ t('Decided by vehicle detection: occupied while a detected vehicle’s bottom area sits on this zone. The number is how much of that area overlaps the zone.') }}
-    </p>
+    <template v-if="!baseline">
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        {{ t('Decided by vehicle detection: occupied while a detected vehicle’s bottom area sits on this zone. The number is how much of that area overlaps the zone.') }}
+      </p>
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between gap-2 text-xs">
+          <label :for="`threshold-${label}`" class="text-muted-foreground">{{ t('Occupied from') }}</label>
+          <span class="font-mono tabular-nums">{{ thresholdPercent }}%<span v-if="threshold === null" class="ml-1 font-sans text-muted-foreground">({{ t('default') }})</span></span>
+        </div>
+        <input :id="`threshold-${label}`" type="range" min="10" max="95" step="5" :value="thresholdPercent" class="w-full accent-primary" @change="onThreshold">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs text-muted-foreground">{{ t('Overlap now: {value}%', { value: score === null ? '–' : percent(score) }) }}</p>
+          <Button v-if="threshold !== null" size="sm" variant="ghost" class="h-6 px-2 text-xs" @click="emit('update:threshold', null)">{{ t('Reset to default') }}</Button>
+        </div>
+        <p class="text-xs text-muted-foreground">{{ t('Saved in this browser.') }}</p>
+      </div>
+    </template>
 
     <template v-else>
     <p class="text-xs leading-relaxed text-amber-200/90">

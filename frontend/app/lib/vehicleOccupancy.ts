@@ -183,11 +183,25 @@ export interface ZoneReading {
   uncertain: boolean
 }
 
+/** Per-zone "occupied from" overlap set by the user (0–1), keyed by zone id. */
+export type ZoneThresholds = Readonly<Record<string, number>>
+
+/**
+ * Enter/stay-occupied overlap for one zone. A user threshold replaces the enter value and keeps
+ * the policy's gap below it for staying occupied, so a car that sways a little doesn't flicker.
+ */
+export function zoneOverlapThresholds(zoneId: string, thresholds: ZoneThresholds = {}, policy: OccupancyPolicy = DEFAULT_OCCUPANCY_POLICY) {
+  const custom = thresholds[zoneId]
+  if (!finite(custom)) return { enter: policy.enterOverlap, exit: policy.exitOverlap }
+  const enter = Math.min(1, Math.max(0.05, custom))
+  return { enter, exit: Math.max(0.05, enter - (policy.enterOverlap - policy.exitOverlap)) }
+}
+
 /**
  * Reads one frame against one camera's zones. Each vehicle counts for at most one zone (the one
  * its footprint overlaps most), so a car straddling a line doesn't fill both spots.
  */
-export function readZones(frame: VehicleFrame, zones: ParkingZone[], policy: OccupancyPolicy = DEFAULT_OCCUPANCY_POLICY) {
+export function readZones(frame: VehicleFrame, zones: ParkingZone[], policy: OccupancyPolicy = DEFAULT_OCCUPANCY_POLICY, thresholds: ZoneThresholds = {}) {
   const readings = new Map<string, ZoneReading>(zones.map(zone => [zone.id, { overlap: 0, uncertain: false }]))
   for (const vehicle of frame.vehicles) {
     let best: { zoneId: string; overlap: number } | null = null
@@ -195,7 +209,7 @@ export function readZones(frame: VehicleFrame, zones: ParkingZone[], policy: Occ
       if (zone.polygon.length < 3) continue
       const match = matchVehicleToZone(vehicle, zone.polygon, policy)
       if (policy.requireAnchor && !match.anchored) continue
-      if (match.coverage < policy.minSpaceCoverage || match.overlap < policy.exitOverlap) continue
+      if (match.coverage < policy.minSpaceCoverage || match.overlap < zoneOverlapThresholds(zone.id, thresholds, policy).exit) continue
       if (!best || match.overlap > best.overlap) best = { zoneId: zone.id, overlap: match.overlap }
     }
     if (!best) continue
@@ -221,12 +235,12 @@ export function createVehicleOccupancy(policy: OccupancyPolicy = DEFAULT_OCCUPAN
   const memory = new Map<string, ZoneMemory>()
   const lastFrame = new Map<string, string>()
 
-  function observe(frame: VehicleFrame, zones: ParkingZone[]): ParkingZoneState[] {
+  function observe(frame: VehicleFrame, zones: ParkingZone[], thresholds: ZoneThresholds = {}): ParkingZoneState[] {
     const usable = frame.detectionEnabled && frame.inferenceDone && frame.timestamp !== null
     const repeated = usable && lastFrame.get(frame.cameraId) === frame.timestamp
     if (usable) lastFrame.set(frame.cameraId, frame.timestamp!)
     else lastFrame.delete(frame.cameraId)
-    const readings = usable ? readZones(frame, zones, policy) : null
+    const readings = usable ? readZones(frame, zones, policy, thresholds) : null
     return zones.map((zone) => {
       let state = memory.get(zone.id)
       // A redrawn polygon starts over: readings of the old shape say nothing about the new one.
@@ -238,7 +252,8 @@ export function createVehicleOccupancy(policy: OccupancyPolicy = DEFAULT_OCCUPAN
       if (!reading) {
         Object.assign(state, { status: 'unknown', candidate: null, count: 0 })
       } else if (!repeated) {
-        const threshold = state.status === 'occupied' ? policy.exitOverlap : policy.enterOverlap
+        const { enter, exit } = zoneOverlapThresholds(zone.id, thresholds, policy)
+        const threshold = state.status === 'occupied' ? exit : enter
         const next: ParkingStatus | null = reading.overlap >= threshold ? 'occupied' : reading.uncertain ? null : 'empty'
         if (next === null || next === state.status) Object.assign(state, { candidate: null, count: 0 })
         else {

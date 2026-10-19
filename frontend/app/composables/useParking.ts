@@ -8,7 +8,7 @@ import type { ConnectionState } from '~/composables/realtimePreviewClient'
 import { compareLabels, countStatuses, findSpaceByLabel, isNewerState, statusReportFromMessage, summarizeSpaces } from '~/lib/parking'
 import { ParkingApiError, useParkingApi } from '~/composables/parkingApi'
 import { isParkingReportFresh } from '~/lib/parkingOperations'
-import { createVehicleOccupancy, type OccupancyMode } from '~/lib/vehicleOccupancy'
+import { createVehicleOccupancy, type OccupancyMode, type ZoneThresholds } from '~/lib/vehicleOccupancy'
 
 const STATUS_REFRESH_MS = 10_000
 // The server's vehicle poller observes every 2 s; polling faster only repeats the same frame.
@@ -26,6 +26,8 @@ export interface UseParkingOptions {
   cameraIds?: Ref<string[]>
   /** How occupancy is decided (useParkingOccupancyMode). Without it the server's color status is used. */
   mode?: Readonly<Ref<OccupancyMode>>
+  /** Per-zone "occupied from" overlap for detection mode (useParkingThresholds). */
+  thresholds?: Readonly<Ref<ZoneThresholds>>
 }
 
 const errorMessage = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message : fallback
@@ -231,7 +233,7 @@ export function useParking(options: UseParkingOptions = {}) {
         if (result.status === 'rejected') { failure = result.reason; return }
         if (!result.value.detectionEnabled) off.add(cameraId)
         // Zones may have been reloaded while the request ran; read against the current ones.
-        states.push(...occupancy.observe(result.value, zones.value[cameraId] ?? []))
+        states.push(...occupancy.observe(result.value, zones.value[cameraId] ?? [], options.thresholds?.value))
       })
       detectorOffCameraIds.value = off
       if (cameras.length && failure && !states.length) {

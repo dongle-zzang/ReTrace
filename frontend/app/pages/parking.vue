@@ -18,6 +18,7 @@ import { useCameras } from '~/composables/useCameras'
 import { useI18n } from '~/composables/useI18n'
 import { useParking } from '~/composables/useParking'
 import { useParkingOccupancyMode } from '~/composables/useParkingOccupancyMode'
+import { useParkingThresholds } from '~/composables/useParkingThresholds'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { compareCameras } from '~/lib/cameraSort'
 import { isParkingCamera } from '~/lib/parking'
@@ -30,7 +31,8 @@ const { cameras, loading, refreshing, error, refresh } = useCameras()
 const { client: realtimeClient, connection, statuses, onMessage } = useRealtimePreview(config.public.previewVideoFps)
 const namedParkingCameraIds = computed(() => cameras.value.filter((camera) => isParkingCamera(camera.name)).map((camera) => camera.camera_id))
 const { mode: occupancyMode, setMode: setOccupancyMode } = useParkingOccupancyMode()
-const parking = useParking({ realtime: { connection, onMessage }, cameraIds: namedParkingCameraIds, mode: occupancyMode })
+const { thresholds } = useParkingThresholds()
+const parking = useParking({ realtime: { connection, onMessage }, cameraIds: namedParkingCameraIds, mode: occupancyMode, thresholds })
 const occupancyOptions = [['detection', 'Vehicle detection'], ['color', 'Color']] as const
 const filterOptions = computed(() => ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)
   .filter(option => option[0] !== 'uncalibrated' || !parking.detecting.value))

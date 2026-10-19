@@ -14,7 +14,7 @@ function load(name, globals = {}) {
   })
   return exports
 }
-const { parseVehicleFrame, readZones, matchVehicleToZone, clipPolygonToRect, createVehicleOccupancy, normalizeOccupancyMode } = load('~/lib/vehicleOccupancy')
+const { zoneOverlapThresholds, parseVehicleFrame, readZones, matchVehicleToZone, clipPolygonToRect, createVehicleOccupancy, normalizeOccupancyMode } = load('~/lib/vehicleOccupancy')
 const { polygonArea } = load('~/lib/videoGeometry')
 
 const square = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]
@@ -155,4 +155,20 @@ test('detection mode decides zone status in the store from polled vehicles', asy
     mode.value = 'color'; await flush(); await flush()
     assert.equal(store.zoneStatuses.value.z1, 'empty')
   } finally { renderer.render(null, container) }
+})
+
+test('a zone can have its own occupied-from overlap', () => {
+  assert.deepEqual({ ...zoneOverlapThresholds('a') }, { enter: 0.55, exit: 0.35 })
+  const custom = zoneOverlapThresholds('a', { a: 0.8 })
+  assert.equal(custom.enter, 0.8)
+  assert.ok(Math.abs(custom.exit - 0.6) < 1e-9)
+  // Footprint x 0.12–0.28; this zone covers 0.12–0.24, i.e. 75% of it.
+  const zones = [zone('a', square(0.1, 0.5, 0.24, 0.65), { revision: 1 })]
+  const strict = createVehicleOccupancy(), loose = createVehicleOccupancy()
+  for (const t of ['t1', 't2']) {
+    strict.observe(frame(t, [car()]), zones, { a: 0.8 })
+    loose.observe(frame(t, [car()]), zones)
+  }
+  assert.equal(strict.observe(frame('t3', [car()]), zones, { a: 0.8 })[0].status, 'empty')
+  assert.equal(loose.observe(frame('t3', [car()]), zones)[0].status, 'occupied')
 })
