@@ -492,6 +492,7 @@ class Beat(BaseModel):
     base_weights: dict = Field(default_factory=dict)
     disk_free_mib: int | None = None
     job: dict | None = None
+    deployment: dict = Field(default_factory=dict)
 
 
 class Claim(BaseModel):
@@ -548,7 +549,8 @@ class TrainingService:
         age = (utcnow() - state['seen_at']).total_seconds()
         return {'online': age <= self.settings.training_worker_stale_seconds, 'worker_id': state['worker_id'],
                 'last_seen': state['seen_at'].isoformat(), 'age_seconds': round(age, 1), 'gpu': state['gpu'],
-                'base_weights': state['base_weights'], 'disk_free_mib': state['disk_free_mib']}
+                'base_weights': state['base_weights'], 'disk_free_mib': state['disk_free_mib'],
+                'deployment': state.get('deployment', {})}
 
     def production(self, session):
         """Live Preview/DeepStream view from the existing poller tables (no GPU access here)."""
@@ -1133,6 +1135,86 @@ def model_file(request: Request, model_id: str, kind: Literal['best', 'last']):
     return artifact_response(service(request).path('jobs', job_id, f'{kind}.pt'), filename)
 
 
+class DeploymentCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
+    action: Literal['deploy', 'rollback'] = 'deploy'
+
+
+@router.get('/deployment')
+def deployment_status(request: Request):
+    worker = service(request).worker_state()
+    runtime = dict(worker.get('deployment') or {})
+    runtime['available'] = bool(worker['online'] and runtime.get('available'))
+    runtime['runtime_online'] = bool(worker['online'] and runtime.get('runtime_online'))
+    # Retain the last known ID for diagnosis, explicitly mark it unconfirmed when offline.
+    runtime['confirmed'] = bool(runtime['runtime_online'] and runtime.get('verified', True))
+    return runtime
+
+
+@router.post('/deployments', status_code=201)
+def create_deployment(request: Request, body: DeploymentCreate):
+    require_admin(request)
+    svc = service(request)
+    runtime = deployment_status(request)
+    if not runtime['available']:
+        raise HTTPException(503, 'DeepStream deployment is disabled or offline.')
+    if runtime.get('phase') not in ('idle', 'completed', 'failed', 'rolled_back'):
+        raise HTTPException(409, 'DeepStream deployment or recovery is still in progress.')
+    if body.action == 'rollback':
+        if not runtime.get('previous'):
+            raise HTTPException(409, 'No previous verified model is available.')
+        model_id = BASE_MODEL_ID  # rollback uses the runtime journal, never downloads base weights
+    else:
+        if not body.model_id:
+            raise HTTPException(422, 'model_id is required.')
+        model_id = body.model_id
+    try:
+        with request.app.state.sessions.begin() as session:
+            svc.expire_stale(session)
+            model = session.get(TrainingModel, model_id)
+            if model is None:
+                raise HTTPException(404, 'Model not found.')
+            if body.action == 'deploy':
+                if model.kind != 'finetuned' or 'best.pt' not in (model.files or {}):
+                    raise HTTPException(409, 'A completed model with registered best.pt is required.')
+                source = session.get(TrainingJob, model.job_id)
+                if not source or source.status != 'completed':
+                    raise HTTPException(409, 'The source training job did not complete.')
+                if (model.config or {}).get('imgsz') != 640:
+                    # nvinfer's on-the-fly update keeps the network resolution; other sizes need a restart
+                    # with a new config and new FPS/VRAM measurements, so they are never applied automatically.
+                    raise HTTPException(422, 'Only 640px models can be hot-deployed.')
+                names = [str(v).lower() for v in (model.names or {}).values()]
+                if model.class_mode == 'vehicle3':
+                    if names and len(names) != 80:
+                        raise HTTPException(422, 'A COCO80 model must keep all 80 classes.')
+                elif model.class_mode == 'single':
+                    # single_cls merges every dataset class; it is "car" only if the dataset was car-only.
+                    classes = {str(v).lower() for v in ((source.dataset_summary or {}).get('classes') or {}).values()}
+                    if len(names) != 1 or names[0] not in ('car', 'item') or classes != {'car'}:
+                        raise HTTPException(422, 'A single-class model must be trained on car-only labels.')
+                else:
+                    raise HTTPException(422, 'Unsupported class mode for deployment.')
+                if runtime.get('active') == model.id:
+                    raise HTTPException(409, 'This model is already active.')
+            name = (f'Deploy {model.name} v{model.version}' if body.action == 'deploy'
+                    else f'Roll back to {runtime["previous"]}')[:64]
+            job = TrainingJob(id=str(uuid4()), name=name, active_slot=1,
+                              status='queued', phase='queued', message='Waiting for deployment worker',
+                              export_id=model.export_id or '', dataset_sha256=model.dataset_sha256 or '',
+                              dataset_summary={}, base_model_id=model_id, epochs=1,
+                              config={'kind': 'deploy', 'action': body.action, 'imgsz': 640,
+                                      **({'class_mode': model.class_mode} if body.action == 'deploy' else {}),
+                                      'required_free_mib': required_free_mib(request.app.state.config, 640, 4)},
+                              metrics=[], log_tail=[], artifacts={})
+            session.add(job)
+            session.flush()
+            return job_out(job, detail=True)
+    except IntegrityError:
+        raise HTTPException(409, 'Another training, evaluation or deployment job is active.') from None
+
+
 # ----- GPU worker API (loopback; Preview never forwards these) -------------------------------
 @router.post('/worker/heartbeat')
 def worker_heartbeat(request: Request, body: Beat):
@@ -1143,7 +1225,11 @@ def worker_heartbeat(request: Request, body: Beat):
     with svc.worker_lock:
         svc.worker = {'worker_id': body.worker_id, 'seen_at': utcnow(), 'gpu': gpu,
                       'base_weights': {k: body.base_weights.get(k) for k in ('present', 'sha256', 'size')},
-                      'disk_free_mib': body.disk_free_mib}
+                      'disk_free_mib': body.disk_free_mib,
+                      'deployment': {k: body.deployment.get(k) for k in
+                                     ('available', 'runtime_online', 'active', 'previous', 'operation', 'phase',
+                                      'error', 'evidence', 'service', 'checks', 'failures', 'session', 'verified',
+                                      'active_class_map', 'diagnosis')}}
     with request.app.state.sessions.begin() as session:
         if body.started:
             for job in session.scalars(select(TrainingJob).where(TrainingJob.status.in_(('running', 'stopping')),
@@ -1319,6 +1405,18 @@ def worker_finish(request: Request, job_id: UUID, body: Finish):
         status, code, error = body.status, body.error_code, body.error
         if status == 'stopped' and (job.monitor or {}).get('protection_stop'):
             code = 'production_protection'
+        if job.config.get('kind') == 'deploy':
+            result = (body.run_info or {}).get('deployment') or {}
+            if status == 'completed' and (result.get('phase') != 'completed' or not result.get('active')):
+                status, code, error = 'failed', 'deployment_unverified', 'Runtime inference verification is missing.'
+            TrainingService.close_job(job, status, code, error)
+            if status == 'completed':
+                job.progress = 1.0
+            # Runtime heartbeat is authoritative; registry flags are only the last verified record.
+            if result.get('active') and result.get('phase') in ('completed', 'rolled_back'):
+                for model in session.scalars(select(TrainingModel)):
+                    model.deployment = 'active' if model.id == result['active'] else 'not_deployed'
+            return job_out(job)
         evaluating = job.config.get('kind') == 'evaluate'
         if status == 'completed' and not evaluating and 'best.pt' not in (job.artifacts or {}):
             status, code, error = 'failed', 'model_missing', 'best.pt was not stored on the Backend.'

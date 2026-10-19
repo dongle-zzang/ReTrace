@@ -25,8 +25,8 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 - 데이터셋은 job 생성 시 export ZIP을 `dataset-storage/training/snapshots/<export_id>.zip`으로 고정(hardlink/복사 +
   sha256)한다. 이후 라벨링이나 export 삭제가 학습에 영향을 주지 않는다. worker는 sha256을 다시 확인하고
   export 구조 allowlist·symlink 금지·파일 수/크기 제한(Zip Slip 방지)으로 압축을 푼다.
-- 운영 YOLO11m/DeepStream은 자동으로 바꾸지 않는다. 모델 registry의 `deployment`는 항상 `not_deployed`이며 UI의
-  적용 버튼은 비활성이다. DeepStream 적용 절차는 training/README.md §8(운영자 수행).
+- 운영 YOLO11m/DeepStream은 학습 완료로 자동 교체되지 않는다. admin이 모델을 골라 [DeepStream에 배포]를 누를 때만
+  바뀌며(§4-2), 이 기능은 retrace의 `VEHICLE_DEPLOYMENT_ENABLED=1`일 때만 켜진다. 학습 데이터·이전 모델·engine은 지우지 않는다.
 - DeepStream 컨테이너를 멈추거나 재시작하지 않는다. 자원이 부족하면 학습 쪽이 기다리거나 멈춘다.
 
 ## 2. GPU·운영 보호
@@ -50,7 +50,10 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 주요 `error_code`: `dataset_invalid`, `dataset_too_large`, `snapshot_changed`, `no_validation`, `invalid_config`,
 `base_model_missing`, `base_model_changed`, `cuda_unavailable`, `gpu_busy`, `gpu_oom`, `storage_full`, `killed`,
 `training_failed`, `download_failed`, `artifact_upload_failed`, `production_protection`, `worker_lost`, `worker_restarted`,
-`evaluation_failed`(새 이미지 평가 job).
+`evaluation_failed`(새 이미지 평가 job). 배포 job: `deployment_unavailable`, `export_failed`, `runtime_changed`, `runtime_lost`,
+`deployment_timeout`, `deployment_unverified`, `deployment_failed`/`deployment_rolled_back`/`deployment_rollback_failed`
+(runtime 결과, 세부 원인은 error 문자열: `artifact_contract_mismatch`, `engine_build_failed`, `model_load_failed`,
+`verification_failed`, `deployment_cancelled`, `no_live_inference`, `no_previous_model` 등).
 
 ## 4. API (`/api/training`)
 
@@ -64,7 +67,9 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 | POST `/auth` | admin | 토큰 확인(204) |
 | POST `/jobs` | admin | 검증 후 job 생성(`train_mode`: `standard` 기본, `all`). limited 데이터셋은 `acknowledge_limits: true` 필요 |
 | POST `/evaluations` | admin | 등록된 fine-tuned 모델을 새 이미지로 평가하는 job 생성(`model_id`, `export_id`, `acknowledge_limits`) |
-| POST `/jobs/{id}/stop` | admin | 안전 중지 요청 |
+| POST `/jobs/{id}/stop` | admin | 안전 중지 요청(배포 job은 취소 → 적용 전이면 변경 없음, 적용 후면 이전 모델 복구) |
+| GET `/deployment` | 공개 | 현재 적용 모델(`active`), 롤백 대상(`previous`), runtime phase/error/추론 근거(`evidence`, `service`, `checks`, `failures`, `diagnosis`), `available`·`confirmed` |
+| POST `/deployments` | admin | `{"model_id", "action": "deploy"}` 또는 `{"action": "rollback"}`. 학습 queue의 단일 slot을 함께 쓴다 |
 | GET `/jobs/{id}/artifacts/{name}`, `/models/{id}/files/{best\|last}` | admin | 산출물·가중치 다운로드 |
 | `/worker/*` (heartbeat, claim, dataset, weights, artifacts, finish) | worker | host worker 전용, Preview에서 404 |
 
@@ -102,6 +107,81 @@ test 세션 2개 이상·경고 없음일 때만 `conclusive`이며, 아니면 U
 - 고정 카메라는 다른 날 이미지도 비슷할 수 있다. 새 이미지는 다른 날·시간대·날씨에서 모은다.
 - DeepStream 운영 모델은 바꾸지 않는다(§1과 동일).
 
+## 4-2. DeepStream 배포와 롤백 (`VEHICLE_DEPLOYMENT_ENABLED=1`)
+
+차량 탐지는 별도 Python YOLO 프로세스가 아니라 `preview.py` 공유 pipeline 안의 차량 nvinfer(secondary, 주차장 ROI만,
+batch = 주차장 카메라 수) 하나다. 따라서 배포는 이 nvinfer의 on-the-fly model update로 하고 영상·RTSP·tracker는 재시작하지 않는다.
+
+```text
+웹 [DeepStream에 배포] → POST /deployments (deploy job, 학습과 같은 단일 slot)
+host worker: best.pt(sha256) → training/deploy_export.py (운영과 같은 DeepStream-Yolo exporter, CPU) → 호환성 검사
+          → .cache/vehicle-deployments/<job>/request.json (5초마다 lease 갱신, 중지 시 cancel)
+retrace (vehicle_deployment.py, 기존 control loop):
+  tools/build_vehicle_engine.py 별도 프로세스로 TensorRT engine 생성 → nvinfer config-file-path 교체
+  → model-updated 성공 신호 → 20초 후 실시간 추론 확인 → committed.json 기록(완료) / 실패 시 이전 config로 복구
+```
+
+- 호환성(모두 맞아야 함, 아니면 운영 모델 변경 없이 실패): 640px, YOLO11m state_dict 구조 동일(1클래스는 Detect의 class 출력
+  conv `cv3.*.2`만 80→1 허용), ONNX 입력 `[dynamic,3,640,640]`·출력 `[dynamic,8400,6]`과 이름·dtype이 운영 ONNX와 동일, 생성 config의
+  전처리(scale/letterbox/scaling-filter)·후처리(parser `.so` hash, NMS/threshold/class 필터)·batch가 운영 config와 동일(`contract`).
+- 클래스 매핑: 운영 nvinfer는 80 labels 그대로다. DeepStream-Yolo parser는 출력의 class 값을 그대로 class ID로 쓰고 그 ID로
+  per-class threshold를 고르며, config의 `filter-out-class-ids`와 tracker 매핑(`vehicle_class_ids`)도 COCO ID 기준이다. 또 OTA는
+  `num-detected-classes`/per-class 설정을 이전 값으로 덮어쓴다(gstnvinfer_impl.cpp). 그래서 모델 쪽을 맞춘다.
+  - `vehicle3`(COCO80): class 80개·순서가 운영 labels.txt와 같아야 하며 매핑 없음(car = 2, truck 7, bus 5).
+  - `single`(1클래스): Ultralytics single_cls 이름 `item` 또는 `car` 1개, 학습 export의 클래스가 car뿐이어야 한다(legacy car/truck/bus
+    export로 학습한 single은 거부). export 후 ONNX 끝에 `Slice/Add/Concat`을 붙여 class 0을 운영 car ID(labels.txt에서 찾음, 현재 2)로
+    바꾼다. 붙인 부분만 onnx reference로 실행해 box/score 불변·class 0→2를 확인하고, 매핑은 manifest·`committed.json`·
+    `/deployment.active_class_map`에 남는다. threshold는 운영 car class 값(`class-attrs-2`)이 적용된다.
+- 입력 크기: 640 외(960 등)는 자동 배포하지 않는다. nvinfer OTA는 network 해상도가 다르면 새 context를 거부하고
+  (`isNewContextValid`), 960은 연산량·VRAM이 커서 FPS 재측정 없이 운영 판단을 할 수 없다. 960 학습 모델을 640으로 export하는 것도
+  정확도 검증이 없어 막는다. 이 경우 training/README.md §8 수동 절차(새 config + retrace 재생성 + 측정)를 따른다.
+- engine-only 교체(`model-engine-file`)는 쓰지 않는다. DeepStream이 새 context에 custom parser·letterbox 설정을 복사하지
+  않기 때문이다(DS 6.1 `gstnvinfer_impl.cpp` 확인). config 파일 교체는 전체 설정을 다시 읽는다.
+- FPS 기준선: 컨트롤러가 1초마다 카메라별 decoded FPS(5초 창)·상태·추론 누계를 상시 기록한다. engine 생성(수 분) 직후,
+  config 교체 직전의 최근 60초(live 표본 ≥10개)에서 카메라별 **중앙값**과 p10–p90(그 카메라의 평소 변동 폭), 추론 프레임 속도를
+  고정한다. 한 시점 값은 RTSP burst/jitter 표본이라(2026-10-19 게이트 카메라: 기준 20.03 → 새 모델 10.09 → 롤백 후 9.13 fps)
+  기준선으로 쓰지 않는다. 자동 복구는 같은 기준선을 쓴다. 표본이 부족하면(Preview 직후) `baseline_not_ready`로 시작하지 않는다.
+- 성공 판정: nvinfer `model-updated` status 0(전환 후 90초 안) → 20초 안정화 → 최소 30초 측정 구간(최대 60초까지 매 tick
+  재판정, 구간 전체 중앙값)에서 모두 충족. 85% 기준은 그대로이며 비교 대상만 순간값에서 구간 중앙값으로 바뀌었다.
+  - 검증 대상(기준선 시점 live 주차장 카메라)마다: 상태 online/degraded, 추론 frame ≥5, 마지막 추론 ≤5초. 차량 검출 합계 > 0.
+    구간 FPS 중앙값이 기준선 중앙값의 85% 미만이면 `fps_below_baseline`으로 기록하되, 아래 두 합계 검사가 모두 통과하면
+    `pipeline_slow: false`·비차단이다. 모델은 공유 batch에서 돌므로 카메라 한 대만 느려지는 것은 모델이 아닌 소스 신호이기 때문이다
+    (2026-10-19 B1 카메라들은 기존 모델에서도 8–24 fps를 오갔다). 합계 검사 중 하나라도 실패하면 차단된다. 85% 미만이지만 (a) 카메라
+    자신의 전환 전 p10 이상이고 (b) 추론 프레임 속도가 그 카메라 FPS의 85% 이상이면 `camera_fps_variation`(항상 비차단)으로 남긴다.
+  - 차량 추론 처리량: 검증 대상 카메라의 추론 프레임/초 **합계** ≥ 기준선 합계의 85%(`vehicle_inference_below_baseline`, 차단).
+    원인과 무관하게 실제 처리량이 크게 줄면 막으므로, 카메라별 저하가 여러 대에 겹치거나 모델이 느리면 배포되지 않는다.
+  - 서비스 보호(그 밖의 기준선 시점 online 카메라): 구간 FPS 중앙값 **합계** ≥ 기준선 합계의 85%. 모델은 공유 mux/nvinfer batch에서
+    돌기 때문에 모델이 파이프라인을 느리게 하면 모든 카메라와 합계가 함께 떨어진다. 한 RTSP 소스만 바뀌면 그렇지 않다.
+  - 오프라인 구분: 기준선 시점에 이미 오프라인/표본 부족인 주차장 카메라는 검증에서 빼고 `camera_offline_before_deployment`(비차단),
+    검증 중 오프라인이 된 주차장 카메라는 `camera_went_offline`(차단, `baseline_state`/`offline_samples` 포함), 기타 카메라가
+    끊기면 서비스 합계에서 빼고 `camera_went_offline`(`cameras` 목록, 비차단)으로 남긴다.
+  60초 측정 구간까지 충족하지 못하면 이전 모델로 자동 복구한다. 빈 주차장(검출 0)에서는 성공으로 판정하지 않으므로 차량이 있는 시간에 배포한다.
+- 실패 처리: export/검사/engine 생성 실패는 운영 모델을 건드리지 않는다. 적용 후 load 실패·검증 실패·취소·worker lease
+  만료(25초)는 직전 committed 모델의 config로 되돌린다. 복구 검증은 해당 config의 `model-updated` status 0과 검증 대상 카메라의
+  추론(상태·frame·최근 추론·검출)으로 판정하고, FPS·처리량 항목과 복구 중 끊긴 카메라는 `blocking: false`로 기록만 한다(복구 자체가
+  보호 조치이므로; 끊긴 카메라는 추론 판정에서도 빠지고 나머지 카메라에서 추론이 확인돼야 한다).
+- 원인 진단(`diagnosis`): 복구 검증이 끝나면 배포 실패 때 85% 미만이던 카메라마다 전환 전 중앙값/범위 → 새 모델 → 이전 모델 FPS를
+  비교한다. 이전 모델에서 85% 이상으로 회복하면 `model_suspected`, 여전히 낮으면 `camera_source_suspected`, 복구 후 오프라인이면
+  `inconclusive`. 판정에는 쓰지 않는 운영자용 근거이며 retrace 로그 `vehicle_deployment_diagnosis {json}`과 /training에 표시된다.
+  복구 확인까지 실패하면
+  `rollback_failed`로 새 배포를 막고 UI에 미확인으로 표시한다. 이때는 `sudo docker compose restart retrace`로 재시작하면
+  `committed.json`의 마지막 검증 모델(없으면 원래 운영 모델)로 시작한다.
+- 재시작: retrace는 시작 시 `committed.json`의 모델을 PLAYING 전에 적용한다. 카메라 수(batch)·parser·TensorRT/GPU가 바뀌어
+  계약이나 engine key가 달라지면 원래 운영 모델로 시작하고 `committed_model_skipped`를 표시한다.
+- 수동 롤백: UI [이전 모델로 롤백]은 runtime의 `previous`(직전 검증 모델, 처음에는 원래 운영 모델)로 같은 검증 절차를 거친다.
+- 실패 진단: `result.json`/`status.json`(→ job `run_info.deployment`, GET `/deployment`)에 `failures`(실패 순간을 고정한 기록:
+  `code`, `phase`, `model_id`, `load_event`, `model_loaded`, `elapsed_seconds`, `loaded_after_seconds`, `checks`, 카메라별 `evidence`,
+  `service`), 최근 판정 `checks`, 검증 대상 `evidence`(frames/detections/fps·baseline_fps(구간 중앙값)/fps_range·baseline_range
+  (p10–p90)/inference_fps·baseline_inference_fps/state·baseline_state/offline_samples/inference_age), 기타 카메라와 차량 추론
+  합계 `service`, 복구 후 `diagnosis`가 남는다. check 코드: `model_not_loaded`, `model_load_failed`, `camera_offline_before_deployment`,
+  `camera_went_offline`, `fps_below_baseline`, `camera_fps_variation`, `inference_stalled`, `insufficient_inference_frames`,
+  `no_vehicle_detections`, `vehicle_inference_below_baseline`, `service_fps_below_baseline`(이전 결과의 `settling`,
+  `camera_unavailable`는 더 만들지 않는다). 같은 내용이 retrace
+  로그에 `vehicle_deployment_failure {json}` 한 줄로 남고 /training 모델 카드와 배포 job 패널에 표시된다.
+- 파일: `.cache/vehicle-deployments/{status.json, committed.json, engines/, <job>/(best.pt, best.onnx, labels.txt, manifest.json,
+  infer.txt, build.log, build.json, request.json, result.json)}`. 로컬 산출물이며 자동 삭제하지 않는다.
+- engine 생성 중에는 같은 GPU를 쓰므로 Preview FPS가 잠시 내려갈 수 있다(수 분). 학습과 동시에 실행되지 않는다.
+
 ## 5. 운영 절차 (GPU 서버, 운영자 수행)
 
 ```bash
@@ -125,9 +205,29 @@ worker 옵션: `--backend`(기본 `http://127.0.0.1:8000`, `RETRACE_BACKEND_URL`
 첫 실행은 UI에서 smoke(epochs 1, 640/b4)로 GPU 여유와 Preview FPS를 확인한 뒤 본 학습을 한다. 실제 CCTV 데이터로
 장시간 학습을 자동으로 시작하는 장치는 없다.
 
+### 5-1. 배포 기능 활성화 (선택, 운영 합의 후)
+
+```bash
+# 1) Backend(/deployment, /deployments) 반영
+sudo docker compose up -d --build --no-deps backend
+# 2) 비공개 .env에 VEHICLE_DEPLOYMENT_ENABLED=1 추가 후 retrace 재생성(영상이 잠시 끊김, .env는 restart로 반영되지 않음)
+sudo docker compose up -d --no-deps --no-build --force-recreate retrace
+# 3) worker 재시작(새 worker.py/deployment.py/deploy_export.py 적재), 4) frontend-dist 갱신
+```
+
+활성화 직후 UI의 현재 적용 모델이 `기존 운영 모델`, 상태가 `배포 준비됨`인지 확인한다. 첫 배포는 차량이 있는 시간에 하고
+`docker compose logs retrace`의 `Load new model`/engine build 로그, 전체 카메라 FPS, `/api/cameras/<camera>/vehicles`, 주차 점유를
+배포 전과 비교한다. 이어서 수동 롤백도 한 번 확인한다. 1클래스(car) 모델은 COCO80 확인 후 따로 배포해 `/api/training/deployment`의
+`active_class_map`이 `{"0": 2}`인지, 같은 카메라에서 차량 검출·점유가 유지되는지 보고 롤백까지 확인한다. 아직 실제 컨테이너에서 확인하지 않은
+항목: DS 7.0 `config-file-path` OTA와 `model-updated` 경로 인자, 컨테이너 안 engine builder 프로세스, TensorRT 8.6의 remap 노드 parse,
+검증 기준(load 90초/안정화 20초/측정 30–60초, 기준선 60초 중앙값, FPS 85%)의 적정성. 끄려면 `.env`에서 값을 지우고 retrace를 재생성한다. 꺼진 상태에서는 컨트롤러가 없어
+`committed.json`을 읽지 않으므로 원래 운영 모델(`VEHICLE_INFER_CONFIG`)로 시작한다(전체 복구 경로). 다시 켜면 마지막 committed 모델로 시작한다.
+
 ## 6. 남은 일·한계
 
 - 사용자 계정 인증은 없다. admin 토큰은 공유 비밀번호 수준이며 브라우저 sessionStorage에만 둔다. 계정/권한이 도입되면
   `require_admin`을 교체한다.
 - worker는 GPU 1장·job 1개를 가정한다. 여러 worker를 띄워도 DB 제약으로 job은 1개만 실행된다.
-- 결과 모델의 DeepStream 적용(ONNX export·engine 생성·교체)은 범위 밖이며 training/README.md §8 절차를 따른다.
+- 웹 배포(§4-2)는 640px의 COCO80·1클래스(car) 모델을 지원한다. 960 등 다른 입력 크기는 training/README.md §8 수동 절차를 따른다.
+- 배포 기능의 실제 GPU 검증(engine 생성, DS 7.0 config OTA, 실시간 추론 판정, 복구)은 아직 하지 않았다(Not verified).
+  활성화 절차는 §5-1.

@@ -70,6 +70,7 @@ private `.env`에 아래 **이름과 역할**의 설정을 추가한다. 실제 
 | --- | --- |
 | `VEHICLE_CAMERA_IDS` | 차량 탐지를 적용할 주차장 camera ID의 쉼표 목록; 빈 값이면 비활성. enabled가 아닌 ID는 건너뜀 |
 | `VEHICLE_INFER_CONFIG` | 로컬 native nvinfer config 경로 (운영: `models/yolo11m/vehicle_infer.txt`) |
+| `VEHICLE_DEPLOYMENT_ENABLED` | `1`이면 웹 학습 모델 배포/롤백(무중단 nvinfer 교체) 허용; 기본 꺼짐. [웹 배포](training.md) §4-2 |
 | `VEHICLE_MIN_CONFIDENCE` | 차량 class detector pre-cluster-threshold override; 미설정 시 config의 class/`class-attrs-all` 값(없으면 0.4) |
 | `PARKING_POLICY` | Backend 판정 설정 JSON object; 기본 `{}` |
 

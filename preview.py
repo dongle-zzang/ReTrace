@@ -2,6 +2,7 @@
 """Batched DeepStream parking-camera vehicle detection/tracking with MJPEG preview over HTTP and WebSocket."""
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -447,6 +448,7 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
     os.environ["GST_REGISTRY"] = str(cache / "gstreamer-registry.bin")
     Gst.init(None)
     Gst.debug_set_active(False)
+    deployment = None
     pipeline = None
     requested_pads = []
     bus = None
@@ -790,6 +792,13 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
         if vehicle_detector is not None:
             vehicle = make_element("nvinfer", "vehicle-inference")
             configure_pgie(vehicle, vehicle_detector.config_path, len(vehicle_detector.cameras))
+            if os.environ.get("VEHICLE_DEPLOYMENT_ENABLED") == "1":
+                try:
+                    from vehicle_deployment import DeploymentController
+                    deployment = DeploymentController(vehicle, vehicle_detector, manager)
+                except Exception:
+                    # Opt-in feature: the configured production model keeps running without it.
+                    print("Vehicle deployment controller disabled; details hidden", flush=True)
 
             def vehicle_probe(_pad, info, prepare):
                 try:
@@ -798,6 +807,11 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
                         batch = pyds.gst_buffer_get_nvds_batch_meta(hash(buffer))
                         if batch is None:
                             raise ValueError("Missing vehicle batch")
+                        if deployment is not None and prepare is prepare_vehicle_tracks:
+                            try:
+                                deployment.observe_batch(batch, camera_for_frame, pyds)
+                            except Exception:
+                                pass  # verification then sees no inference evidence and rolls back
                         prepare(batch, vehicle_detector, camera_for_frame, pyds)
                 except Exception:
                     fail("Vehicle metadata preparation failed; details hidden")
@@ -909,6 +923,12 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
                 if message is not None:
                     on_message(bus, message)
                 manager.tick()
+                if deployment is not None:
+                    try:
+                        deployment.tick()
+                    except Exception:
+                        # Deployment I/O failure must not terminate RTSP or the shared pipeline.
+                        deployment.fault()
                 if startup is not None:
                     for slot, camera in cameras_by_source.items():
                         if manager.runtimes[camera.source_id].snapshot().state == "online":
@@ -934,6 +954,9 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
         startup_report(final=True)
         if bus is not None and startup is not None:
             bus.set_sync_handler(None, None)
+        if deployment is not None:
+            with contextlib.suppress(Exception):
+                deployment.close()
         if pipeline is not None:
             pipeline.set_state(Gst.State.NULL)
         for owner, pad in reversed(requested_pads):

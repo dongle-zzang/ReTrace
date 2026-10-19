@@ -299,6 +299,13 @@ def validated_config(spec):
         raise WorkerError("invalid_config", "Invalid image size in the job configuration.")
     if not JOB_ID.fullmatch(str(spec.get("id", ""))):
         raise WorkerError("invalid_config", "Invalid job id.")
+    if config.get("kind") == "deploy":
+        if config.get("action") not in ("deploy", "rollback"):
+            raise WorkerError("invalid_config", "Invalid deployment action.")
+        if config["action"] == "deploy" and (config.get("class_mode") not in ("vehicle3", "single")
+                                             or config["imgsz"] != 640):
+            raise WorkerError("invalid_config", "Only 640px COCO80 or 1-class car models can be deployed.")
+        return {"kind": "deploy", "action": config["action"], "class_mode": config.get("class_mode", "vehicle3")}
     if config.get("kind", "train") == "evaluate":
         ids = config.get("eval_image_ids")
         if (not isinstance(ids, list) or not 1 <= len(ids) <= 5000
@@ -341,6 +348,11 @@ class Worker:
         disk = shutil.disk_usage(self.work_dir)
         body = {"worker_id": self.worker_id, "started": started, "gpu": gpu_sample(self.args.gpu, child_pids),
                 "base_weights": self.base_weights(), "disk_free_mib": disk.free // 2**20, "job": job}
+        try:
+            from deployment import public_status
+            body["deployment"] = public_status()
+        except Exception:  # noqa: BLE001 - deployment status must never stop training heartbeats
+            body["deployment"] = {}
         try:
             status, data = self.backend.request("POST", "/api/training/worker/heartbeat", body)
         except (OSError, urllib.error.URLError, ValueError):
@@ -520,7 +532,10 @@ class Worker:
             config = validated_config(spec)
             if shutil.disk_usage(self.work_dir).free // 2**20 < self.args.min_disk_mib:
                 raise WorkerError("storage_full", f"Less than {self.args.min_disk_mib} MiB free on the training host.")
-            if config["kind"] == "evaluate":
+            if config["kind"] == "deploy":
+                from deployment import run_deployment
+                result = run_deployment(self, spec, job_dir, job, WorkerError)
+            elif config["kind"] == "evaluate":
                 result = self.run_evaluation(spec, config, job_dir, job)
             else:
                 result = self.run_training(spec, config, job_dir, job)

@@ -399,7 +399,7 @@ def test_snapshot_survives_export_deletion(training):
     assert download.status_code == 200 and hashlib.sha256(download.content).hexdigest() == spec['dataset_sha256']
 
 
-def finish_training(client, job_id, train_all=False, best=b'weights'):
+def finish_training(client, job_id, train_all=False, best=b'weights', names=None):
     upload(client, job_id, 'best.pt', best)
     rows = [{'epoch': 1.0, 'train/box_loss': 1.0, 'metrics/mAP50-95(B)': .3, 'val/box_loss': 1.2},
             {'epoch': 2.0, 'train/box_loss': .8, 'metrics/mAP50-95(B)': .9, 'val/box_loss': .4}]
@@ -407,7 +407,7 @@ def finish_training(client, job_id, train_all=False, best=b'weights'):
                   {'status': 'completed', 'metrics': {'images': 1, 'models': {'new': {'vehicle': {'mAP50': .5}}}}})
     response = client.post(f'/api/training/worker/jobs/{job_id}/finish', headers=WORKER, json={
         'worker_id': 'w1', 'status': 'completed', 'metrics_rows': rows, 'evaluation': evaluation,
-        'run_info': {'names': {'2': 'car'}, 'final_batch': 4}})
+        'run_info': {'names': names or {'2': 'car'}, 'final_batch': 4}})
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -518,3 +518,138 @@ def test_retraining_from_a_model_that_saw_the_test_split_is_not_independent(trai
     finish_training(client, retrain['id'])
     caveats = client.get(f'/api/training/jobs/{retrain["id"]}').json()['evaluation']['caveats']
     assert any('not independent' in c for c in caveats)
+
+
+def runtime_beat(client, job=None, **deployment):
+    status = {'available': True, 'runtime_online': True, 'active': 'production-original', 'previous': None,
+              'phase': 'idle', 'session': 's1', 'verified': True, 'contract': 'private', **deployment}
+    response = client.post('/api/training/worker/heartbeat', headers=WORKER, json={
+        'worker_id': 'w1', 'gpu': GPU_FREE, 'job': job, 'base_weights': {}, 'disk_free_mib': 50000,
+        'deployment': status})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_deployment_requires_runtime_and_compatible_model_then_records_verified_result(training):
+    client, app, state = training
+    export = make_export(client, state, sessions=4)
+    beat(client, started=True)
+    assert client.get('/api/training/deployment').json()['available'] is False
+    coco80 = {str(i): 'car' if i == 2 else f'class{i}' for i in range(80)}
+    large, _ = run_until_claimed(client, app, export, imgsz=960)
+    finish_training(client, large['id'], names=coco80)
+    job, _ = run_until_claimed(client, app, export)
+    finish_training(client, job['id'], names=coco80)
+    models = {m['config']['imgsz']: m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned'}
+    tuned = models[640]
+    body = {'model_id': tuned['id'], 'action': 'deploy'}
+    assert client.post('/api/training/deployments', json=body).status_code == 401
+    assert client.post('/api/training/deployments', headers=ADMIN, json=body).status_code == 503  # runtime off
+    runtime_beat(client)
+    status = client.get('/api/training/deployment').json()
+    assert status['available'] and status['confirmed'] and 'contract' not in status  # private field not exposed
+    rejected = client.post('/api/training/deployments', headers=ADMIN, json={'model_id': models[960]['id']})
+    assert rejected.status_code == 422 and '640px' in rejected.text  # resolution needs a restart: never automatic
+    assert client.post('/api/training/deployments', headers=ADMIN, json={'action': 'rollback'}).status_code == 409
+    created = client.post('/api/training/deployments', headers=ADMIN, json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()['config']['kind'] == 'deploy' and created.json()['name'] == f'Deploy {tuned["label"]}'
+    assert created.json()['config']['class_mode'] == 'vehicle3'
+    assert client.post('/api/training/deployments', headers=ADMIN, json=body).status_code == 409  # single slot
+    spec = client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'}).json()
+    assert spec['base_model']['id'] == tuned['id'] and spec['base_model']['sha256'] == hashlib.sha256(b'weights').hexdigest()
+    runtime_beat(client, job={'id': spec['id'], 'phase': 'building'}, phase='building', operation=spec['id'])
+    assert client.get(f'/api/training/jobs/{spec["id"]}').json()['phase'] == 'building'
+    # A completed report without runtime verification is refused.
+    finish = client.post(f'/api/training/worker/jobs/{spec["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'completed', 'run_info': {'deployment': {'phase': 'verifying'}}})
+    assert finish.json()['status'] == 'failed' and finish.json()['error_code'] == 'deployment_unverified'
+    assert sum(m['kind'] == 'finetuned' for m in client.get('/api/training/models').json()) == 2  # nothing deleted
+    assert client.post('/api/training/deployments', headers=ADMIN, json=body).status_code == 409  # runtime busy
+    runtime_beat(client, phase='failed', error='engine_build_failed')
+    again = client.post('/api/training/deployments', headers=ADMIN, json=body).json()
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    result = {'phase': 'completed', 'active': tuned['id'], 'evidence': {'first': {'frames': 40, 'detections': 12}}}
+    finish = client.post(f'/api/training/worker/jobs/{again["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'completed', 'run_info': {'deployment': result}})
+    assert finish.json()['status'] == 'completed' and finish.json()['progress'] == 1.0
+    deployed = {m['id']: m['deployment'] for m in client.get('/api/training/models').json()}
+    assert deployed[tuned['id']] == 'active' and deployed['yolo11m-coco'] == 'not_deployed'
+    runtime_beat(client, active=tuned['id'], previous='production-original', phase='completed')
+    assert client.post('/api/training/deployments', headers=ADMIN, json=body).status_code == 409  # already active
+    rollback = client.post('/api/training/deployments', headers=ADMIN, json={'action': 'rollback'})
+    assert rollback.status_code == 201 and rollback.json()['base_model_id'] == 'yolo11m-coco'
+    assert rollback.json()['config']['action'] == 'rollback'
+    stopped = client.post(f'/api/training/jobs/{rollback.json()["id"]}/stop', headers=ADMIN).json()
+    assert stopped['status'] == 'stopped'  # queued request cancelled before the runtime saw it
+    # Runtime unverified after a failed recovery: active model shown as unconfirmed, new operations blocked.
+    runtime_beat(client, active=tuned['id'], phase='rollback_failed', verified=False)
+    status = client.get('/api/training/deployment').json()
+    assert status['confirmed'] is False and status['active'] == tuned['id']
+    assert client.post('/api/training/deployments', headers=ADMIN, json={'action': 'rollback'}).status_code == 409
+
+
+def test_single_class_car_model_deploys_with_its_class_mode_and_rolls_back(training):
+    client, app, state = training
+    export = make_export(client, state, sessions=4)
+    beat(client, started=True)
+    job, _ = run_until_claimed(client, app, export, class_mode='single')
+    upload(client, job['id'], 'best.pt', b'single')
+    client.post(f'/api/training/worker/jobs/{job["id"]}/finish', headers=WORKER, json={
+        'worker_id': 'w1', 'status': 'completed', 'run_info': {'names': {'0': 'item'}, 'final_batch': 4},
+        'evaluation': {'status': 'skipped', 'reason': 'test'}})
+    single = next(m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned')
+    assert single['class_mode'] == 'single' and single['names_count'] == 1
+    runtime_beat(client)
+    created = client.post('/api/training/deployments', headers=ADMIN, json={'model_id': single['id']})
+    assert created.status_code == 201, created.text
+    assert created.json()['config']['class_mode'] == 'single'  # worker exports with the 0 -> car remap
+    spec = client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'}).json()
+    assert spec['config']['class_mode'] == 'single' and spec['base_model']['id'] == single['id']
+    # Failed apply: the runtime restored the COCO80 original; the registry keeps both models.
+    failures = [{'code': 'verification_failed', 'phase': 'verifying', 'model_loaded': True,
+                 'checks': [{'check': 'fps_below_baseline', 'camera': 'first', 'fps': 7.0, 'baseline_fps': 10.0}]}]
+    result = {'phase': 'rolled_back', 'error': 'verification_failed', 'active': 'production-original',
+              'failures': failures}
+    failed = client.post(f'/api/training/worker/jobs/{spec["id"]}/finish', headers=WORKER, json={
+        'worker_id': 'w1', 'status': 'failed', 'error_code': 'deployment_rolled_back', 'error': 'rolled_back',
+        'run_info': {'deployment': result}}).json()
+    assert failed['status'] == 'failed' and failed['error_code'] == 'deployment_rolled_back'
+    detail = client.get(f'/api/training/jobs/{spec["id"]}').json()
+    assert detail['run_info']['deployment']['failures'] == failures  # kept with the job for the web page
+    assert {m['id']: m['deployment'] for m in client.get('/api/training/models').json()}[single['id']] == 'not_deployed'
+    diagnosis = {'cameras': {'first': {'baseline_fps': 10.0, 'candidate_fps': 7.0, 'rollback_fps': 7.1,
+                                       'verdict': 'camera_source_suspected'}}, 'service': {}}
+    runtime_beat(client, phase='rolled_back', error='verification_failed', failures=failures,
+                 checks=[{'check': 'service_fps_below_baseline', 'blocking': False}], service={'fps': 9.0},
+                 diagnosis=diagnosis)
+    status = client.get('/api/training/deployment').json()
+    assert status['failures'] == failures and status['checks'][0]['blocking'] is False
+    assert status['service'] == {'fps': 9.0}
+    assert status['diagnosis'] == diagnosis  # rollback FPS comparison reaches the web page
+    again = client.post('/api/training/deployments', headers=ADMIN, json={'model_id': single['id']}).json()
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    result = {'phase': 'completed', 'active': single['id'], 'evidence': {'first': {'frames': 30, 'detections': 4}}}
+    client.post(f'/api/training/worker/jobs/{again["id"]}/finish', headers=WORKER,
+                json={'worker_id': 'w1', 'status': 'completed', 'run_info': {'deployment': result}})
+    assert {m['id']: m['deployment'] for m in client.get('/api/training/models').json()}[single['id']] == 'active'
+    runtime_beat(client, active=single['id'], previous='production-original', phase='completed',
+                 active_class_map={'0': 2})
+    assert client.get('/api/training/deployment').json()['active_class_map'] == {'0': 2}
+    rollback = client.post('/api/training/deployments', headers=ADMIN, json={'action': 'rollback'})
+    assert rollback.status_code == 201 and 'class_mode' not in rollback.json()['config']
+
+
+def test_single_class_model_from_mixed_vehicle_labels_is_not_deployable(training):
+    client, app, state = training
+    export = make_export(client, state, sessions=4)
+    beat(client, started=True)
+    job, _ = run_until_claimed(client, app, export, class_mode='single')
+    finish_training(client, job['id'])
+    with app.state.sessions.begin() as session:  # legacy car/truck/bus export: single_cls merged three classes
+        row = session.get(TrainingJob, job['id'])
+        row.dataset_summary = {**row.dataset_summary, 'classes': {'0': 'car', '1': 'truck', '2': 'bus'}}
+    model = next(m for m in client.get('/api/training/models').json() if m['kind'] == 'finetuned')
+    runtime_beat(client)
+    rejected = client.post('/api/training/deployments', headers=ADMIN, json={'model_id': model['id']})
+    assert rejected.status_code == 422 and 'car-only' in rejected.text

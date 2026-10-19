@@ -181,6 +181,10 @@ head 유지, car는 COCO 2의 사전학습 가중치에서 시작).
 
 ## 8. DeepStream 적용 전 확인 (자동 적용 금지, 운영자 수행)
 
+640px의 coco80·single(car) 모델은 웹 [DeepStream에 배포]가 아래 1~5를 자동화한다(export·클래스 매핑·호환성 검사·engine 생성·
+무중단 교체·추론 검증·복구, [docs/training.md §4-2](../docs/training.md)). single은 운영 config를 바꾸지 않고 ONNX에서 class 0을
+운영 car ID로 바꾸므로 아래 2의 single 전용 config가 필요 없다. 아래 수동 절차는 960 등 다른 입력 크기나 배포 기능을 끈 경우에 쓴다.
+
 운영 차량 모델: `models/yolo11m/vehicle_infer.txt`(onnx `yolo11m.onnx`, 80 labels,
 DeepStream-Yolo `NvDsInferParseYolo`, `.env`의 `VEHICLE_INFER_CONFIG`). Preview 이미지 기반은
 `nvcr.io/nvidia/deepstream:7.0-triton-multiarch`이다. NVIDIA DS 7.0 설치 문서 기준 x86은

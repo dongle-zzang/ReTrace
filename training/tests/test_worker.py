@@ -14,6 +14,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 import zipfile
 from argparse import Namespace
 from datetime import datetime, timedelta, timezone
@@ -151,6 +152,85 @@ class SafeExtractTests(unittest.TestCase):
         self.assertEqual(worker.classify_failure("CUDA is not available; refusing", 1)[0], "cuda_unavailable")
         self.assertEqual(worker.classify_failure("OSError: [Errno 28] No space left on device", 1)[0], "storage_full")
         self.assertEqual(worker.classify_failure("", -9)[0], "killed")
+
+
+class DeploymentMailboxTests(unittest.TestCase):
+    """Worker half of a deployment: leased request, cancellation, runtime result mapping (no GPU)."""
+    def setUp(self):
+        import deployment
+        self.deployment = deployment
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.directory = Path(tmp.name)
+        patcher = unittest.mock.patch.object(deployment, "DIRECTORY", self.directory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.status(phase="idle")
+        self.job_id = str(uuid4())
+        self.spec = {"id": self.job_id, "config": {"kind": "deploy", "action": "rollback", "imgsz": 640},
+                     "base_model": {"id": "yolo11m-coco", "sha256": "b" * 64}}
+
+    def status(self, **values):
+        deployment = self.deployment
+        deployment.write_json(self.directory / "status.json", {"enabled": True, "session": "s1", "contract": "c",
+                                                               "updated_at": time.time(), **values})
+
+    def fake_worker(self, on_beat):
+        beats = []
+        def heartbeat(job):
+            beats.append(job)
+            return on_beat(len(beats)) or {}
+        return Namespace(heartbeat=heartbeat, wait_for_gpu=lambda spec, job: None, shutdown=False,
+                         args=Namespace(poll=0)), beats
+
+    def test_rollback_request_reports_runtime_result(self):
+        request = self.directory / self.job_id / "request.json"
+        def runtime(count):
+            if count == 2:
+                body = json.loads(request.read_text())
+                self.assertEqual((body["action"], body["session"], body["contract"]), ("rollback", "s1", "c"))
+                self.deployment.write_json(request.parent / "result.json", {"phase": "completed", "active": "x"})
+        fake, beats = self.fake_worker(runtime)
+        result = self.deployment.run_deployment(fake, self.spec, self.directory, {"id": self.job_id}, worker.WorkerError)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["run_info"]["deployment"]["active"], "x")
+        self.assertFalse(json.loads(request.read_text()).get("cancel"))
+
+    def test_stop_request_cancels_and_failed_result_maps_to_error(self):
+        request = self.directory / self.job_id / "request.json"
+        def runtime(count):
+            if count == 1:
+                return {"stop": True}
+            if json.loads(request.read_text()).get("cancel"):
+                self.deployment.write_json(request.parent / "result.json",
+                                           {"phase": "rolled_back", "error": "deployment_cancelled", "active": "o"})
+        fake, _ = self.fake_worker(runtime)
+        result = self.deployment.run_deployment(fake, self.spec, self.directory, {"id": self.job_id}, worker.WorkerError)
+        self.assertEqual((result["status"], result["error_code"]), ("failed", "deployment_rolled_back"))
+        self.assertIn("deployment_cancelled", result["error"])
+
+    def test_offline_runtime_or_lost_runtime_is_a_worker_error(self):
+        self.status(phase="idle", updated_at=0)
+        fake, _ = self.fake_worker(lambda count: None)
+        with self.assertRaises(worker.WorkerError) as caught:
+            self.deployment.run_deployment(fake, self.spec, self.directory, {"id": self.job_id}, worker.WorkerError)
+        self.assertEqual(caught.exception.code, "deployment_unavailable")
+        self.status(phase="idle")
+        fake, _ = self.fake_worker(lambda count: self.status(session="restarted"))
+        with self.assertRaises(worker.WorkerError) as caught:
+            self.deployment.run_deployment(fake, self.spec, self.directory, {"id": self.job_id}, worker.WorkerError)
+        self.assertEqual(caught.exception.code, "runtime_lost")
+        # The runtime sees an expired/cancelled lease and recovers on its own.
+        self.assertTrue(json.loads((self.directory / self.job_id / "request.json").read_text())["cancel"])
+
+    def test_deploy_config_is_validated(self):
+        self.assertEqual(worker.validated_config(self.spec)["action"], "rollback")
+        deploy = {**self.spec, "config": {**self.spec["config"], "action": "deploy", "class_mode": "single"}}
+        self.assertEqual(worker.validated_config(deploy)["class_mode"], "single")
+        for change in ({"action": "delete"}, {"action": "deploy", "class_mode": "multi"},
+                       {"action": "deploy", "class_mode": "single", "imgsz": 960}):
+            with self.assertRaises(worker.WorkerError):
+                worker.validated_config({**self.spec, "config": {**self.spec["config"], **change}})
 
 
 try:
