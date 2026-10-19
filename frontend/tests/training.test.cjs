@@ -76,3 +76,47 @@ test('Train All epoch hint comes from the latest standard run on the same export
   assert.equal(training.jobKind({ train_mode: 'all' }), 'all')
   assert.equal(training.jobKind({ kind: 'evaluate' }), 'evaluate')
 })
+
+test('deployment is offered only for compatible models on an available runtime', () => {
+  const model = { id: 'm1', kind: 'finetuned', class_mode: 'vehicle3', config: { imgsz: 640 }, files: { 'best.pt': {} } }
+  const runtime = { available: true, active: 'production-original' }
+  assert.equal(training.deployBlocker(model, runtime, false), null)
+  assert.equal(training.deployBlocker({ ...model, names_count: 80 }, runtime, false), null)
+  // 1-class car head (class 0) is deployable; the worker remaps it to the runtime car id.
+  assert.equal(training.deployBlocker({ ...model, class_mode: 'single', names_count: 1 }, runtime, false), null)
+  assert.match(training.deployBlocker({ ...model, class_mode: 'single', names_count: 3 }, runtime, false), /single car/)
+  assert.match(training.deployBlocker({ ...model, class_mode: 'multi', names_count: 3 }, runtime, false), /single car/)
+  assert.match(training.deployBlocker({ ...model, names_count: 1 }, runtime, false), /COCO80/)
+  assert.match(training.deployBlocker({ ...model, class_mode: 'single', names_count: 1, config: { imgsz: 960 } }, runtime, false), /640px/)
+  assert.match(training.deployClasses('single'), /1 class/)
+  assert.match(training.deployBlocker({ ...model, files: {} }, runtime, false), /best\.pt/)
+  assert.match(training.deployBlocker({ ...model, kind: 'base' }, runtime, false), /best\.pt/)
+  assert.match(training.deployBlocker(model, null, false), /enabled/)
+  assert.match(training.deployBlocker(model, { ...runtime, available: false }, false), /enabled/)
+  assert.match(training.deployBlocker(model, { ...runtime, active: 'm1' }, false), /already active/)
+  assert.match(training.deployBlocker(model, runtime, true), /active/)
+  assert.equal(training.jobKind({ kind: 'deploy' }), 'deploy')
+  assert.equal(training.DEPLOY_PHASES.rolling_back, 'Restoring previous model')
+})
+
+test('deployment checks name the failed condition with camera values', () => {
+  assert.deepEqual(plain(training.deploymentCheckText({ check: 'fps_below_baseline', camera: 'p1', fps: 7, baseline_fps: 10, baseline_low: 9.5, inference_fps: 7, blocking: true })),
+    { key: '{camera}: median {fps} fps, below 85% of the pre-switch median {baseline} fps (own low {low} fps, inferred {inference} fps)',
+      params: { camera: 'p1', state: '–', fps: '7', baseline: '10', low: '9.5', inference: '7', was: '–', age: '–', frames: '–', status: '–', seconds: '–', cameras: '–' } })
+  // Offline before the switch vs during it; unrelated cameras are listed together.
+  assert.match(training.deploymentCheckText({ check: 'camera_offline_before_deployment', camera: 'p2', state: 'offline' }).key, /before the switch/)
+  const went = plain(training.deploymentCheckText({ check: 'camera_went_offline', camera: 'p2', state: 'offline', baseline_state: 'online' }))
+  assert.equal(went.key, '{camera}: went {state} during the deployment (was {was})')
+  assert.equal(went.params.was, 'online')
+  assert.match(training.deploymentCheckText({ check: 'camera_went_offline', cameras: ['lobby'] }).key, /Other cameras went offline/)
+  assert.match(training.deploymentCheckText({ check: 'camera_fps_variation', camera: 'p1' }).key, /own pre-switch range/)
+  assert.match(training.deploymentCheckText({ check: 'fps_below_baseline', camera: 'p1', pipeline_slow: false }).key, /camera source, not the model/)
+  assert.match(training.deploymentCheckText({ check: 'fps_below_baseline', camera: 'p1', pipeline_slow: true }).key, /^\{camera\}: median \{fps\} fps, below 85% of the pre-switch median \{baseline\} fps \(own low/)
+  assert.match(training.deploymentCheckText({ check: 'vehicle_inference_below_baseline', fps: 12, baseline_fps: 20 }).key, /frames\/s in total/)
+  assert.match(training.DIAGNOSIS_VERDICTS.camera_source_suspected, /RTSP source/)
+  const service = plain(training.deploymentCheckText({ check: 'service_fps_below_baseline', fps: 72, baseline_fps: 90, cameras: ['lobby', 'hall'] }))
+  assert.match(service.key, /Other cameras/)
+  assert.equal(service.params.cameras, 'lobby, hall')
+  assert.equal(plain(training.deploymentCheckText({ check: 'inference_stalled', camera: 'p1', inference_age: null })).params.age, '–')
+  assert.equal(plain(training.deploymentCheckText({ check: 'new_runtime_code' })).key, 'new_runtime_code')
+})

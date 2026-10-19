@@ -2,10 +2,12 @@
 import { AlertTriangle, Download, LoaderCircle, Square } from '@lucide/vue'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
+import DeploymentReport from '~/components/DeploymentReport.vue'
 import TrainingChart from '~/components/TrainingChart.vue'
 import TrainingComparison from '~/components/TrainingComparison.vue'
-import { deltaLabel, formatDuration, formatMetric, formatMib, isActiveStatus } from '~/lib/training'
+import { DEPLOY_PHASES, deltaLabel, formatDuration, formatMetric, formatMib, isActiveStatus } from '~/lib/training'
 import { CLASS_MODE_LABELS, JOB_STATUS_LABELS, TRAIN_MODE_LABELS } from '~/types/training'
+import type { DeploymentReport as DeploymentReportData } from '~/lib/training'
 import type { EvaluationModelMetrics, TrainingJobDetail } from '~/types/training'
 import { useI18n } from '~/composables/useI18n'
 
@@ -21,6 +23,9 @@ function serverText(text: string | null | undefined) {
   if (!text.startsWith(PROTECTION_PREFIX)) return t(text)
   return t('Production protection: {reasons}', { reasons: text.slice(PROTECTION_PREFIX.length).split('; ').map(reason => t(reason)).join('; ') })
 }
+const deploying = computed(() => props.job.config.kind === 'deploy')
+// Final runtime result stored with the job (training/deployment.py → run_info.deployment).
+const deploymentResult = computed(() => deploying.value ? (props.job.run_info?.deployment ?? null) as DeploymentReportData | null : null)
 const evaluating = computed(() => props.job.config.kind === 'evaluate')
 // Train All validates (if at all) on its own training images: only the training loss is shown.
 const trainAll = computed(() => props.job.config.train_mode === 'all')
@@ -34,7 +39,7 @@ const lossSeries = computed(() => [
   { key: 'train_loss', label: t('Train'), className: 'stroke-primary', dotClass: 'bg-primary' },
   ...(trainAll.value ? [] : [{ key: 'val_loss', label: t('Validation'), className: 'stroke-amber-300', dotClass: 'bg-amber-300' }]),
 ])
-const phaseText = computed(() => props.job.message || PHASES[evaluating.value && props.job.phase === 'evaluating' ? 'evaluating_new' : props.job.phase] || props.job.phase)
+const phaseText = computed(() => props.job.message || (deploying.value ? DEPLOY_PHASES[props.job.phase] : undefined) || PHASES[evaluating.value && props.job.phase === 'evaluating' ? 'evaluating_new' : props.job.phase] || props.job.phase)
 const metricSeries = [
   { key: 'precision', label: 'P', className: 'stroke-sky-400', dotClass: 'bg-sky-400' },
   { key: 'recall', label: 'R', className: 'stroke-violet-400', dotClass: 'bg-violet-400' },
@@ -81,20 +86,21 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
           <h3 class="text-base font-semibold">{{ job.name }}</h3>
           <Badge variant="outline" :class="['px-2 py-0.5', statusClass]">{{ t(JOB_STATUS_LABELS[job.status]) }}</Badge>
           <Badge v-if="job.config.smoke" variant="outline" class="px-2 py-0.5 text-muted-foreground">{{ t('Smoke test') }}</Badge>
+          <Badge v-if="deploying" variant="outline" class="border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-amber-200">{{ t('Model deployment') }}</Badge>
           <Badge v-if="evaluating" variant="outline" class="border-violet-400/25 bg-violet-400/10 px-2 py-0.5 text-violet-300">{{ t('New-image evaluation') }}</Badge>
           <Badge v-else-if="trainAll" variant="outline" class="border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-sky-300">{{ t(TRAIN_MODE_LABELS.all) }}</Badge>
         </div>
         <p v-if="evaluating" class="text-xs text-muted-foreground">
           {{ t('{count} new images', { count: job.config.eval_images ?? 0 }) }} · {{ job.config.imgsz }} px · dataset_{{ job.export_id.slice(0, 8) }}<template v-if="job.dataset_summary.excluded"> · {{ t('left out {trained} trained-on and {session} same-session images', { trained: job.dataset_summary.excluded.trained, session: job.dataset_summary.excluded.same_session }) }}</template>
         </p>
-        <p v-else class="text-xs text-muted-foreground">
+        <p v-else-if="!deploying" class="text-xs text-muted-foreground">
           {{ t(CLASS_MODE_LABELS[job.config.class_mode]) }} · {{ job.config.epochs }} {{ t('epochs') }} · {{ job.config.imgsz }} px · {{ t('batch') }} {{ job.config.batch }} · {{ t('seed') }} {{ job.config.seed }} · dataset_{{ job.export_id.slice(0, 8) }}
         </p>
         <p v-if="active" class="flex items-center gap-1.5 text-sm" role="status"><LoaderCircle class="size-4 animate-spin text-primary" />{{ t(phaseText) }}</p>
       </div>
       <Button v-if="!active && !evaluating && job.status === 'completed' && job.model_id" variant="outline" @click="emit('evaluate', job.model_id)">{{ t('Evaluate on new images') }}</Button>
       <Button v-if="active" variant="destructive" :disabled="!canControl || stopping || job.status === 'stopping'" :title="canControl ? undefined : t('Unlock training control first')" @click="emit('stop')">
-        <LoaderCircle v-if="stopping || job.status === 'stopping'" class="animate-spin" /><Square v-else /> {{ job.status === 'stopping' ? t('Stopping…') : t('Stop training') }}
+        <LoaderCircle v-if="stopping || job.status === 'stopping'" class="animate-spin" /><Square v-else /> {{ job.status === 'stopping' ? t('Stopping…') : deploying ? t('Cancel deployment') : t('Stop training') }}
       </Button>
     </div>
 
@@ -102,11 +108,12 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
       <AlertTriangle class="mt-0.5 size-4 shrink-0" />
       <div class="space-y-1"><p>{{ serverText(job.error || job.stop_reason) }}</p><p v-if="job.error_code" class="font-mono text-xs opacity-70">{{ job.error_code }}</p></div>
     </div>
+    <DeploymentReport v-if="deploymentResult && !active" :report="deploymentResult" />
 
     <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-xs text-sky-200">{{ t('Train All: train, val and test images all trained the weights, so there is no independent validation or test in this run. Early stopping is off, the final epoch is the result (best.pt = last.pt), and scores on training images are not shown.') }}</p>
     <p v-if="(job.dataset_summary.test_overlap ?? 0) > 0" class="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">{{ t('{count} test image(s) were already used to train the base model, so this test is not independent.', { count: job.dataset_summary.test_overlap ?? 0 }) }}</p>
 
-    <div v-if="!evaluating" class="space-y-2">
+    <div v-if="!evaluating && !deploying" class="space-y-2">
       <div class="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
         <span>{{ t('Epoch') }} <span class="font-mono tabular-nums text-foreground">{{ job.epoch }} / {{ job.epochs }}</span><template v-if="job.live?.batches && active"> · {{ t('batch') }} {{ job.live.batch }}/{{ job.live.batches }}</template></span>
         <span>{{ Math.round(job.progress * 100) }}% · {{ t('elapsed {duration}', { duration: formatDuration(job.elapsed_seconds) }) }}</span>
@@ -116,23 +123,23 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
       </div>
     </div>
 
-    <dl v-if="!evaluating" :class="['grid grid-cols-2 gap-2', trainAll ? 'sm:grid-cols-2' : 'sm:grid-cols-3 xl:grid-cols-6']">
+    <dl v-if="!evaluating && !deploying" :class="['grid grid-cols-2 gap-2', trainAll ? 'sm:grid-cols-2' : 'sm:grid-cols-3 xl:grid-cols-6']">
       <div v-for="tile in tiles" :key="tile.label" class="rounded-xl border border-white/10 bg-black/10 p-3"><dt class="text-[0.7rem] text-muted-foreground">{{ tile.label }}</dt><dd class="font-mono text-lg tabular-nums">{{ tile.value }}</dd></div>
     </dl>
 
-    <div v-if="!evaluating" class="grid gap-2 text-xs sm:grid-cols-3">
+    <div v-if="!evaluating && !deploying" class="grid gap-2 text-xs sm:grid-cols-3">
       <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('GPU memory (training process)') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.training_mib) }}</span><span v-if="job.live?.torch_reserved_mib" class="text-muted-foreground"> · torch {{ formatMib(job.live.torch_reserved_mib) }}</span></p>
       <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('GPU total') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.used_mib) }} / {{ formatMib(job.gpu?.total_mib) }} · {{ job.gpu?.util ?? '–' }}%</span></p>
       <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('Production FPS vs. before training') }}</span><span class="font-mono tabular-nums">{{ guardSample?.fps_ratio != null ? `${Math.round(guardSample.fps_ratio * 100)}%` : '–' }}</span><span class="text-muted-foreground"> · {{ guardSample?.total_fps ?? '–' }} fps · {{ t('max frame age') }} {{ guardSample?.max_frame_age ?? '–' }} s</span></p>
     </div>
     <p v-if="job.monitor?.last_reasons?.length && active" class="text-xs text-amber-200">{{ t('Protection warning') }} ({{ job.monitor.violations }}/{{ job.monitor.limits?.guard_samples }}): {{ job.monitor.last_reasons.map(reason => t(reason)).join('; ') }}</p>
 
-    <div v-if="!evaluating" :class="['grid gap-3', trainAll ? '' : 'lg:grid-cols-2']">
+    <div v-if="!evaluating && !deploying" :class="['grid gap-3', trainAll ? '' : 'lg:grid-cols-2']">
       <TrainingChart :title="t('Loss')" :points="job.metrics" :series="lossSeries" />
       <TrainingChart v-if="!trainAll" :title="t('Validation metrics')" :points="job.metrics" :series="metricSeries" />
     </div>
 
-    <section v-if="job.status === 'completed'" class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4" :aria-label="t('Results')">
+    <section v-if="job.status === 'completed' && !deploying" class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4" :aria-label="t('Results')">
       <div class="flex flex-wrap items-center gap-2">
         <h3 class="mr-auto text-sm font-semibold">{{ t('Results') }}</h3>
         <span v-if="job.best && !trainAll && !evaluating" class="text-xs text-muted-foreground">{{ t('Best validation epoch {epoch}', { epoch: job.best.epoch }) }} · mAP50-95 {{ formatMetric(job.best.map50_95) }}</span>

@@ -118,5 +118,108 @@ export function suggestedTrainAllEpochs(jobs: JobLike[], exportId: string) {
 }
 
 export function jobKind(config: { kind?: string; train_mode?: string }) {
-  return config.kind === 'evaluate' ? 'evaluate' : config.train_mode === 'all' ? 'all' : 'standard'
+  return config.kind === 'deploy' ? 'deploy' : config.kind === 'evaluate' ? 'evaluate' : config.train_mode === 'all' ? 'all' : 'standard'
+}
+
+/** Phases reported by the DeepStream runtime (vehicle_deployment.py) and the deployment worker. */
+/** Short class description of a deployable model, e.g. for the deploy button area. */
+export function deployClasses(classMode: string) {
+  return classMode === 'single' ? '1 class (car 0 → runtime car)' : 'COCO80 (car = class 2)'
+}
+
+export const DEPLOY_PHASES: Record<string, string> = {
+  idle: 'Ready to deploy', queued: 'Waiting for the GPU worker', waiting_gpu: 'Waiting for free GPU resources',
+  preparing: 'Preparing deployment', exporting: 'Exporting ONNX and checking compatibility',
+  validating: 'Checking model compatibility', building: 'Building TensorRT engine', applying: 'Applying model',
+  verifying: 'Verifying live inference', rolling_back: 'Restoring previous model', saving: 'Saving results',
+  completed: 'Deployment verified', failed: 'Deployment failed', rolled_back: 'Previous model restored',
+  rollback_failed: 'Recovery could not be verified',
+}
+
+/** One failed or advisory check from vehicle_deployment.py assess(); blocking=false never fails a rollback. */
+export interface DeploymentCheck {
+  check: string; camera?: string; fps?: number; baseline_fps?: number; state?: string; inference_age?: number | null
+  frames?: number; status?: number; loaded_after_seconds?: number; cameras?: string[]; blocking?: boolean
+  baseline_low?: number | null; inference_fps?: number | null; baseline_state?: string; pipeline_slow?: boolean
+}
+/** fps/baseline_fps are window medians; ranges are [p10, p90] of 1 s samples (vehicle_deployment.py). */
+export interface DeploymentCameraEvidence {
+  frames: number; detections: number; fps?: number; baseline_fps?: number; state?: string; inference_age?: number | null
+  baseline_range?: (number | null)[]; fps_range?: (number | null)[]; inference_fps?: number | null; baseline_inference_fps?: number | null
+}
+export interface DeploymentService {
+  fps: number; baseline_fps: number; cameras?: Record<string, { fps: number; baseline_fps: number; state: string }>
+  vehicle_inference_fps?: number; baseline_vehicle_inference_fps?: number
+}
+/** After a rollback: FPS of the slow cameras before, with the candidate and with the previous model again. */
+export interface DeploymentDiagnosis {
+  cameras: Record<string, { baseline_fps: number; baseline_range?: (number | null)[] | null; candidate_fps: number; rollback_fps: number; verdict: string }>
+  service?: { baseline_fps?: number | null; candidate_fps?: number | null; rollback_fps?: number | null }
+}
+/** Frozen at the moment a model or rollback check failed; a later rollback does not overwrite it. */
+export interface DeploymentFailure {
+  code: string; phase: string; model_id?: string; load_event?: boolean; model_loaded?: boolean
+  elapsed_seconds?: number; loaded_after_seconds?: number | null; checks: DeploymentCheck[]
+  evidence?: Record<string, DeploymentCameraEvidence> | null; service?: DeploymentService | null
+}
+export interface DeploymentReport {
+  evidence?: Record<string, DeploymentCameraEvidence> | null; service?: DeploymentService | null
+  checks?: DeploymentCheck[] | null; failures?: DeploymentFailure[] | null; diagnosis?: DeploymentDiagnosis | null
+}
+
+const DEPLOY_CHECKS: Record<string, string> = {
+  model_not_loaded: 'nvinfer did not confirm the model load',
+  model_load_failed: 'nvinfer could not load the model (status {status})',
+  settling: 'The model loaded after {seconds} s; stabilization did not finish in time',
+  camera_unavailable: '{camera}: camera state is {state}',
+  camera_offline_before_deployment: '{camera}: already {state} before the switch; excluded from verification',
+  camera_went_offline: '{camera}: went {state} during the deployment (was {was})',
+  camera_went_offline_others: 'Other cameras went offline during the deployment: {cameras}',
+  fps_below_baseline: '{camera}: median {fps} fps, below 85% of the pre-switch median {baseline} fps (own low {low} fps, inferred {inference} fps)',
+  fps_below_baseline_pipeline_ok: '{camera}: median {fps} fps, below 85% of the pre-switch median {baseline} fps, while the shared pipeline kept its rate (other cameras and inference throughput ≥ 85%): camera source, not the model',
+  camera_fps_variation: '{camera}: median {fps} fps is below 85% of {baseline} fps but inside its own pre-switch range (low {low} fps) and inference keeps pace ({inference} fps)',
+  vehicle_inference_below_baseline: 'Parking cameras inferred {fps} frames/s in total, below 85% of {baseline} frames/s before the switch',
+  inference_stalled: '{camera}: no inferred frame for {age} s',
+  insufficient_inference_frames: '{camera}: only {frames} inferred frames',
+  no_vehicle_detections: 'No vehicle detections on the parking cameras',
+  service_fps_below_baseline: 'Other cameras total {fps} fps, below 85% of {baseline} fps before the switch (slow: {cameras})',
+}
+
+export const DIAGNOSIS_VERDICTS: Record<string, string> = {
+  model_suspected: 'recovered with the previous model: the new model is the likely cause',
+  camera_source_suspected: 'stayed low with the previous model: the camera/RTSP source is the likely cause',
+  inconclusive: 'camera was not live after the rollback: cause undetermined',
+}
+
+/** English i18n key and params for a runtime check; unknown codes are shown as is. */
+export function deploymentCheckText(check: DeploymentCheck) {
+  const value = (number?: number | null) => number == null ? '–' : String(number)
+  return {
+    key: (check.check === 'camera_went_offline' && !check.camera ? DEPLOY_CHECKS.camera_went_offline_others
+      : check.check === 'fps_below_baseline' && check.pipeline_slow === false ? DEPLOY_CHECKS.fps_below_baseline_pipeline_ok
+        : DEPLOY_CHECKS[check.check]) ?? check.check,
+    params: {
+      camera: check.camera ?? '–', state: check.state ?? '–', fps: value(check.fps), baseline: value(check.baseline_fps),
+      low: value(check.baseline_low), inference: value(check.inference_fps), was: check.baseline_state ?? '–',
+      age: value(check.inference_age), frames: value(check.frames), status: value(check.status),
+      seconds: value(check.loaded_after_seconds), cameras: check.cameras?.length ? check.cameras.join(', ') : '–',
+    },
+  }
+}
+
+export interface DeployableModel { id: string; kind: string; class_mode: string; names_count?: number; config: Record<string, unknown> | null; files: Record<string, unknown> }
+export interface DeploymentLike { available: boolean; active?: string | null }
+
+/** null when the model may be deployed now, else the reason (English i18n key).
+ *  COCO80 (car = class 2) deploys as is; a 1-class car head (class 0) is remapped to the runtime car id. */
+export function deployBlocker(model: DeployableModel, deployment: DeploymentLike | null, busy: boolean) {
+  if (model.kind !== 'finetuned' || !model.files['best.pt']) return 'A completed model with best.pt is required'
+  if (model.config?.imgsz !== 640) return 'Only 640px models can be hot-deployed; other input sizes need a restart and new FPS/VRAM measurements'
+  const classes = model.names_count ?? 0
+  if (model.class_mode === 'vehicle3' ? classes > 0 && classes !== 80 : model.class_mode !== 'single' || classes !== 1)
+    return 'Requires YOLO11m with COCO80 classes or a single car class'
+  if (!deployment?.available) return 'Deployment must be enabled on the DeepStream runtime and the training worker must be online.'
+  if (deployment.active === model.id) return 'This model is already active'
+  if (busy) return 'Another training, evaluation or deployment job is active'
+  return null
 }

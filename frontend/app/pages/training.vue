@@ -2,6 +2,7 @@
 import { useIntervalFn } from '@vueuse/core'
 import { AlertTriangle, Ban, CircleCheck, CircleDashed, Download, LoaderCircle, Lock, Play, RefreshCw } from '@lucide/vue'
 import DatasetSelect from '~/components/DatasetSelect.vue'
+import DeploymentReport from '~/components/DeploymentReport.vue'
 import LockedOverlay from '~/components/LockedOverlay.vue'
 import TrainingJobPanel from '~/components/TrainingJobPanel.vue'
 import TrainingNewImageEval from '~/components/TrainingNewImageEval.vue'
@@ -10,7 +11,8 @@ import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { downloadTrainingFile, trainingRequest, useTrainingToken } from '~/composables/trainingApi'
 import { useI18n } from '~/composables/useI18n'
-import { estimateVramMib, formatDuration, formatMetric, formatMib, isActiveStatus, jobKind, requiredFreeMib, safeBatch, suggestedTrainAllEpochs, toInteger, validateTrainingForm } from '~/lib/training'
+import { DEPLOY_PHASES, deployBlocker, deployClasses, estimateVramMib, formatDuration, formatMetric, formatMib, isActiveStatus, jobKind, requiredFreeMib, safeBatch, suggestedTrainAllEpochs, toInteger, validateTrainingForm } from '~/lib/training'
+import type { DeploymentReport as DeploymentReportData } from '~/lib/training'
 import { CLASS_MODE_LABELS, JOB_STATUS_LABELS, READINESS_LABELS, TRAIN_MODE_LABELS } from '~/types/training'
 import type { ClassMode, DatasetCheck, ImageSize, TrainingDataset, TrainingJob, TrainingJobDetail, TrainingModel, TrainingOptions, TrainingStatus, TrainMode } from '~/types/training'
 
@@ -23,6 +25,37 @@ const datasets = ref<TrainingDataset[]>([])
 const check = ref<DatasetCheck | null>(null)
 const models = ref<TrainingModel[]>([])
 const jobs = ref<TrainingJob[]>([])
+interface DeploymentStatus extends DeploymentReportData {
+  available: boolean; confirmed: boolean; active?: string; previous?: string; phase?: string; error?: string
+  /** Model class id -> running detector class id; null for COCO80 (identity). */
+  active_class_map?: Record<string, number> | null
+}
+const deployment = ref<DeploymentStatus | null>(null)
+const deploying = ref(false)
+function modelLabel(id?: string | null) {
+  return id === 'production-original' ? t('Original production model') : models.value.find(m => m.id === id)?.label ?? id ?? '–'
+}
+async function loadDeployment() {
+  try { deployment.value = await trainingRequest<DeploymentStatus>('/deployment') }
+  catch { deployment.value = null }
+}
+async function startDeployment(modelId?: string) {
+  if (!unlocked.value || deploying.value || activeJob.value || !deployment.value?.available) return
+  const target = modelId ? modelLabel(modelId) : modelLabel(deployment.value.previous)
+  if (!await confirm({
+    title: modelId ? t('Deploy {model} to DeepStream?', { model: target }) : t('Roll back to {model}?', { model: target }),
+    description: t('Parking vehicle detection switches models without restarting video. Live inference is verified for about a minute; if it fails, the previous model is restored automatically. Training data and models are kept.'),
+    confirmLabel: modelId ? t('Deploy to DeepStream') : t('Roll back model'),
+  })) return
+  deploying.value = true; error.value = null
+  try {
+    const job = await trainingRequest<TrainingJobDetail>('/deployments', { method: 'POST', auth: true,
+      body: modelId ? { model_id: modelId, action: 'deploy' } : { action: 'rollback' } })
+    selectedJobId.value = job.id; detail.value = job
+    await Promise.all([loadJobs(), loadStatus(), loadDeployment()])
+  } catch (cause) { error.value = (cause as Error).message }
+  finally { deploying.value = false }
+}
 const selectedJobId = ref<string | null>(null)
 const detail = ref<TrainingJobDetail | null>(null)
 const loading = ref(true)
@@ -89,7 +122,7 @@ async function loadModels() {
 }
 async function refreshAll() {
   error.value = null
-  await Promise.all([loadStatus(), loadJobs(), loadDatasets(), loadModels()])
+  await Promise.all([loadStatus(), loadJobs(), loadDatasets(), loadModels(), loadDeployment()])
   await loadDetail()
 }
 let checkVersion = 0
@@ -108,7 +141,7 @@ watch(selectedJobId, () => { detail.value = null; void loadDetail() })
 watch(() => [form.imgsz, form.batch], () => { void loadStatus() })
 
 const activeJob = computed(() => status.value?.active_job ?? jobs.value.find(job => isActiveStatus(job.status)) ?? null)
-useIntervalFn(() => { void loadStatus() }, 5000)
+useIntervalFn(() => { void loadStatus(); void loadDeployment() }, 5000)
 useIntervalFn(() => {
   if (activeJob.value || (detail.value && isActiveStatus(detail.value.status))) { void loadDetail(); void loadJobs() }
 }, 3000)
@@ -188,6 +221,13 @@ async function start() {
 }
 async function stop() {
   const job = detail.value
+  if (job?.config.kind === 'deploy') {
+    stopping.value = true
+    try { await trainingRequest(`/jobs/${job.id}/stop`, { method: 'POST', auth: true }); await loadDetail() }
+    catch (cause) { error.value = (cause as Error).message }
+    finally { stopping.value = false }
+    return
+  }
   if (!job || !await confirm({ title: t('Stop training?'), description: t('Training stops after the current batch, then validates and saves last.pt/best.pt. A stopped run is not registered as a model.'), confirmLabel: t('Stop training'), destructive: true })) return
   stopping.value = true
   try { await trainingRequest(`/jobs/${job.id}/stop`, { method: 'POST', auth: true }); await loadDetail() }
@@ -208,8 +248,10 @@ const gpuPercent = computed(() => gpu.value?.total_mib ? Math.round(((gpu.value.
 const SPLIT_USE = { train: 'Training', val: 'Best epoch / early stop', test: 'Independent test' } as const
 const splitRows = computed(() => (['train', 'val', 'test'] as const).map(split => ({ split, images: check.value?.counts?.[split] ?? 0, boxes: check.value?.boxes?.[split] ?? 0, sessions: check.value?.sessions?.[split] ?? 0 })))
 const fileSize = (bytes?: number) => typeof bytes === 'number' ? `${(bytes / 1048576).toFixed(1)} MiB` : ''
-const KIND_LABELS = { standard: 'Train / Val / Test', all: 'Train All', evaluate: 'New-image evaluation' } as const
-const jobTag = (job: TrainingJob) => job.config.kind === 'evaluate'
+const KIND_LABELS = { standard: 'Train / Val / Test', all: 'Train All', evaluate: 'New-image evaluation', deploy: 'Model deployment' } as const
+const jobTag = (job: TrainingJob) => job.config.kind === 'deploy'
+  ? (job.config.action === 'rollback' ? t('Roll back model') : t('Deploy to DeepStream'))
+  : job.config.kind === 'evaluate'
   ? t('{count} new images', { count: job.config.eval_images ?? 0 })
   : `${job.config.imgsz} px · b${job.config.batch} · ${job.config.class_mode === 'single' ? t('single') : t('3 cls')}${job.config.smoke ? ` · ${t('smoke')}` : ''}`
 
@@ -376,20 +418,30 @@ async function evaluationCreated(job: TrainingJobDetail) {
         <div v-else class="overflow-x-auto"><table class="w-full min-w-[36rem] text-left text-xs">
           <thead class="text-muted-foreground"><tr><th class="py-1.5 pr-3 font-medium">{{ t('Job') }}</th><th class="pr-3 font-medium">{{ t('Status') }}</th><th class="pr-3 font-medium">{{ t('Epochs') }}</th><th class="pr-3 font-medium">{{ t('Best mAP50-95') }}</th><th class="pr-3 font-medium">{{ t('Duration') }}</th><th class="font-medium">{{ t('Created') }}</th></tr></thead>
           <tbody><tr v-for="job in jobs" :key="job.id" :class="['cursor-pointer border-t border-white/5 hover:bg-white/[0.03]', job.id === selectedJobId ? 'bg-primary/5' : '']" tabindex="0" @click="selectedJobId = job.id" @keydown.enter="selectedJobId = job.id">
-            <td class="py-2 pr-3"><span class="font-medium">{{ job.name }}</span> <span :class="['ml-1 rounded px-1.5 py-0.5 text-[0.65rem]', jobKind(job.config) === 'standard' ? 'bg-white/5 text-muted-foreground' : jobKind(job.config) === 'all' ? 'bg-sky-400/10 text-sky-300' : 'bg-violet-400/10 text-violet-300']">{{ t(KIND_LABELS[jobKind(job.config)]) }}</span><span class="block text-muted-foreground">{{ jobTag(job) }}</span></td>
+            <td class="py-2 pr-3"><span class="font-medium">{{ job.name }}</span> <span :class="['ml-1 rounded px-1.5 py-0.5 text-[0.65rem]', jobKind(job.config) === 'standard' ? 'bg-white/5 text-muted-foreground' : jobKind(job.config) === 'all' ? 'bg-sky-400/10 text-sky-300' : jobKind(job.config) === 'deploy' ? 'bg-amber-300/10 text-amber-200' : 'bg-violet-400/10 text-violet-300']">{{ t(KIND_LABELS[jobKind(job.config)]) }}</span><span class="block text-muted-foreground">{{ jobTag(job) }}</span></td>
             <td :class="['pr-3', jobStatusClass(job.status)]">{{ t(JOB_STATUS_LABELS[job.status]) }}</td>
-            <td class="pr-3 font-mono tabular-nums">{{ job.config.kind === 'evaluate' ? '–' : `${job.epoch}/${job.epochs}` }}</td><td class="pr-3 font-mono tabular-nums">{{ formatMetric(job.best?.map50_95) }}</td>
+            <td class="pr-3 font-mono tabular-nums">{{ ['evaluate', 'deploy'].includes(job.config.kind ?? '') ? '–' : `${job.epoch}/${job.epochs}` }}</td><td class="pr-3 font-mono tabular-nums">{{ formatMetric(job.best?.map50_95) }}</td>
             <td class="pr-3 tabular-nums">{{ formatDuration(job.elapsed_seconds) }}</td><td class="text-muted-foreground">{{ time(job.created_at) }}</td></tr></tbody></table></div>
       </section>
 
       <!-- Models -->
       <section class="min-w-0 space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-5" :aria-label="t('Models')">
         <h2 class="text-sm font-semibold">{{ t('Models') }}</h2>
-        <p class="text-xs text-muted-foreground">{{ t('New models are stored for download and later rollout. DeepStream keeps the current YOLO11m until a separate, approved deployment (training/README.md §8).') }}</p>
+        <p class="text-xs text-muted-foreground">{{ t('Deploy a compatible trained model after export and engine validation. Failed verification restores the previous model. Training data and older models are retained.') }}</p>
+        <div class="space-y-2 rounded-xl border border-white/10 p-3 text-sm" role="status" aria-live="polite">
+          <p>{{ t('Active model') }}: <strong>{{ modelLabel(deployment?.active) }}</strong></p>
+          <p v-if="deployment?.active_class_map" class="text-xs text-muted-foreground">{{ t('Class map') }}: <span v-for="(target, source) in deployment.active_class_map" :key="source" class="font-mono">{{ t('model {source} → runtime {target} (car)', { source, target }) }}</span></p>
+          <p v-if="!deployment?.confirmed" class="text-amber-200">{{ t('Runtime status is unavailable; the active model is unconfirmed.') }}</p>
+          <p>{{ t(DEPLOY_PHASES[deployment?.phase ?? ''] ?? 'Deployment unavailable') }}</p>
+          <p v-if="deployment?.error" class="text-amber-200">{{ deployment.error }}</p>
+          <DeploymentReport v-if="deployment" :report="deployment" />
+          <p v-if="!deployment?.available" class="text-xs text-muted-foreground">{{ t('Deployment must be enabled on the DeepStream runtime and the training worker must be online.') }}</p>
+          <Button size="sm" variant="outline" :disabled="!unlocked || !deployment?.available || !deployment?.previous || !!activeJob || deploying" @click="startDeployment()">{{ t('Roll back model') }} · {{ modelLabel(deployment?.previous) }}</Button>
+        </div>
         <article v-for="model in models" :key="model.id" class="space-y-2 rounded-xl border border-white/10 bg-black/10 p-3">
           <div class="flex flex-wrap items-center gap-2"><p class="mr-auto text-sm font-medium">{{ model.label }}</p>
             <Badge variant="outline" :class="['px-2 py-0.5', model.kind === 'base' ? 'border-sky-400/25 bg-sky-400/10 text-sky-300' : 'border-primary/25 bg-primary/10 text-primary']">{{ model.kind === 'base' ? t('Production base') : t('Fine-tuned') }}</Badge>
-            <Badge v-if="model.kind === 'finetuned'" variant="outline" class="px-2 py-0.5 text-muted-foreground">{{ t('Not deployed') }}</Badge></div>
+            <Badge v-if="model.kind === 'finetuned'" variant="outline" class="px-2 py-0.5 text-muted-foreground">{{ deployment?.confirmed && deployment.active === model.id ? t('Active model') : t('Not active') }}</Badge></div>
           <p v-if="model.kind === 'base'" class="text-xs text-muted-foreground">{{ t('COCO 80 classes · weights on the training host') }}{{ model.files['yolo11m.pt']?.sha256 ? ` · sha256 ${model.files['yolo11m.pt']!.sha256!.slice(0, 12)}…` : '' }}</p>
           <template v-else>
             <p class="text-xs text-muted-foreground">{{ t('From') }} {{ models.find(item => item.id === model.base_model_id)?.label ?? model.base_model_id }} · dataset_{{ model.export_id?.slice(0, 8) }} · {{ time(model.created_at) }}</p>
@@ -401,7 +453,8 @@ async function evaluationCreated(job: TrainingJobDetail) {
             <p v-else-if="!model.evaluation_conclusive && !model.metrics?.new_images?.some(item => item.conclusive)" class="text-xs text-amber-200">{{ t('Test evidence is insufficient; improvement is not confirmed.') }}</p>
             <div class="flex flex-wrap items-center gap-2">
               <Button v-for="name in ['best.pt', 'last.pt']" :key="name" size="sm" variant="outline" :disabled="!unlocked || !model.files[name]?.download_url" :title="unlocked ? fileSize(model.files[name]?.size) : t('Unlock training control to download')" @click="download(`${model.name}-v${model.version}-${name}`, model.files[name]!.download_url!)"><Download /> {{ name }}</Button>
-              <Button size="sm" variant="outline" disabled :title="t('Planned: requires separate approval, ONNX export and DeepStream validation')">{{ t('Apply to DeepStream (later)') }}</Button>
+              <Button size="sm" variant="outline" :disabled="!unlocked || deploying || !!deployBlocker(model, deployment, !!activeJob)" :title="unlocked ? (deployBlocker(model, deployment, !!activeJob) ? t(deployBlocker(model, deployment, !!activeJob)!) : undefined) : t('Unlock training control first')" @click="startDeployment(model.id)">{{ t('Deploy to DeepStream') }}</Button>
+              <span class="text-xs text-muted-foreground">{{ t(deployClasses(model.class_mode)) }}</span>
               <Button size="sm" variant="outline" :disabled="model.status !== 'available'" @click="evaluateModel(model.id)">{{ t('Evaluate on new images') }}</Button>
               <button v-if="model.job_id" type="button" class="text-xs text-primary underline-offset-4 hover:underline" @click="selectedJobId = model.job_id">{{ t('Open training run') }}</button>
             </div>

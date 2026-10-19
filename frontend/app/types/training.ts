@@ -3,7 +3,7 @@ export type DatasetReadiness = 'ready' | 'limited' | 'blocked'
 export type ClassMode = 'vehicle3' | 'single'
 /** standard: Train/Val/Test. all: every image trains the weights (no independent score in the run). */
 export type TrainMode = 'standard' | 'all'
-export type JobKind = 'train' | 'evaluate'
+export type JobKind = 'train' | 'evaluate' | 'deploy'
 export type ImageSize = 640 | 960
 
 export interface TrainingOptions {
@@ -94,6 +94,8 @@ export interface TrainingConfig {
   weights_selection?: 'best_val' | 'final_epoch'
   /** Evaluation jobs: number of new images scored. */
   eval_images?: number
+  /** Deployment jobs: deploy the base model or roll back to the runtime's previous model. */
+  action?: 'deploy' | 'rollback'
   epochs: number
   imgsz: ImageSize
   batch: number
@@ -184,6 +186,7 @@ export interface TrainingModel {
   export_id: string | null
   dataset_sha256: string | null
   class_mode: string
+  names_count?: number
   config: Record<string, number | string | null> | null
   metrics: { val?: MetricPoint | null; test?: EvaluationModelMetrics | null; test_baseline?: EvaluationModelMetrics | null; test_images?: number | null; evaluation_status?: string; new_images?: NewImageEvaluation[] } | null
   evaluation_conclusive: boolean
