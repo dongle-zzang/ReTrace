@@ -7,8 +7,9 @@ const { open, details, finish } = useConfirmDialog()
 const { t } = useI18n()
 </script>
 <template>
+  <!-- Above other dialogs (z-50): it is often asked from inside one, and same-z order follows mount order. -->
   <Dialog :open="open" @update:open="!$event && finish(false)">
-    <DialogContent class="border border-white/10 bg-popover/95 shadow-xl backdrop-blur-xl" @keydown.stop>
+    <DialogContent class="z-[60] border border-white/10 bg-popover/95 shadow-xl backdrop-blur-xl" overlay-class="z-[60]" @keydown.stop>
       <DialogHeader><DialogTitle>{{ details.title }}</DialogTitle><DialogDescription>{{ details.description }}</DialogDescription></DialogHeader>
       <DialogFooter>
         <Button variant="outline" @click="finish(false)">{{ t('Cancel') }}</Button>
