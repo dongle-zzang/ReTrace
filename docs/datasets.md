@@ -1,6 +1,7 @@
 # AI 차량 데이터셋 수집과 라벨링
 
-현재 구현은 수동 라벨링부터 검수·YOLO ZIP 생성까지 제공한다. 모델 학습, ONNX 변환,
+현재 구현은 수동 라벨링부터 검수·YOLO ZIP 생성까지 제공하고, 등록된 모델로 라벨이 없는 이미지에
+초안 박스를 만드는 자동 라벨링(아래 "자동 라벨링")을 더했다. 모델 학습, ONNX 변환,
 운영 모델/추론 설정 변경은 포함하지 않는다. 운영 GPU/실제 CCTV/PostgreSQL 확인과 배포는
 아직 수행하지 않았다. CPU 테스트와 합성 영상 브라우저 검증은 이를 대체하지 않는다.
 
@@ -16,8 +17,11 @@
   확인해야 한다. 미저장 변경은 페이지 이동/탭 종료 전에 확인한다.
 - 상태는 `pending`(Pending), `in_progress`(In progress), `reviewed`(Reviewed).
   검수한 이미지를 다시 초안 저장하면 `in_progress`로 돌아가 이후 내보내기에서 제외된다.
-- 박스는 저장 이미지의 원본 픽셀 좌표 `{id, class_id, x, y, width, height, source: "manual"}`다.
-  `(x,y)`는 좌상단이다. `DatasetBoxEditor.vue`는 기존 `useVideoStage`/`videoGeometry`를
+- 박스는 저장 이미지의 원본 픽셀 좌표 `{id, class_id, x, y, width, height, source, score?}`다.
+  `(x,y)`는 좌상단이다. `source`는 `manual`(사람) 또는 `auto`(자동 라벨링 초안)이고 `score`(0~1)는
+  `auto`에만 있다(`manual`로 저장하면 서버가 score를 버린다). 사람이 auto 박스를 옮기거나 크기를 바꾸면
+  프론트가 `manual`로 바꿔 저장하고, 손대지 않은 auto 박스는 검수 후에도 `auto`로 남아 통계에 쓰인다
+  (`auto_box_count`). `DatasetBoxEditor.vue`는 기존 `useVideoStage`/`videoGeometry`를
   재사용하여 letterbox·리사이즈·확대 후에도 SVG와 원본 좌표가 일치하도록 한다.
 - 새 내보내기의 클래스는 **데이터셋 전용 `0: car` 한 개**다. 기존 truck/bus 저장 라벨은 자동 변경하지 않으며, 포함된 검수 이미지에 non-car 라벨이 있으면 새 export는 명확한 오류로 실패한다. 이전에 생성한 ZIP은 원래 클래스 맵을 유지한다. COCO 모델의 class ID와 다르다.
 
@@ -52,9 +56,40 @@ Preview는 응답 전후 카메라 runtime session/generation과 online/degraded
 1920×1080이며 Preview용 1280×720 축소를 적용하지 않는다. RTSP 센서 원래 해상도를
 복원하거나 새로운 고해상도 디코딩 경로를 만드는 기능은 아니다.
 
-기본 플래그는 `0`이므로 비활성일 때 기존 출력 chain을 유지한다. 자동 라벨은 제공하지 않는다.
-현재 최신 metadata와 캡처 JPEG의 동일 프레임 association이 없기 때문에 최신 박스를
-초기 라벨로 붙이지 않는다. `/classes`의 `auto_labels_available`은 false이고 source는 manual뿐이다.
+기본 플래그는 `0`이므로 비활성일 때 기존 출력 chain을 유지한다. 캡처 시점의 DeepStream 검출을
+초기 라벨로 붙이지는 않는다(최신 metadata와 캡처 JPEG의 동일 프레임 association이 없다). 초안 박스는
+아래 자동 라벨링 job이 캡처 후 별도로 만든다.
+
+## 자동 라벨링 (AI 초안)
+
+`/datasets`에서 등록된 모델(운영 YOLO11m COCO base 또는 `best.pt`가 있는 fine-tuned 모델)을 골라
+**라벨이 없는 pending 이미지**에 초안 박스를 만든다. 사람이 각 이미지에서 박스를 고치고 저장(검수)해야만
+export에 들어간다. 계약과 안전 경계:
+
+- 추론은 Backend 컨테이너가 아니라 기존 host 학습 worker(`training/worker.py`, `training/.venv`, GPU)가 한다.
+  `config.kind = 'autolabel'`인 `training_jobs` job으로 기존 단일 slot queue·GPU 대기(`wait_for_gpu`)·운영 FPS
+  보호(heartbeat guard, phase `labeling`)·중지·worker 소실 처리를 그대로 쓴다. DeepStream/Preview 컨테이너는
+  관여하지 않는다. API 표와 error code는 [docs/training.md §4-3](training.md#4-3-자동-라벨링-job).
+- **대상**: `status='pending'`이고 박스가 없는 이미지. `include_auto_drafts=true`일 때만 `in_progress`이고
+  **모든 박스가 `source='auto'`**인 이미지(사람이 손대지 않은 이전 초안)도 다시 라벨링한다. `reviewed`,
+  `reviewed_empty=true`, manual 박스가 하나라도 있는 이미지, 사람이 빈 초안으로 저장한 `in_progress`는 항상 제외.
+  카메라 필터를 줄 수 있고 `captured_at` 오래된 순으로 한 job당 최대 500장이다.
+- **사람이 만든 라벨은 덮어쓰지 않는다.** job 생성 시 대상 이미지 id와 그 시점 `revision`을 job에 고정하고,
+  worker 결과를 적용할 때 row lock 안에서 revision이 같고 여전히 대상 조건을 만족할 때만 쓴다. 그 사이 사람이
+  저장한 이미지는 `skipped_changed`로 센다. 같은 이미지를 두 번 보내도 두 번째는 skip된다(멱등).
+- **저장 결과**: 박스는 이미지 경계로 clip하고 2px 미만은 버리며 점수 상위 300개까지
+  `{id, class_id: 0, x, y, width, height, source: 'auto', score}`로 저장한다. 이미지는 `in_progress`,
+  `reviewed_empty=false`, `revision+1`이 된다. 새 status나 CHECK constraint, 테이블/컬럼 추가는 없다.
+  검출이 0개인 이미지는 바꾸지 않고 pending으로 둔다(`no_detections`). export는 reviewed만 포함하므로 초안이
+  자동으로 섞이지 않고, 검수된 auto 박스는 YOLO TXT에 일반 박스와 똑같이 기록된다(source 무시).
+- **클래스 매핑**(데이터셋은 `0: car` 하나): COCO80 계열 모델(base, `coco80`/`vehicle3` fine-tuned)은 COCO
+  `2 car`, `5 bus`, `7 truck` 검출을 모두 데이터셋 `0`으로 합친다(운영이 세 종류를 한 차량 class로 쓰는 것과
+  같다, [training/README.md](../training/README.md)). `single` 모델은 class 0 그대로. NMS는 Ultralytics 기본값,
+  conf는 0.1~0.9(기본 0.35), imgsz 640, batch 1.
+- `/classes`의 `auto_labels_available`은 Backend에 `TRAINING_ADMIN_TOKEN`과 `TRAINING_WORKER_TOKEN`이 모두
+  설정돼 있을 때 true다. 시작(POST)은 admin 토큰이 필요하고, 진행 상황은 `/api/training/status`의
+  `active_job`과 `/api/training/jobs/{id}`로 본다(`/api/training/jobs` 목록에는 나오지 않는다).
+  `dataset_summary`에 `total/processed/labeled/boxes/no_detections/skipped_changed`가 누적된다.
 
 ## API
 
@@ -63,7 +98,7 @@ Preview는 응답 전후 카메라 runtime session/generation과 online/degraded
 
 | 메서드 | `/api/datasets` 아래 경로 | 계약 |
 | --- | --- | --- |
-| GET | `/classes` | 데이터셋 클래스 맵, auto_labels_available |
+| GET | `/classes` | 데이터셋 클래스 맵, auto_labels_available(학습 admin/worker 토큰이 모두 있을 때 true) |
 | POST | `/capture` | `{camera_id}` → 201 이미지 메타데이터 |
 | GET | `/images` | camera_id/status/page/page_size 필터 → items/total/page/page_size |
 | GET | `/images/{uuid}` | 이미지 메타데이터, boxes, reviewed_empty, previous_id/next_id |
@@ -205,6 +240,6 @@ python -m unittest discover -s tests -p 'test_preview_http.py'
 ## 2026-10-13 후속 변경
 
 - 프론트 이전/다음은 상세 API의 같은 카메라/오래된순 필드를 사용하지 않고, 목록 진입 시 보관한 전체 필터 결과의 최신순 ID snapshot을 사용한다. 페이지 경계를 포함하며 저장으로 status가 바뀌어도 순서는 유지한다. 목록 필터·페이지와 snapshot은 브라우저 세션 내 유지한다. 직접 URL 진입 시 전체 최신순을 기본으로 한다.
-- 새 ZIP은 car 한 클래스다. 기존 annotation 입력의 0~2 호환성은 유지하지만 non-car 라벨을 포함한 검수 데이터는 export에서 거부한다. 자동 삭제·자동 재라벨링하지 않는다.
+- 새 ZIP은 car 한 클래스다. 기존 annotation 입력의 0~2 호환성은 유지하지만 non-car 라벨을 포함한 검수 데이터는 export에서 거부한다. 자동 삭제·자동 재라벨링하지 않는다(자동 라벨링 초안은 위 "자동 라벨링" 조건의 미라벨 이미지에만 생긴다).
 - 삭제 UI는 확인 후 `/api/datasets/exports/{uuid}`를 호출한다. 기존 서버에는 해당 DELETE 경로와 car-only 변경이 없으므로 Backend rebuild 및 Preview 프록시 restart가 필요하다. 스키마/환경 변수/캡처 파이프라인 변경은 없다. 기존 기록은 운영 서버에서 삭제하지 않았다.
 - 이번 CPU 검증: Backend 142, Preview 쓰기·파일 프록시 12, frontend 28 tests/typecheck/build 통과. 실제 서버 새 API 적용/운영 ZIP 삭제는 미검증이다.

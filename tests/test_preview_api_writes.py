@@ -277,9 +277,12 @@ class ParkingProxyTests(unittest.TestCase):
 
     def test_training_control_routes_forward_authorization_and_block_worker_api(self):
         job = '/api/training/jobs/11111111-1111-4111-8111-111111111111'
-        for path in ('/api/training/jobs', '/api/training/auth', '/api/training/evaluations', '/api/training/deployments', job + '/stop'):
+        for path in ('/api/training/jobs', '/api/training/auth', '/api/training/evaluations', '/api/training/deployments',
+                     '/api/training/autolabels', job + '/stop'):
             self.assertEqual(self.request('POST', path, b'{}', {'Authorization': 'Bearer token'})[0], 201)
             self.assertEqual(self.requests[-1][2]['Authorization'], 'Bearer token')
+        self.assertEqual(self.request('GET', '/api/training/autolabels/plan?model_id=yolo11m-coco&camera_id=cam')[0], 200)
+        self.assertEqual(self.requests[-1][1], '/api/training/autolabels/plan?model_id=yolo11m-coco&camera_id=cam')
         self.assertEqual(self.request('DELETE', job)[0], 405)
         self.assertEqual(self.request('POST', job + '/artifacts/best.pt', b'{}')[0], 405)
         count = len(self.requests)

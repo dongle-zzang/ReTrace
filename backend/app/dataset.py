@@ -1,4 +1,8 @@
-"""Persistent, manual-first vehicle dataset API. No model training or inference."""
+"""Persistent, manual-first vehicle dataset API. No model training or inference here.
+
+Auto-label drafts (source='auto') are produced by the GPU worker through /api/training/autolabels;
+they only ever land on images nobody labelled and stay 'in_progress' until a person reviews them.
+"""
 from contextlib import suppress
 from datetime import datetime, timezone
 import hashlib
@@ -14,7 +18,7 @@ import httpx
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from typing import Literal
@@ -43,7 +47,15 @@ class Box(BaseModel):
     y: float = Field(ge=0, allow_inf_nan=False)
     width: float = Field(gt=0, allow_inf_nan=False)
     height: float = Field(gt=0, allow_inf_nan=False)
-    source: Literal['manual'] = 'manual'
+    # 'auto' = draft from the auto-label worker, kept after review for statistics; score only for 'auto'.
+    source: Literal['manual', 'auto'] = 'manual'
+    score: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def manual_boxes_have_no_score(self):
+        if self.source == 'manual':
+            self.score = None
+        return self
 
 
 class AnnotationSave(BaseModel):
@@ -75,6 +87,7 @@ def image_out(image):
     return {'id': image.id, 'camera_id': image.camera_id, 'captured_at': aware(image.captured_at).isoformat(),
             'capture_session': image.capture_session, 'width': image.width, 'height': image.height,
             'status': image.status, 'revision': image.revision, 'box_count': len(image.boxes),
+            'auto_box_count': sum(1 for box in image.boxes if isinstance(box, dict) and box.get('source') == 'auto'),
             'image_url': f'/api/datasets/images/{image.id}/file',
             'thumbnail_url': f'/api/datasets/images/{image.id}/thumbnail'}
 
@@ -284,9 +297,14 @@ class DatasetService:
             self.export_lock.release()
 
 
+def auto_labels_available(config):
+    """Auto labelling needs the admin token (POST /api/training/autolabels) and the GPU worker token."""
+    return bool(config.training_admin_token and config.training_worker_token)
+
+
 @router.get('/classes')
-def classes():
-    return {'classes': CLASSES, 'auto_labels_available': False}
+def classes(request: Request):
+    return {'classes': CLASSES, 'auto_labels_available': auto_labels_available(request.app.state.config)}
 
 
 @router.post('/capture', status_code=201)
@@ -342,7 +360,7 @@ def annotations(request: Request, image_id: UUID, body: AnnotationSave):
         validate_boxes(body.boxes, image.width, image.height)
         if body.status == 'reviewed' and not body.boxes and not body.reviewed_empty:
             raise HTTPException(422, 'Confirm that this image has no vehicles before reviewing an empty label')
-        image.boxes = [box.model_dump(mode='json') for box in body.boxes]
+        image.boxes = [box.model_dump(mode='json', exclude_none=True) for box in body.boxes]
         image.status, image.reviewed_empty = body.status, body.reviewed_empty and not body.boxes
         image.revision += 1
         image.updated_at = utcnow()

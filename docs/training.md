@@ -44,13 +44,13 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 
 ## 3. 상태와 실패 코드
 
-상태: `queued → running → (stopping) → completed | stopped | failed`. phase는 `queued → preparing → validating → waiting_gpu → training → evaluating → saving`.
+상태: `queued → running → (stopping) → completed | stopped | failed`. phase는 `queued → preparing → validating → waiting_gpu → training → evaluating → saving`(자동 라벨링 job은 `preparing → waiting_gpu → labeling → saving`).
 중지는 다음 batch 경계에서 `trainer.stop`으로 끝내고(검증·저장 후 종료), `--stop-grace` 안에 끝나지 않으면 SIGTERM → SIGKILL.
 
 주요 `error_code`: `dataset_invalid`, `dataset_too_large`, `snapshot_changed`, `no_validation`, `invalid_config`,
 `base_model_missing`, `base_model_changed`, `cuda_unavailable`, `gpu_busy`, `gpu_oom`, `storage_full`, `killed`,
 `training_failed`, `download_failed`, `artifact_upload_failed`, `production_protection`, `worker_lost`, `worker_restarted`,
-`evaluation_failed`(새 이미지 평가 job). 배포 job: `deployment_unavailable`, `export_failed`, `runtime_changed`, `runtime_lost`,
+`evaluation_failed`(새 이미지 평가 job), `autolabel_failed`(자동 라벨링 job: autolabel.py 실패 또는 일부 이미지 결과 누락). 배포 job: `deployment_unavailable`, `export_failed`, `runtime_changed`, `runtime_lost`,
 `deployment_timeout`, `deployment_unverified`, `deployment_failed`/`deployment_rolled_back`/`deployment_rollback_failed`
 (runtime 결과, 세부 원인은 error 문자열: `artifact_contract_mismatch`, `engine_build_failed`, `model_load_failed`,
 `verification_failed`, `deployment_cancelled`, `no_live_inference`, `no_previous_model` 등).
@@ -67,11 +67,13 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 | POST `/auth` | admin | 토큰 확인(204) |
 | POST `/jobs` | admin | 검증 후 job 생성(`train_mode`: `standard` 기본, `all`). limited 데이터셋은 `acknowledge_limits: true` 필요 |
 | POST `/evaluations` | admin | 등록된 fine-tuned 모델을 새 이미지로 평가하는 job 생성(`model_id`, `export_id`, `acknowledge_limits`) |
+| GET `/autolabels/plan?model_id&camera_id&include_auto_drafts` | 공개 | 자동 라벨링 대상 수(`eligible`), 제외 사유별 수(`skipped.reviewed/labeled/auto_drafts`), `max_images`, `ready`/`blocker`(§4-3) |
+| POST `/autolabels` | admin | `{model_id, camera_id?, conf, include_auto_drafts}` → 자동 라벨링 job 생성(201, 학습과 같은 단일 slot) |
 | POST `/jobs/{id}/stop` | admin | 안전 중지 요청(배포 job은 취소 → 적용 전이면 변경 없음, 적용 후면 이전 모델 복구) |
 | GET `/deployment` | 공개 | 현재 적용 모델(`active`), 롤백 대상(`previous`), runtime phase/error/추론 근거(`evidence`, `service`, `checks`, `failures`, `diagnosis`), `available`·`confirmed` |
 | POST `/deployments` | admin | `{"model_id", "action": "deploy"}` 또는 `{"action": "rollback"}`. 학습 queue의 단일 slot을 함께 쓴다 |
 | GET `/jobs/{id}/artifacts/{name}`, `/models/{id}/files/{best\|last}` | admin | 산출물·가중치 다운로드 |
-| `/worker/*` (heartbeat, claim, dataset, weights, artifacts, finish) | worker | host worker 전용, Preview에서 404 |
+| `/worker/*` (heartbeat, claim, dataset, weights, artifacts, finish, `jobs/{id}/images/{image_id}`, `jobs/{id}/autolabels`) | worker | host worker 전용, Preview에서 404 |
 
 job별 산출물: `best.pt`, `last.pt`, `results.csv`, `results.png`, `args.yaml`, `run_info.json`, `train.log`,
 `check_report.json`, `eval_metrics.json`, `eval_predictions.json`, `eval_report.md`. 저장 위치는 Backend volume의
@@ -181,6 +183,28 @@ retrace (vehicle_deployment.py, 기존 control loop):
 - 파일: `.cache/vehicle-deployments/{status.json, committed.json, engines/, <job>/(best.pt, best.onnx, labels.txt, manifest.json,
   infer.txt, build.log, build.json, request.json, result.json)}`. 로컬 산출물이며 자동 삭제하지 않는다.
 - engine 생성 중에는 같은 GPU를 쓰므로 Preview FPS가 잠시 내려갈 수 있다(수 분). 학습과 동시에 실행되지 않는다.
+
+## 4-3. 자동 라벨링 job (`config.kind = 'autolabel'`)
+
+`/datasets`의 AI 초안 기능이다. 대상 조건·저장 규칙·클래스 매핑의 원문은 [docs/datasets.md "자동 라벨링"](datasets.md#자동-라벨링-ai-초안)이고, 여기에는 job·API 계약만 둔다.
+
+- 생성(`POST /autolabels`): 모델은 `kind=base` 또는 `best.pt`가 있는 fine-tuned(`status=available`)만. `conf` 0.1~0.9(기본 0.35).
+  대상이 0장이면 422 `No unlabeled pending images.`, GPU/worker 조건은 evaluation과 같은 `gpu_check(640, batch 1)`(오프라인 503, 그 외 409),
+  slot 충돌 409. job은 `epochs=1`, `export_id`/`dataset_sha256` 없음(`null`), `name = autolabel-<모델 label>`,
+  `config = {kind, imgsz: 640, conf, class_mode, camera_id, include_auto_drafts, images(대상 수), required_free_mib, estimated_training_mib}`
+  (대상 id/revision 목록 `targets`는 worker claim에만 전달되고 공개 응답에서는 `images` 수로 바뀐다),
+  `dataset_summary = {kind, camera_id, model_label, conf, include_auto_drafts, total, processed, labeled, boxes, no_detections, skipped_changed}`.
+- `GET /autolabels/plan`의 `blocker`는 프론트 번역 키이므로 문장을 그대로 쓴다: `No auto-label model is available yet.`(모델 없음/incomplete/host에 base 가중치 없음),
+  `The training worker is offline.`, `Another training job is running.`(ACTIVE 상태 job 존재), `No unlabeled pending images.`. 모델이 없어도 404가 아니라 `ready:false`다.
+- `GET /jobs` 목록에서는 자동 라벨링 job을 제외한다(학습 표의 epoch/지표 칼럼 오표시 방지). `GET /jobs/{id}`와 `GET /status`의 `active_job`에는 포함되므로
+  데이터셋 화면이 진행을 polling하고 학습 시작은 slot 점유로 막힌다. `progress`는 heartbeat가 아니라 결과 batch 적용(`processed/total`)으로만 갱신된다.
+- worker 흐름: claim → `resolve_weights`(base sha256 확인 또는 `best.pt`) → `GET /worker/jobs/{id}/images/{image_id}`로 대상 JPEG(20 MiB 제한)를
+  `runs/web/<job>/images/`에 내려받음(그 사이 삭제된 이미지는 건너뜀) → `wait_for_gpu` → `training/autolabel.py` subprocess(검증된 인자 list,
+  `run_child`의 heartbeat/stop/SIGTERM 재사용, 중지는 즉시 SIGTERM) → JSON lines 결과를 최대 50장씩 `POST /worker/jobs/{id}/autolabels`
+  (`{worker_id, results: [{image_id, boxes: [{x, y, width, height, score}]}]}`, 이미지당 300개)로 올리고 Backend가 한 transaction에서 이미지별
+  row lock·revision 검사 후 적용해 summary를 돌려준다 → `finish`(`completed`/`stopped`/`failed` + `autolabel_failed` 등). finish는 모델 등록·best.pt·평가 검사를 하지 않는다.
+  `train.log`만 산출물로 남는다.
+- 운영 보호: phase `labeling` 중에도 학습과 같은 heartbeat guard(FPS 하락·Preview 응답 없음·GPU reserve)가 `production_protection` 중지를 건다.
 
 ## 5. 운영 절차 (GPU 서버, 운영자 수행)
 
