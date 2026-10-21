@@ -441,18 +441,18 @@ async function evaluationCreated(job: TrainingJobDetail) {
         <TrainingNewImageEval v-model:model-id="evalModelId" :models="models" :datasets="datasets" :can-control="unlocked" :busy="!!activeJob" :gpu-ready="!!status?.gpu_ready" @created="evaluationCreated" />
       </TabsContent>
 
-      <TabsContent value="history" :class="['space-y-6', tabMotion]">
+      <TabsContent value="history" :class="['grid items-start gap-6 xl:grid-cols-2', tabMotion]">
         <!-- History -->
         <section class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Training history')">
           <h2 class="text-base font-semibold">{{ t('Training history') }} <span class="ml-1 font-normal text-muted-foreground">{{ jobs.length }}</span></h2>
           <p v-if="!jobs.length" class="py-6 text-center text-sm text-muted-foreground">{{ t('No jobs yet.') }}</p>
-          <div v-else class="overflow-x-auto"><table class="w-full min-w-[44rem] text-left text-sm">
+          <div v-else class="overflow-x-auto"><table class="w-full min-w-[38rem] text-left text-sm">
             <thead class="text-xs text-muted-foreground"><tr class="whitespace-nowrap"><th class="py-2 pr-4 font-medium">{{ t('Job') }}</th><th class="pr-4 font-medium">{{ t('Status') }}</th><th class="pr-4 font-medium">{{ t('Epochs') }}</th><th class="pr-4 font-medium">{{ t('Best mAP50-95') }}</th><th class="pr-4 font-medium">{{ t('Duration') }}</th><th class="font-medium">{{ t('Created') }}</th></tr></thead>
             <tbody><tr v-for="job in jobs" :key="job.id" :class="['cursor-pointer border-t border-white/5 hover:bg-white/[0.03]', job.id === selectedJobId ? 'bg-primary/5' : '']" tabindex="0" @click="openJob(job.id)" @keydown.enter="openJob(job.id)">
               <td class="py-2.5 pr-4"><span class="font-medium">{{ job.name }}</span> <span :class="['ml-1 rounded px-1.5 py-0.5 text-xs whitespace-nowrap', jobKind(job.config) === 'standard' ? 'bg-white/5 text-muted-foreground' : jobKind(job.config) === 'all' ? 'bg-sky-400/10 text-sky-300' : jobKind(job.config) === 'deploy' ? 'bg-amber-300/10 text-amber-200' : 'bg-violet-400/10 text-violet-300']">{{ t(KIND_LABELS[jobKind(job.config)]) }}</span><span class="block text-xs text-muted-foreground">{{ jobTag(job) }}</span></td>
               <td :class="['pr-4 font-medium whitespace-nowrap', jobStatusClass(job.status)]">{{ t(JOB_STATUS_LABELS[job.status]) }}</td>
               <td class="pr-4 font-mono tabular-nums whitespace-nowrap">{{ ['evaluate', 'deploy'].includes(job.config.kind ?? '') ? '–' : `${job.epoch}/${job.epochs}` }}</td><td class="pr-4 font-mono tabular-nums">{{ formatMetric(job.best?.map50_95) }}</td>
-              <td class="pr-4 tabular-nums whitespace-nowrap">{{ formatDuration(job.elapsed_seconds) }}</td><td class="whitespace-nowrap text-muted-foreground">{{ time(job.created_at) }}</td></tr></tbody></table></div>
+              <td class="pr-4 tabular-nums whitespace-nowrap">{{ formatDuration(job.elapsed_seconds) }}</td><td class="min-w-28 text-muted-foreground">{{ time(job.created_at) }}</td></tr></tbody></table></div>
         </section>
 
         <!-- Models -->
