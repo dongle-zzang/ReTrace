@@ -97,7 +97,7 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 `pages/datasets/`, `composables/datasetApi.ts`, `types/dataset.ts`입니다.
 
 내비게이션 `AI Training` → `/training`에서 데이터셋 export 선택·적합성 확인, 학습 설정·시작·중지, 진행(epoch·loss·mAP·GPU·로그),
-기존 모델과의 같은 test 이미지 비교, 모델 registry를 제공합니다. 시작·중지·다운로드는 서버 `TRAINING_ADMIN_TOKEN`을 입력해야 하며
+기존 모델과의 같은 test 이미지 비교, 모델 registry를 제공합니다. 화면은 상단 상태 카드 아래 `새 학습 / 진행·결과 / 새 이미지 평가 / 기록·모델` 탭으로 나뉘며, 열린 탭은 `?tab=`(`progress`, `evaluate`, `history`; 기본은 새 학습)에 남습니다. 시작·중지·다운로드는 서버 `TRAINING_ADMIN_TOKEN`을 입력해야 하며
 토큰은 sessionStorage에만 둡니다. Preview proxy는 body 없는 POST를 415로 거부하므로 `/auth`, `/stop`도 `Content-Type: application/json`과 `{}`를 보냅니다. 계약은 [웹 fine-tuning](../docs/training.md), 구현은 `pages/training.vue`,
 `components/Training*.vue`, `composables/trainingApi.ts`, `lib/training.ts`입니다.
 
