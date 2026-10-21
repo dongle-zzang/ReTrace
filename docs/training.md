@@ -68,7 +68,7 @@ host: training/.venv/bin/python worker.py ──loopback HTTP + worker token─�
 | POST `/jobs` | admin | 검증 후 job 생성(`train_mode`: `standard` 기본, `all`). limited 데이터셋은 `acknowledge_limits: true` 필요 |
 | POST `/evaluations` | admin | 등록된 fine-tuned 모델을 새 이미지로 평가하는 job 생성(`model_id`, `export_id`, `acknowledge_limits`) |
 | GET `/autolabels/plan?model_id&camera_id&include_auto_drafts` | 공개 | 자동 라벨링 대상 수(`eligible`), 제외 사유별 수(`skipped.reviewed/labeled/auto_drafts`), `max_images`, `ready`/`blocker`(§4-3) |
-| POST `/autolabels` | admin | `{model_id, camera_id?, conf, include_auto_drafts}` → 자동 라벨링 job 생성(201, 학습과 같은 단일 slot) |
+| POST `/autolabels` | admin | `{model_id, camera_id?, conf, include_auto_drafts}` → 자동 라벨링 job 생성(201, 학습과 같은 단일 slot). 단일 이미지 제안 form `{model_id, conf, image_ids: [1~20], apply: false}`는 DB를 바꾸지 않고 결과를 `dataset_summary.results`로 돌려준다(§4-3) |
 | POST `/jobs/{id}/stop` | admin | 안전 중지 요청(배포 job은 취소 → 적용 전이면 변경 없음, 적용 후면 이전 모델 복구) |
 | GET `/deployment` | 공개 | 현재 적용 모델(`active`), 롤백 대상(`previous`), runtime phase/error/추론 근거(`evidence`, `service`, `checks`, `failures`, `diagnosis`), `available`·`confirmed` |
 | POST `/deployments` | admin | `{"model_id", "action": "deploy"}` 또는 `{"action": "rollback"}`. 학습 queue의 단일 slot을 함께 쓴다 |
@@ -204,6 +204,12 @@ retrace (vehicle_deployment.py, 기존 control loop):
   (`{worker_id, results: [{image_id, boxes: [{x, y, width, height, score}]}]}`, 이미지당 300개)로 올리고 Backend가 한 transaction에서 이미지별
   row lock·revision 검사 후 적용해 summary를 돌려준다 → `finish`(`completed`/`stopped`/`failed` + `autolabel_failed` 등). finish는 모델 등록·best.pt·평가 검사를 하지 않는다.
   `train.log`만 산출물로 남는다.
+- 단일 이미지 제안(`apply: false`, 편집 화면의 "이 이미지 자동 라벨링"): body는 `{model_id, conf, image_ids(1~20, 없는 id 404), apply: false}`이고
+  일괄 form의 `camera_id`/`include_auto_drafts`와 섞이거나 `apply`가 `false`가 아니면 422다. 대상 조건을 검사하지 않아 reviewed 이미지도 된다.
+  job `config.apply=false`, `targets`는 id만(revision 없음). worker는 일괄과 똑같이 추론·업로드하고, Backend는 이미지 row를 읽기만 한 채
+  clip·2px 제거·300개 제한을 거친 박스를 `dataset_summary.results = [{image_id, boxes: [{x, y, width, height, score}]}]`(원본 픽셀, score 소수 3자리)에
+  누적하며 `processed/labeled(박스 ≥1)/boxes/no_detections`를 갱신한다. boxes·status·revision은 불변이고, 프론트가 `GET /jobs/{id}`를 polling해
+  `completed` 후 편집 중 초안에 합친다. 1장이라도 worker claim 간격(기본 `--poll 5`초)과 GPU 대기가 체감 지연의 대부분이다.
 - 운영 보호: phase `labeling` 중에도 학습과 같은 heartbeat guard(FPS 하락·Preview 응답 없음·GPU reserve)가 `production_protection` 중지를 건다.
 
 ## 5. 운영 절차 (GPU 서버, 운영자 수행)

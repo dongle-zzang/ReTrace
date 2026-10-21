@@ -173,6 +173,8 @@ class SafeExtractTests(unittest.TestCase):
                                                "targets": [{"id": i, "revision": 1} for i in ids]}}
         config = worker.validated_config(spec)
         self.assertEqual(config, {"kind": "autolabel", "conf": 0.35, "imgsz": 640, "class_mode": "coco80", "targets": ids})
+        suggest = {**spec, "config": {**spec["config"], "apply": False, "targets": [{"id": ids[0]}]}}
+        self.assertEqual(worker.validated_config(suggest)["targets"], ids[:1])  # editor suggestions: no revision
         for change in ({"conf": "0.35"}, {"conf": 0.05}, {"conf": 0.95}, {"conf": True}, {"imgsz": 960},
                        {"class_mode": "multi"}, {"targets": []}, {"targets": [{"id": "../x"}]}, {"targets": [ids[0]]},
                        {"targets": [{"id": ids[0]}, {"id": ids[0]}]},

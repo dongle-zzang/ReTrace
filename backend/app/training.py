@@ -29,7 +29,7 @@ import zipfile
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -61,6 +61,7 @@ MIN_EVAL_IMAGES = 10
 MAX_EVAL_IMAGES = 5000
 # Auto-label jobs (config.kind = 'autolabel'): pending images get draft boxes from a registered model.
 AUTOLABEL_MAX_IMAGES = 500
+AUTOLABEL_SUGGEST_MAX_IMAGES = 20  # apply=false: suggestions for the editor, nothing written to images
 AUTOLABEL_MAX_BOXES = 300
 AUTOLABEL_MIN_BOX_PX = 2
 AUTOLABEL_BATCH = 50
@@ -565,11 +566,26 @@ class EvaluationCreate(BaseModel):
 
 
 class AutolabelCreate(BaseModel):
+    """Batch form: camera_id / include_auto_drafts (drafts are written). Single-image form: image_ids +
+    apply=false (detections are only returned in dataset_summary.results). Mixing the two is a 422."""
     model_config = ConfigDict(extra='forbid')
     model_id: str = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
     camera_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=CAMERA_ID)
     conf: float = Field(default=0.35, ge=0.1, le=0.9, allow_inf_nan=False)
     include_auto_drafts: bool = False
+    image_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=AUTOLABEL_SUGGEST_MAX_IMAGES)
+    apply: bool | None = None
+
+    @model_validator(mode='after')
+    def one_form_only(self):
+        if self.image_ids is not None:
+            if self.apply is not False or self.camera_id is not None or self.include_auto_drafts:
+                raise ValueError('image_ids requires apply=false and no camera_id/include_auto_drafts')
+            if len({str(i) for i in self.image_ids}) != len(self.image_ids):
+                raise ValueError('image_ids must be unique')
+        elif self.apply is False:
+            raise ValueError('apply=false needs image_ids')
+        return self
 
 
 class AutolabelBox(BaseModel):
@@ -1246,8 +1262,16 @@ def create_autolabel(request: Request, body: AutolabelCreate):
             raise HTTPException(409, 'The selected model has no stored best.pt.')
         if body.camera_id and session.get(Camera, body.camera_id) is None:
             raise HTTPException(404, 'Camera not found')
-        eligible, _ = autolabel_plan(session, body.camera_id, body.include_auto_drafts)
-        targets = [{'id': image.id, 'revision': image.revision} for image in eligible[:AUTOLABEL_MAX_IMAGES]]
+        suggest = body.image_ids is not None
+        if suggest:
+            # Editor request: any existing image (reviewed too); the result is returned, never written.
+            for image_id in body.image_ids:
+                if session.get(DatasetImage, str(image_id)) is None:
+                    raise HTTPException(404, 'Dataset image not found')
+            targets = [{'id': str(image_id)} for image_id in body.image_ids]
+        else:
+            eligible, _ = autolabel_plan(session, body.camera_id, body.include_auto_drafts)
+            targets = [{'id': image.id, 'revision': image.revision} for image in eligible[:AUTOLABEL_MAX_IMAGES]]
         label, class_mode = info['label'], model.class_mode or 'coco80'
     if not targets:
         raise HTTPException(422, NO_PENDING_IMAGES)
@@ -1256,13 +1280,15 @@ def create_autolabel(request: Request, body: AutolabelCreate):
     blocker = svc.gpu_check(worker, 640, 1)
     if blocker:
         raise HTTPException(503 if not worker['online'] else 409, blocker)
-    job_config = {'kind': 'autolabel', 'imgsz': 640, 'conf': body.conf, 'class_mode': class_mode,
+    job_config = {'kind': 'autolabel', 'apply': not suggest, 'imgsz': 640, 'conf': body.conf, 'class_mode': class_mode,
                   'camera_id': body.camera_id, 'include_auto_drafts': body.include_auto_drafts, 'device': 'gpu',
                   'targets': targets, 'required_free_mib': required_free_mib(config, 640, 1),
                   'estimated_training_mib': estimate_vram_mib(640, 1)}
-    summary = {'kind': 'autolabel', 'camera_id': body.camera_id, 'model_label': label, 'conf': body.conf,
-               'include_auto_drafts': body.include_auto_drafts, 'total': len(targets), 'processed': 0,
-               'labeled': 0, 'boxes': 0, 'no_detections': 0, 'skipped_changed': 0}
+    summary = {'kind': 'autolabel', 'apply': not suggest, 'camera_id': body.camera_id, 'model_label': label,
+               'conf': body.conf, 'include_auto_drafts': body.include_auto_drafts, 'total': len(targets),
+               'processed': 0, 'labeled': 0, 'boxes': 0, 'no_detections': 0, 'skipped_changed': 0}
+    if suggest:
+        summary['results'] = []
     try:
         with request.app.state.sessions.begin() as session:
             svc.expire_stale(session)
@@ -1555,14 +1581,28 @@ def worker_autolabels(request: Request, job_id: UUID, body: AutolabelResults):
             raise HTTPException(409, 'Job already finished')
         if job_kind(job) != 'autolabel':
             raise HTTPException(409, 'Not an auto-label job')
-        targets = {t['id']: t['revision'] for t in job.config.get('targets') or []}
+        targets = {t['id']: t.get('revision') for t in job.config.get('targets') or []}
         include = bool(job.config.get('include_auto_drafts'))
+        apply = job.config.get('apply', True) is not False
         summary = dict(job.dataset_summary or {})
         counts = {k: int(summary.get(k) or 0) for k in ('processed', 'labeled', 'boxes', 'no_detections', 'skipped_changed')}
+        suggestions = list(summary.get('results') or [])
         now = utcnow()
         for result in body.results:
             image_id = str(result.image_id)
             counts['processed'] += 1
+            if not apply:
+                # Suggestion job: the image row is read only; boxes go back to the editor via the summary.
+                image = session.get(DatasetImage, image_id) if image_id in targets else None
+                if image is None:
+                    counts['skipped_changed'] += 1
+                    continue
+                boxes = [{k: box[k] for k in ('x', 'y', 'width', 'height', 'score')}
+                         for box in clip_auto_boxes(result.boxes, image.width, image.height)]
+                suggestions.append({'image_id': image_id, 'boxes': boxes})
+                counts['labeled' if boxes else 'no_detections'] += 1
+                counts['boxes'] += len(boxes)
+                continue
             image = session.get(DatasetImage, image_id, with_for_update=True) if image_id in targets else None
             if image is None or image.revision != targets[image_id] or not autolabel_eligible(image, include):
                 counts['skipped_changed'] += 1
@@ -1578,6 +1618,8 @@ def worker_autolabels(request: Request, job_id: UUID, body: AutolabelResults):
             counts['boxes'] += len(boxes)
         total = max(1, int(summary.get('total') or len(targets)))
         summary.update(counts)
+        if not apply:
+            summary['results'] = suggestions
         job.dataset_summary = summary
         job.progress = round(min(counts['processed'] / total, 1.0), 4)
         job.heartbeat_at = now

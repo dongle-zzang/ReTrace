@@ -86,6 +86,10 @@ export에 들어간다. 계약과 안전 경계:
   `2 car`, `5 bus`, `7 truck` 검출을 모두 데이터셋 `0`으로 합친다(운영이 세 종류를 한 차량 class로 쓰는 것과
   같다, [training/README.md](../training/README.md)). `single` 모델은 class 0 그대로. NMS는 Ultralytics 기본값,
   conf는 0.1~0.9(기본 0.35), imgsz 640, batch 1.
+- **단일 이미지 제안**: 편집 화면의 "이 이미지 자동 라벨링"은 같은 `POST /api/training/autolabels`에 `{model_id, conf, image_ids: [<uuid>], apply: false}`를
+  보낸다(최대 20장, reviewed 이미지도 가능). worker 추론은 같지만 Backend는 이미지 row를 바꾸지 않고(boxes/status/revision 불변) clip·2px 제거·300개
+  제한을 거친 박스를 job의 `dataset_summary.results`로 돌려주며, 프론트가 `GET /api/training/jobs/{id}`를 polling해 `completed` 후 편집 중 초안에 합친다.
+  저장은 여전히 사람이 한다. 상세 계약은 [docs/training.md §4-3](training.md#4-3-자동-라벨링-job-configkind--autolabel).
 - `/classes`의 `auto_labels_available`은 Backend에 `TRAINING_ADMIN_TOKEN`과 `TRAINING_WORKER_TOKEN`이 모두
   설정돼 있을 때 true다. 시작(POST)은 admin 토큰이 필요하고, 진행 상황은 `/api/training/status`의
   `active_job`과 `/api/training/jobs/{id}`로 본다(`/api/training/jobs` 목록에는 나오지 않는다).
