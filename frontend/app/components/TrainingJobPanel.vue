@@ -83,17 +83,17 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
     <div class="flex flex-wrap items-start gap-3">
       <div class="mr-auto min-w-0 space-y-1">
         <div class="flex flex-wrap items-center gap-2">
-          <h3 class="text-base font-semibold">{{ job.name }}</h3>
+          <h3 class="text-lg font-semibold">{{ job.name }}</h3>
           <Badge variant="outline" :class="['px-2 py-0.5', statusClass]">{{ t(JOB_STATUS_LABELS[job.status]) }}</Badge>
           <Badge v-if="job.config.smoke" variant="outline" class="px-2 py-0.5 text-muted-foreground">{{ t('Smoke test') }}</Badge>
           <Badge v-if="deploying" variant="outline" class="border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-amber-200">{{ t('Model deployment') }}</Badge>
           <Badge v-if="evaluating" variant="outline" class="border-violet-400/25 bg-violet-400/10 px-2 py-0.5 text-violet-300">{{ t('New-image evaluation') }}</Badge>
           <Badge v-else-if="trainAll" variant="outline" class="border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-sky-300">{{ t(TRAIN_MODE_LABELS.all) }}</Badge>
         </div>
-        <p v-if="evaluating" class="text-xs text-muted-foreground">
+        <p v-if="evaluating" class="text-sm text-muted-foreground">
           {{ t('{count} new images', { count: job.config.eval_images ?? 0 }) }} · {{ job.config.imgsz }} px · dataset_{{ job.export_id.slice(0, 8) }}<template v-if="job.dataset_summary.excluded"> · {{ t('left out {trained} trained-on and {session} same-session images', { trained: job.dataset_summary.excluded.trained, session: job.dataset_summary.excluded.same_session }) }}</template>
         </p>
-        <p v-else-if="!deploying" class="text-xs text-muted-foreground">
+        <p v-else-if="!deploying" class="text-sm text-muted-foreground">
           {{ t(CLASS_MODE_LABELS[job.config.class_mode]) }} · {{ job.config.epochs }} {{ t('epochs') }} · {{ job.config.imgsz }} px · {{ t('batch') }} {{ job.config.batch }} · {{ t('seed') }} {{ job.config.seed }} · dataset_{{ job.export_id.slice(0, 8) }}
         </p>
         <p v-if="active" class="flex items-center gap-1.5 text-sm" role="status"><LoaderCircle class="size-4 animate-spin text-primary" />{{ t(phaseText) }}</p>
@@ -110,11 +110,11 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
     </div>
     <DeploymentReport v-if="deploymentResult && !active" :report="deploymentResult" />
 
-    <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-xs text-sky-200">{{ t('Train All: train, val and test images all trained the weights, so there is no independent validation or test in this run. Early stopping is off, the final epoch is the result (best.pt = last.pt), and scores on training images are not shown.') }}</p>
-    <p v-if="(job.dataset_summary.test_overlap ?? 0) > 0" class="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">{{ t('{count} test image(s) were already used to train the base model, so this test is not independent.', { count: job.dataset_summary.test_overlap ?? 0 }) }}</p>
+    <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-sm leading-relaxed text-sky-200">{{ t('Train All: train, val and test images all trained the weights, so there is no independent validation or test in this run. Early stopping is off, the final epoch is the result (best.pt = last.pt), and scores on training images are not shown.') }}</p>
+    <p v-if="(job.dataset_summary.test_overlap ?? 0) > 0" class="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm leading-relaxed text-amber-200">{{ t('{count} test image(s) were already used to train the base model, so this test is not independent.', { count: job.dataset_summary.test_overlap ?? 0 }) }}</p>
 
     <div v-if="!evaluating && !deploying" class="space-y-2">
-      <div class="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+      <div class="flex flex-wrap justify-between gap-2 text-sm text-muted-foreground">
         <span>{{ t('Epoch') }} <span class="font-mono tabular-nums text-foreground">{{ job.epoch }} / {{ job.epochs }}</span><template v-if="job.live?.batches && active"> · {{ t('batch') }} {{ job.live.batch }}/{{ job.live.batches }}</template></span>
         <span>{{ Math.round(job.progress * 100) }}% · {{ t('elapsed {duration}', { duration: formatDuration(job.elapsed_seconds) }) }}</span>
       </div>
@@ -124,15 +124,15 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
     </div>
 
     <dl v-if="!evaluating && !deploying" :class="['grid grid-cols-2 gap-2', trainAll ? 'sm:grid-cols-2' : 'sm:grid-cols-3 xl:grid-cols-6']">
-      <div v-for="tile in tiles" :key="tile.label" class="rounded-xl border border-white/10 bg-black/10 p-3"><dt class="text-[0.7rem] text-muted-foreground">{{ tile.label }}</dt><dd class="font-mono text-lg tabular-nums">{{ tile.value }}</dd></div>
+      <div v-for="tile in tiles" :key="tile.label" class="rounded-xl border border-white/10 bg-black/10 p-3"><dt class="text-xs text-muted-foreground">{{ tile.label }}</dt><dd class="mt-1 font-mono text-xl font-semibold tabular-nums">{{ tile.value }}</dd></div>
     </dl>
 
-    <div v-if="!evaluating && !deploying" class="grid gap-2 text-xs sm:grid-cols-3">
-      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('GPU memory (training process)') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.training_mib) }}</span><span v-if="job.live?.torch_reserved_mib" class="text-muted-foreground"> · torch {{ formatMib(job.live.torch_reserved_mib) }}</span></p>
-      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('GPU total') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.used_mib) }} / {{ formatMib(job.gpu?.total_mib) }} · {{ job.gpu?.util ?? '–' }}%</span></p>
-      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="block text-muted-foreground">{{ t('Production FPS vs. before training') }}</span><span class="font-mono tabular-nums">{{ guardSample?.fps_ratio != null ? `${Math.round(guardSample.fps_ratio * 100)}%` : '–' }}</span><span class="text-muted-foreground"> · {{ guardSample?.total_fps ?? '–' }} fps · {{ t('max frame age') }} {{ guardSample?.max_frame_age ?? '–' }} s</span></p>
+    <div v-if="!evaluating && !deploying" class="grid gap-2 text-sm sm:grid-cols-3">
+      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="mb-0.5 block text-xs text-muted-foreground">{{ t('GPU memory (training process)') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.training_mib) }}</span><span v-if="job.live?.torch_reserved_mib" class="text-muted-foreground"> · torch {{ formatMib(job.live.torch_reserved_mib) }}</span></p>
+      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="mb-0.5 block text-xs text-muted-foreground">{{ t('GPU total') }}</span><span class="font-mono tabular-nums">{{ formatMib(job.gpu?.used_mib) }} / {{ formatMib(job.gpu?.total_mib) }} · {{ job.gpu?.util ?? '–' }}%</span></p>
+      <p class="rounded-xl border border-white/10 bg-black/10 p-3"><span class="mb-0.5 block text-xs text-muted-foreground">{{ t('Production FPS vs. before training') }}</span><span class="font-mono tabular-nums">{{ guardSample?.fps_ratio != null ? `${Math.round(guardSample.fps_ratio * 100)}%` : '–' }}</span><span class="text-muted-foreground"> · {{ guardSample?.total_fps ?? '–' }} fps · {{ t('max frame age') }} {{ guardSample?.max_frame_age ?? '–' }} s</span></p>
     </div>
-    <p v-if="job.monitor?.last_reasons?.length && active" class="text-xs text-amber-200">{{ t('Protection warning') }} ({{ job.monitor.violations }}/{{ job.monitor.limits?.guard_samples }}): {{ job.monitor.last_reasons.map(reason => t(reason)).join('; ') }}</p>
+    <p v-if="job.monitor?.last_reasons?.length && active" class="text-sm text-amber-200">{{ t('Protection warning') }} ({{ job.monitor.violations }}/{{ job.monitor.limits?.guard_samples }}): {{ job.monitor.last_reasons.map(reason => t(reason)).join('; ') }}</p>
 
     <div v-if="!evaluating && !deploying" :class="['grid gap-3', trainAll ? '' : 'lg:grid-cols-2']">
       <TrainingChart :title="t('Loss')" :points="job.metrics" :series="lossSeries" />
@@ -141,24 +141,24 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
 
     <section v-if="job.status === 'completed' && !deploying" class="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4" :aria-label="t('Results')">
       <div class="flex flex-wrap items-center gap-2">
-        <h3 class="mr-auto text-sm font-semibold">{{ t('Results') }}</h3>
-        <span v-if="job.best && !trainAll && !evaluating" class="text-xs text-muted-foreground">{{ t('Best validation epoch {epoch}', { epoch: job.best.epoch }) }} · mAP50-95 {{ formatMetric(job.best.map50_95) }}</span>
-        <span v-else-if="trainAll" class="text-xs text-muted-foreground">{{ t('Final epoch {epoch} weights', { epoch: job.epoch }) }}</span>
+        <h3 class="mr-auto text-base font-semibold">{{ t('Results') }}</h3>
+        <span v-if="job.best && !trainAll && !evaluating" class="text-sm text-muted-foreground">{{ t('Best validation epoch {epoch}', { epoch: job.best.epoch }) }} · mAP50-95 {{ formatMetric(job.best.map50_95) }}</span>
+        <span v-else-if="trainAll" class="text-sm text-muted-foreground">{{ t('Final epoch {epoch} weights', { epoch: job.epoch }) }}</span>
       </div>
       <div v-if="trainAll" class="flex flex-wrap items-center gap-3 rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-sm text-sky-200"><span class="min-w-0 flex-1">{{ t('No independent score: every image of this dataset was used for training. Evaluate the model on newly captured CCTV images.') }}</span><Button v-if="job.model_id" size="sm" variant="outline" @click="emit('evaluate', job.model_id)">{{ t('Evaluate on new images') }}</Button></div>
       <div v-else-if="job.evaluation?.status !== 'completed'" class="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-200">{{ t('Test comparison not available:') }} {{ job.evaluation?.reason ?? t('not run') }}</div>
       <template v-else>
         <div :class="['rounded-xl border p-3 text-sm', job.evaluation.conclusive ? 'border-primary/20 bg-primary/5 text-primary' : 'border-amber-300/20 bg-amber-300/5 text-amber-200']">
           <p class="font-medium">{{ job.evaluation.conclusive ? t('Independent test set is large enough to compare.') : t('Not enough independent test data: do not treat the difference as a confirmed improvement.') }}</p>
-          <ul class="mt-1 list-disc space-y-0.5 pl-5 text-xs opacity-90"><li v-for="caveat in job.evaluation.caveats ?? []" :key="caveat">{{ t(caveat) }}</li></ul>
+          <ul class="mt-1.5 list-disc space-y-0.5 pl-5 text-[0.8125rem] opacity-90"><li v-for="caveat in job.evaluation.caveats ?? []" :key="caveat">{{ t(caveat) }}</li></ul>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[40rem] text-left text-xs">
-            <caption class="pb-2 text-left text-muted-foreground">{{ evaluating ? t('New CCTV images ({images} images, {boxes} boxes) · class-agnostic vehicle · conf {conf}', captionParams) : t('Test split ({images} images, {boxes} boxes) · class-agnostic vehicle · conf {conf}', captionParams) }}</caption>
-            <thead class="text-muted-foreground"><tr><th class="py-1.5 pr-3 font-medium">{{ t('Model') }}</th><th class="pr-3 font-medium">mAP50</th><th class="pr-3 font-medium">mAP50-95</th><th class="pr-3 font-medium">{{ t('Precision') }}</th><th class="pr-3 font-medium">{{ t('Recall') }}</th><th class="pr-3 font-medium">TP</th><th class="pr-3 font-medium">FP</th><th class="font-medium">{{ t('Missed') }}</th></tr></thead>
+          <table class="w-full min-w-[40rem] text-left text-sm">
+            <caption class="pb-2 text-left text-xs text-muted-foreground">{{ evaluating ? t('New CCTV images ({images} images, {boxes} boxes) · class-agnostic vehicle · conf {conf}', captionParams) : t('Test split ({images} images, {boxes} boxes) · class-agnostic vehicle · conf {conf}', captionParams) }}</caption>
+            <thead class="text-xs text-muted-foreground"><tr><th class="py-2 pr-3 font-medium">{{ t('Model') }}</th><th class="pr-3 font-medium">mAP50</th><th class="pr-3 font-medium">mAP50-95</th><th class="pr-3 font-medium">{{ t('Precision') }}</th><th class="pr-3 font-medium">{{ t('Recall') }}</th><th class="pr-3 font-medium">TP</th><th class="pr-3 font-medium">FP</th><th class="font-medium">{{ t('Missed') }}</th></tr></thead>
             <tbody class="font-mono tabular-nums">
               <tr v-for="row in evalRows" :key="row.key" class="border-t border-white/5">
-                <td class="py-1.5 pr-3 font-sans">{{ row.label }}</td>
+                <td class="py-2 pr-3 font-sans">{{ row.label }}</td>
                 <td class="pr-3">{{ formatMetric(row.value.vehicle?.mAP50) }} <span v-if="row.key !== 'baseline'" class="text-muted-foreground">{{ deltaLabel(row.value.vehicle?.mAP50, baselineMetrics?.vehicle?.mAP50) }}</span></td>
                 <td class="pr-3">{{ formatMetric(row.value.vehicle?.['mAP50-95']) }} <span v-if="row.key !== 'baseline'" class="text-muted-foreground">{{ deltaLabel(row.value.vehicle?.['mAP50-95'], baselineMetrics?.vehicle?.['mAP50-95']) }}</span></td>
                 <td class="pr-3">{{ formatMetric(op(row.value).precision) }}</td><td class="pr-3">{{ formatMetric(op(row.value).recall) }}</td>
@@ -168,10 +168,10 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
           </table>
         </div>
         <div v-if="perClass" class="overflow-x-auto">
-          <table class="w-full min-w-[28rem] text-left text-xs">
-            <caption class="pb-2 text-left text-muted-foreground">{{ evaluating ? t('Evaluated model, per class (new images)') : t('New model, per class (test)') }}</caption>
-            <thead class="text-muted-foreground"><tr><th class="py-1.5 pr-3 font-medium">{{ t('Class') }}</th><th class="pr-3 font-medium">{{ t('Precision') }}</th><th class="pr-3 font-medium">{{ t('Recall') }}</th><th class="pr-3 font-medium">mAP50</th><th class="font-medium">mAP50-95</th></tr></thead>
-            <tbody class="font-mono tabular-nums"><tr v-for="(value, name) in perClass" :key="name" class="border-t border-white/5"><td class="py-1.5 pr-3 font-sans">{{ name }}</td><td class="pr-3">{{ formatMetric(value.precision) }}</td><td class="pr-3">{{ formatMetric(value.recall) }}</td><td class="pr-3">{{ formatMetric(value.mAP50) }}</td><td>{{ formatMetric(value['mAP50-95']) }}</td></tr></tbody>
+          <table class="w-full min-w-[28rem] text-left text-sm">
+            <caption class="pb-2 text-left text-xs text-muted-foreground">{{ evaluating ? t('Evaluated model, per class (new images)') : t('New model, per class (test)') }}</caption>
+            <thead class="text-xs text-muted-foreground"><tr><th class="py-2 pr-3 font-medium">{{ t('Class') }}</th><th class="pr-3 font-medium">{{ t('Precision') }}</th><th class="pr-3 font-medium">{{ t('Recall') }}</th><th class="pr-3 font-medium">mAP50</th><th class="font-medium">mAP50-95</th></tr></thead>
+            <tbody class="font-mono tabular-nums"><tr v-for="(value, name) in perClass" :key="name" class="border-t border-white/5"><td class="py-2 pr-3 font-sans">{{ name }}</td><td class="pr-3">{{ formatMetric(value.precision) }}</td><td class="pr-3">{{ formatMetric(value.recall) }}</td><td class="pr-3">{{ formatMetric(value.mAP50) }}</td><td>{{ formatMetric(value['mAP50-95']) }}</td></tr></tbody>
           </table>
         </div>
         <TrainingComparison v-if="job.has_comparison" :job-id="job.id" :new-images="evaluating" />
@@ -179,13 +179,13 @@ const downloads = computed(() => Object.entries(props.job.artifacts ?? {}).filte
     </section>
 
     <div v-if="downloads.length" class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-muted-foreground">{{ t('Files') }}</span>
+      <span class="text-sm text-muted-foreground">{{ t('Files') }}</span>
       <Button v-for="[name, meta] in downloads" :key="name" size="sm" variant="outline" :disabled="!canControl" :title="canControl ? `${name} · ${(meta.size / 1048576).toFixed(1)} MiB` : t('Unlock training control to download')" @click="emit('download', name, meta.download_url)"><Download /> {{ name }}</Button>
     </div>
 
     <details class="group rounded-xl border border-white/10 bg-black/20" :open="active || job.status === 'failed'">
-      <summary class="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">{{ t('Training log ({count} recent lines)', { count: job.log_tail.length }) }}</summary>
-      <pre ref="logElement" class="max-h-72 overflow-auto px-3 pb-3 font-mono text-[0.7rem] leading-relaxed whitespace-pre-wrap text-muted-foreground">{{ job.log_tail.join('\n') || t('No log output yet.') }}</pre>
+      <summary class="cursor-pointer px-3 py-2.5 text-sm font-medium text-foreground/90">{{ t('Training log ({count} recent lines)', { count: job.log_tail.length }) }}</summary>
+      <pre ref="logElement" class="max-h-72 overflow-auto px-3 pb-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">{{ job.log_tail.join('\n') || t('No log output yet.') }}</pre>
     </details>
   </div>
 </template>
