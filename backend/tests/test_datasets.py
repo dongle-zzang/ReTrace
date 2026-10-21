@@ -95,10 +95,23 @@ def test_clean_capture_files_metadata_filters_duplicates_and_delete(dataset):
     assert client.post('/api/datasets/capture', json={'camera_id': 'first'}).status_code == 503
 
 
-@pytest.mark.parametrize('bad', [dict(class_id=3), dict(x=-1), dict(width=0), dict(x=180,width=40), dict(source='auto')])
+@pytest.mark.parametrize('bad', [dict(class_id=3), dict(x=-1), dict(width=0), dict(x=180,width=40), dict(source='robot'), dict(score=1.5), dict(source='auto', score=-0.1)])
 def test_box_validation(dataset, bad):
     client = dataset[0]
     assert save(client, capture(client), [box(**bad)]).status_code == 422
+
+
+def test_box_source_and_score_are_kept_only_for_auto_drafts(dataset):
+    client = dataset[0]
+    assert client.get('/api/datasets/classes').json()['auto_labels_available'] is False  # no training tokens
+    image = capture(client)
+    saved = save(client, image, [box(score=0.9), box(x=60, source='auto', score=0.4321)], status='in_progress')
+    assert saved.status_code == 200, saved.text
+    assert 'score' not in saved.json()['boxes'][0] and saved.json()['boxes'][0]['source'] == 'manual'
+    assert saved.json()['boxes'][1] == {**saved.json()['boxes'][1], 'source': 'auto', 'score': 0.4321}
+    assert saved.json()['box_count'] == 2 and saved.json()['auto_box_count'] == 1
+    listed = client.get('/api/datasets/images').json()['items'][0]
+    assert listed['auto_box_count'] == 1
 
 
 def test_revision_empty_review_and_persistence(dataset):

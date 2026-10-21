@@ -89,6 +89,26 @@ Path(a.out, "report.md").write_text("# report")
 """
 
 
+FAKE_AUTOLABEL = """
+import argparse, json, sys
+from pathlib import Path
+p = argparse.ArgumentParser()
+for name in ("--weights", "--images", "--out", "--imgsz", "--conf", "--device", "--class-mode", "--progress-file"):
+    p.add_argument(name)
+a = p.parse_args()
+Path(a.out).parent.joinpath("autolabel_argv.json").write_text(json.dumps(sys.argv[1:]))
+paths = [Path(l.strip()) for l in Path(a.images).read_text().splitlines() if l.strip()]
+with open(a.out, "a") as out:
+    for i, path in enumerate(paths):
+        if not path.is_file():
+            sys.exit(3)
+        boxes = [] if i == 0 else [{"x": 5, "y": 5, "width": 30, "height": 20, "score": 0.9}, {"x": 70, "y": 50, "width": 50, "height": 50, "score": 0.5}]
+        out.write(json.dumps({"image_id": path.stem, "boxes": boxes}) + "\\n")
+        out.flush()
+        Path(a.progress_file).write_text(json.dumps({"done": i + 1, "total": len(paths)}))
+"""
+
+
 def zip_bytes(entries, symlink=None):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -146,6 +166,21 @@ class SafeExtractTests(unittest.TestCase):
         for ids in ([], ["../a"], [1], "x"):
             with self.assertRaises(worker.WorkerError):
                 worker.validated_config({**evaluate, "config": {**evaluate["config"], "eval_image_ids": ids}})
+
+    def test_validated_config_accepts_autolabel_jobs(self):
+        ids = [str(uuid4()) for _ in range(3)]
+        spec = {"id": str(uuid4()), "config": {"kind": "autolabel", "imgsz": 640, "conf": 0.35, "class_mode": "coco80",
+                                               "targets": [{"id": i, "revision": 1} for i in ids]}}
+        config = worker.validated_config(spec)
+        self.assertEqual(config, {"kind": "autolabel", "conf": 0.35, "imgsz": 640, "class_mode": "coco80", "targets": ids})
+        suggest = {**spec, "config": {**spec["config"], "apply": False, "targets": [{"id": ids[0]}]}}
+        self.assertEqual(worker.validated_config(suggest)["targets"], ids[:1])  # editor suggestions: no revision
+        for change in ({"conf": "0.35"}, {"conf": 0.05}, {"conf": 0.95}, {"conf": True}, {"imgsz": 960},
+                       {"class_mode": "multi"}, {"targets": []}, {"targets": [{"id": "../x"}]}, {"targets": [ids[0]]},
+                       {"targets": [{"id": ids[0]}, {"id": ids[0]}]},
+                       {"targets": [{"id": str(uuid4())} for _ in range(worker.AUTOLABEL_MAX_IMAGES + 1)]}):
+            with self.assertRaises(worker.WorkerError):
+                worker.validated_config({**spec, "config": {**spec["config"], **change}})
 
     def test_failure_classification(self):
         self.assertEqual(worker.classify_failure("CUDA out of memory", 1)[0], "gpu_oom")
@@ -302,6 +337,7 @@ class WorkerBackendTests(unittest.TestCase):
         (self.root / "weights" / "yolo11m.pt").write_bytes(b"coco-weights")
         (self.root / "train.py").write_text(FAKE_TRAIN)
         (self.root / "evaluate.py").write_text(FAKE_EVALUATE)
+        (self.root / "autolabel.py").write_text(FAKE_AUTOLABEL)
         bin_dir = tmp / "bin"
         bin_dir.mkdir()
         (bin_dir / "nvidia-smi").write_text(FAKE_SMI)
@@ -401,6 +437,40 @@ class WorkerBackendTests(unittest.TestCase):
         self.assertTrue(argv["model"][0].endswith(f"{model['job_id']}/train/weights/best.pt"))
         tuned = next(m for m in self.client.get("/api/training/models").json() if m["kind"] == "finetuned")
         self.assertEqual(tuned["metrics"]["new_images"][-1]["job_id"], spec["id"])
+
+    def test_autolabel_job_downloads_images_and_stores_drafts_in_batches(self):
+        pending = []
+        for hour in range(10, 13):
+            self.state["t"] = datetime(2026, 10, 2, tzinfo=timezone.utc) + timedelta(hours=hour)
+            pending.append(self.client.post("/api/datasets/capture", json={"camera_id": "first"}).json())
+        response = self.client.post("/api/training/autolabels", headers={"Authorization": "Bearer " + "a" * 32},
+                                    json={"model_id": "yolo11m-coco", "conf": 0.4})
+        self.assertEqual(response.status_code, 201, response.text)
+        status, spec = self.worker.backend.request("POST", "/api/training/worker/claim", {"worker_id": self.worker.worker_id})
+        self.assertEqual(status, 200)
+        self.client.delete(f"/api/datasets/images/{pending[2]['id']}")  # deleted meanwhile: skipped, not fatal
+        with unittest.mock.patch.object(worker, "AUTOLABEL_BATCH", 1):
+            self.worker.run_job(spec)
+        job = self.job(spec["id"])
+        self.assertEqual(job["status"], "completed", job)
+        self.assertEqual(job["dataset_summary"]["total"], 3)
+        self.assertEqual({k: job["dataset_summary"][k] for k in ("processed", "labeled", "boxes", "no_detections", "skipped_changed")},
+                         {"processed": 2, "labeled": 1, "boxes": 2, "no_detections": 1, "skipped_changed": 0})
+        self.assertEqual(job["run_info"]["missing_images"], 1)
+        self.assertEqual(job["progress"], 1.0)
+        argv = json.loads((self.root / "runs" / "web" / spec["id"] / "autolabel_argv.json").read_text())
+        self.assertEqual(argv[argv.index("--conf") + 1], "0.400")
+        self.assertEqual(argv[argv.index("--class-mode") + 1], "coco80")
+        self.assertEqual(argv[argv.index("--weights") + 1], str(self.root / "weights" / "yolo11m.pt"))
+        first = self.client.get(f"/api/datasets/images/{pending[0]['id']}").json()
+        self.assertEqual((first["status"], first["revision"], first["boxes"]), ("pending", 1, []))
+        second = self.client.get(f"/api/datasets/images/{pending[1]['id']}").json()
+        self.assertEqual((second["status"], second["revision"], second["auto_box_count"]), ("in_progress", 2, 2))
+        self.assertEqual([b["score"] for b in second["boxes"]], [0.9, 0.5])
+        self.assertTrue(all(b["x"] + b["width"] <= 80 and b["y"] + b["height"] <= 60 for b in second["boxes"]))
+        self.assertEqual(self.client.get("/api/training/jobs").json(), [])
+        self.assertEqual(len(self.client.get("/api/training/models").json()), 1)
+        self.assertEqual(sum(self.client.get("/api/datasets/exports").json()[0]["manifest"]["counts"].values()), 4)
 
     def test_stop_request_is_graceful_and_keeps_checkpoints(self):
         spec = self.start_job(epochs=20)

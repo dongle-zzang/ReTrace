@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -28,7 +29,7 @@ import zipfile
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -58,6 +59,18 @@ TRAIN_MODES = {
 }
 MIN_EVAL_IMAGES = 10
 MAX_EVAL_IMAGES = 5000
+# Auto-label jobs (config.kind = 'autolabel'): pending images get draft boxes from a registered model.
+AUTOLABEL_MAX_IMAGES = 500
+AUTOLABEL_SUGGEST_MAX_IMAGES = 20  # apply=false: suggestions for the editor, nothing written to images
+AUTOLABEL_MAX_BOXES = 300
+AUTOLABEL_MIN_BOX_PX = 2
+AUTOLABEL_BATCH = 50
+# Exact sentences: the frontend maps them to translations.
+NO_AUTOLABEL_MODEL = 'No auto-label model is available yet.'
+WORKER_OFFLINE = 'The training worker is offline.'
+ANOTHER_JOB_RUNNING = 'Another training job is running.'
+NO_PENDING_IMAGES = 'No unlabeled pending images.'
+CAMERA_ID = r'^[A-Za-z0-9_-]+$'
 # Archive inspection limits (exports hold at most 5000 images + labels).
 MAX_MEMBERS = 12_000
 MAX_MEMBER_BYTES = 64 * 2**20
@@ -382,11 +395,14 @@ def evaluation_summary(evaluation, dataset_summary):
 
 
 def public_config(config):
-    """Job config for the web: the evaluation image list is replaced by its size."""
+    """Job config for the web: evaluation/auto-label image lists are replaced by their size."""
     config = dict(config or {})
     ids = config.pop('eval_image_ids', None)
     if ids is not None:
         config['eval_images'] = len(ids)
+    targets = config.pop('targets', None)
+    if targets is not None:
+        config['images'] = len(targets)
     config.setdefault('kind', 'train')
     if config['kind'] == 'train':
         config.setdefault('train_mode', 'standard')
@@ -397,9 +413,74 @@ def is_train_all(job):
     return (job.config or {}).get('train_mode') == 'all'
 
 
+def job_kind(job):
+    return (job.config or {}).get('kind', 'train')
+
+
+# ----- auto labelling -------------------------------------------------------------------
+def auto_draft_only(image):
+    """At least one box and every box is an untouched auto-label draft."""
+    boxes = image.boxes or []
+    return bool(boxes) and all(isinstance(box, dict) and box.get('source') == 'auto' for box in boxes)
+
+
+def autolabel_eligible(image, include_auto_drafts):
+    """Only images nobody labelled: pending without boxes, optionally earlier untouched auto drafts.
+
+    Reviewed images, explicit empty reviews and anything with a manual box are never touched.
+    """
+    if image.status == 'reviewed' or image.reviewed_empty:
+        return False
+    if image.status == 'pending':
+        return not image.boxes
+    return bool(include_auto_drafts) and image.status == 'in_progress' and auto_draft_only(image)
+
+
+def autolabel_plan(session, camera_id, include_auto_drafts):
+    """Eligible images (oldest first) and why the others are skipped, within one camera or all."""
+    query = select(DatasetImage).order_by(DatasetImage.captured_at, DatasetImage.id)
+    if camera_id:
+        query = query.where(DatasetImage.camera_id == camera_id)
+    eligible, skipped = [], {'reviewed': 0, 'labeled': 0, 'auto_drafts': 0}
+    for image in session.scalars(query):
+        if autolabel_eligible(image, include_auto_drafts):
+            eligible.append(image)
+        elif image.status == 'reviewed':
+            skipped['reviewed'] += 1
+        elif image.status == 'in_progress' and auto_draft_only(image):
+            skipped['auto_drafts'] += 1
+        else:
+            skipped['labeled'] += 1
+    return eligible, skipped
+
+
+def fit_extent(start, length, limit):
+    """Largest length (float arithmetic included) with start + length <= limit."""
+    while start + length > limit and length > 0:
+        length = math.nextafter(length, 0)
+    return length
+
+
+def clip_auto_boxes(boxes, width, height):
+    """Worker detections -> stored auto boxes: clipped to the image, tiny ones dropped, top scores first."""
+    kept = []
+    for box in boxes:
+        x1, y1 = min(max(0.0, round(box.x, 2)), float(width)), min(max(0.0, round(box.y, 2)), float(height))
+        x2 = min(float(width), round(box.x + box.width, 2))
+        y2 = min(float(height), round(box.y + box.height, 2))
+        w, h = fit_extent(x1, round(x2 - x1, 2), width), fit_extent(y1, round(y2 - y1, 2), height)
+        if w < AUTOLABEL_MIN_BOX_PX or h < AUTOLABEL_MIN_BOX_PX:
+            continue
+        kept.append({'id': str(uuid4()), 'class_id': 0, 'x': x1, 'y': y1, 'width': w, 'height': h,
+                     'source': 'auto', 'score': round(box.score, 3)})
+    kept.sort(key=lambda box: -box['score'])
+    return kept[:AUTOLABEL_MAX_BOXES]
+
+
 def job_out(job, detail=False):
     data = {'id': job.id, 'name': job.name, 'status': job.status, 'phase': job.phase, 'message': job.message,
-            'export_id': job.export_id, 'dataset_sha256': job.dataset_sha256, 'base_model_id': job.base_model_id,
+            'export_id': job.export_id or None, 'dataset_sha256': job.dataset_sha256 or None,
+            'base_model_id': job.base_model_id,
             'config': public_config(job.config), 'created_at': aware(job.created_at).isoformat(),
             'started_at': aware(job.started_at).isoformat() if job.started_at else None,
             'finished_at': aware(job.finished_at).isoformat() if job.finished_at else None,
@@ -482,6 +563,50 @@ class EvaluationCreate(BaseModel):
     model_id: str = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
     export_id: UUID
     acknowledge_limits: bool = False
+
+
+class AutolabelCreate(BaseModel):
+    """Batch form: camera_id / include_auto_drafts (drafts are written). Single-image form: image_ids +
+    apply=false (detections are only returned in dataset_summary.results). Mixing the two is a 422."""
+    model_config = ConfigDict(extra='forbid')
+    model_id: str = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$')
+    camera_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=CAMERA_ID)
+    conf: float = Field(default=0.35, ge=0.1, le=0.9, allow_inf_nan=False)
+    include_auto_drafts: bool = False
+    image_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=AUTOLABEL_SUGGEST_MAX_IMAGES)
+    apply: bool | None = None
+
+    @model_validator(mode='after')
+    def one_form_only(self):
+        if self.image_ids is not None:
+            if self.apply is not False or self.camera_id is not None or self.include_auto_drafts:
+                raise ValueError('image_ids requires apply=false and no camera_id/include_auto_drafts')
+            if len({str(i) for i in self.image_ids}) != len(self.image_ids):
+                raise ValueError('image_ids must be unique')
+        elif self.apply is False:
+            raise ValueError('apply=false needs image_ids')
+        return self
+
+
+class AutolabelBox(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    width: float = Field(allow_inf_nan=False)
+    height: float = Field(allow_inf_nan=False)
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
+class AutolabelResult(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    image_id: UUID
+    boxes: list[AutolabelBox] = Field(max_length=AUTOLABEL_MAX_BOXES)
+
+
+class AutolabelResults(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    worker_id: str = Field(min_length=1, max_length=96)
+    results: list[AutolabelResult] = Field(max_length=AUTOLABEL_BATCH)
 
 
 class Beat(BaseModel):
@@ -851,9 +976,18 @@ def dataset_check(request: Request, export_id: UUID, train_mode: Literal['standa
 
 @router.get('/jobs')
 def jobs(request: Request, limit: int = Query(30, ge=1, le=100)):
+    """Training history. Auto-label jobs are left out (they have no epochs/metrics); /datasets polls
+    them through /status active_job and /jobs/{id}."""
     with request.app.state.sessions.begin() as session:
         service(request).expire_stale(session)
-        return [job_out(job) for job in session.scalars(jobs_query().limit(limit))]
+        rows = []
+        for job in session.scalars(jobs_query()):
+            if job_kind(job) == 'autolabel':
+                continue
+            rows.append(job_out(job))
+            if len(rows) >= limit:
+                break
+        return rows
 
 
 @router.get('/jobs/{job_id}')
@@ -1090,6 +1224,85 @@ def create_evaluation(request: Request, body: EvaluationCreate):
         raise HTTPException(409, 'Another training job is already queued or running. Wait for it or stop it first.') from None
 
 
+@router.get('/autolabels/plan')
+def autolabel_plan_view(request: Request, model_id: str = Query(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.-]+$'),
+                        camera_id: str | None = Query(None, min_length=1, max_length=128, pattern=CAMERA_ID),
+                        include_auto_drafts: bool = False):
+    """How many unlabelled images an auto-label job would draft, and what currently blocks starting one."""
+    svc = service(request)
+    with request.app.state.sessions.begin() as session:
+        svc.expire_stale(session)
+        model = session.get(TrainingModel, model_id)
+        model_ok = model is not None and model_out(model)['status'] == 'available'
+        model_kind = model.kind if model else None
+        active = session.scalar(select(TrainingJob.id).where(TrainingJob.status.in_(ACTIVE_STATUSES)).limit(1)) is not None
+        eligible, skipped = autolabel_plan(session, camera_id, include_auto_drafts)
+    worker = svc.worker_state()
+    if model_kind == 'base' and worker['online'] and not (worker.get('base_weights') or {}).get('present'):
+        model_ok = False
+    blocker = (NO_AUTOLABEL_MODEL if not model_ok else WORKER_OFFLINE if not worker['online']
+               else ANOTHER_JOB_RUNNING if active else NO_PENDING_IMAGES if not eligible else None)
+    return {'model_id': model_id, 'camera_id': camera_id, 'include_auto_drafts': include_auto_drafts,
+            'eligible': len(eligible), 'skipped': skipped, 'max_images': AUTOLABEL_MAX_IMAGES,
+            'ready': blocker is None, 'blocker': blocker}
+
+
+@router.post('/autolabels', status_code=201)
+def create_autolabel(request: Request, body: AutolabelCreate):
+    """Queue a GPU job that drafts boxes on unlabelled pending images; a person still reviews each one."""
+    require_admin(request)
+    config, svc = request.app.state.config, service(request)
+    worker = svc.worker_state()
+    with request.app.state.sessions() as session:
+        model = session.get(TrainingModel, body.model_id)
+        if model is None:
+            raise HTTPException(404, 'Model not found')
+        info = model_out(model)
+        if info['status'] != 'available':
+            raise HTTPException(409, 'The selected model has no stored best.pt.')
+        if body.camera_id and session.get(Camera, body.camera_id) is None:
+            raise HTTPException(404, 'Camera not found')
+        suggest = body.image_ids is not None
+        if suggest:
+            # Editor request: any existing image (reviewed too); the result is returned, never written.
+            for image_id in body.image_ids:
+                if session.get(DatasetImage, str(image_id)) is None:
+                    raise HTTPException(404, 'Dataset image not found')
+            targets = [{'id': str(image_id)} for image_id in body.image_ids]
+        else:
+            eligible, _ = autolabel_plan(session, body.camera_id, body.include_auto_drafts)
+            targets = [{'id': image.id, 'revision': image.revision} for image in eligible[:AUTOLABEL_MAX_IMAGES]]
+        label, class_mode = info['label'], model.class_mode or 'coco80'
+    if not targets:
+        raise HTTPException(422, NO_PENDING_IMAGES)
+    if info['kind'] == 'base' and worker['online'] and not (worker.get('base_weights') or {}).get('present'):
+        raise HTTPException(409, 'training/weights/yolo11m.pt is missing on the training host.')
+    blocker = svc.gpu_check(worker, 640, 1)
+    if blocker:
+        raise HTTPException(503 if not worker['online'] else 409, blocker)
+    job_config = {'kind': 'autolabel', 'apply': not suggest, 'imgsz': 640, 'conf': body.conf, 'class_mode': class_mode,
+                  'camera_id': body.camera_id, 'include_auto_drafts': body.include_auto_drafts, 'device': 'gpu',
+                  'targets': targets, 'required_free_mib': required_free_mib(config, 640, 1),
+                  'estimated_training_mib': estimate_vram_mib(640, 1)}
+    summary = {'kind': 'autolabel', 'apply': not suggest, 'camera_id': body.camera_id, 'model_label': label,
+               'conf': body.conf, 'include_auto_drafts': body.include_auto_drafts, 'total': len(targets),
+               'processed': 0, 'labeled': 0, 'boxes': 0, 'no_detections': 0, 'skipped_changed': 0}
+    if suggest:
+        summary['results'] = []
+    try:
+        with request.app.state.sessions.begin() as session:
+            svc.expire_stale(session)
+            job = TrainingJob(id=str(uuid4()), name=f'autolabel-{label}'[:48], status='queued', phase='queued',
+                              message='Waiting for the GPU worker', active_slot=1, export_id='', dataset_sha256='',
+                              dataset_summary=summary, base_model_id=body.model_id, config=job_config, epochs=1,
+                              metrics=[], log_tail=[], artifacts={})
+            session.add(job)
+            session.flush()
+            return job_out(job, detail=True)
+    except IntegrityError:
+        raise HTTPException(409, 'Another training job is already queued or running. Wait for it or stop it first.') from None
+
+
 @router.post('/jobs/{job_id}/stop')
 def stop_job(request: Request, job_id: UUID):
     require_admin(request)
@@ -1269,12 +1482,13 @@ def worker_heartbeat(request: Request, body: Beat):
         fraction = done / job.epochs
         if job.phase == 'training' and isinstance(batch, int) and isinstance(batches, int) and batches > 0 and epoch:
             fraction = max(fraction, (min(int(epoch), job.epochs) - 1 + min(batch, batches) / batches) / job.epochs)
-        job.progress = round(min(fraction, 1.0), 4)
+        if job_kind(job) != 'autolabel':  # auto-label progress comes from the applied result batches
+            job.progress = round(min(fraction, 1.0), 4)
         lines = [str(line)[:500] for line in (update.get('log_lines') or [])[-200:]]
         if lines:
             job.log_tail = ((job.log_tail or []) + lines)[-LOG_LINES:]
         job.gpu = gpu
-        if job.phase == 'training':
+        if job.phase in ('training', 'labeling'):
             svc.guard(session, job, gpu)
         return {'ok': True, 'stop': job.stop_requested, 'stop_reason': job.stop_reason}
 
@@ -1332,6 +1546,87 @@ def worker_weights(request: Request, model_id: str):
             raise HTTPException(404, 'Model weights not found')
         job_id = model.job_id
     return artifact_response(service(request).path('jobs', job_id, 'best.pt'), 'best.pt')
+
+
+@router.get('/worker/jobs/{job_id}/images/{image_id}')
+def worker_image(request: Request, job_id: UUID, image_id: UUID):
+    """Original JPEG of one target image of a running auto-label job."""
+    require_worker(request)
+    with request.app.state.sessions() as session:
+        job = find_job(session, job_id)
+        if job.status not in ('running', 'stopping'):
+            raise HTTPException(409, 'Job is not running')
+        if job_kind(job) != 'autolabel' or not any(t.get('id') == str(image_id) for t in job.config.get('targets') or []):
+            raise HTTPException(404, 'Image is not part of this job')
+        image = session.get(DatasetImage, str(image_id))
+        if image is None:
+            raise HTTPException(404, 'Dataset image not found')
+        relative = image.file_path
+    path = request.app.state.datasets.path(relative)
+    if not path.is_file():
+        raise HTTPException(404, 'Image file not found')
+    return FileResponse(path, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/worker/jobs/{job_id}/autolabels')
+def worker_autolabels(request: Request, job_id: UUID, body: AutolabelResults):
+    """Apply a batch of detections as auto drafts. One transaction; every image is row-locked and only
+    changed when its revision still equals the one frozen at job creation and nobody labelled it since."""
+    require_worker(request)
+    with request.app.state.sessions.begin() as session:
+        job = find_job(session, job_id, lock=True)
+        if job.worker_id != body.worker_id:
+            raise HTTPException(409, 'Job belongs to another worker')
+        if job.status not in ('running', 'stopping'):
+            raise HTTPException(409, 'Job already finished')
+        if job_kind(job) != 'autolabel':
+            raise HTTPException(409, 'Not an auto-label job')
+        targets = {t['id']: t.get('revision') for t in job.config.get('targets') or []}
+        include = bool(job.config.get('include_auto_drafts'))
+        apply = job.config.get('apply', True) is not False
+        summary = dict(job.dataset_summary or {})
+        counts = {k: int(summary.get(k) or 0) for k in ('processed', 'labeled', 'boxes', 'no_detections', 'skipped_changed')}
+        suggestions = list(summary.get('results') or [])
+        now = utcnow()
+        for result in body.results:
+            image_id = str(result.image_id)
+            counts['processed'] += 1
+            if not apply:
+                # Suggestion job: the image row is read only; boxes go back to the editor via the summary.
+                image = session.get(DatasetImage, image_id) if image_id in targets else None
+                if image is None:
+                    counts['skipped_changed'] += 1
+                    continue
+                boxes = [{k: box[k] for k in ('x', 'y', 'width', 'height', 'score')}
+                         for box in clip_auto_boxes(result.boxes, image.width, image.height)]
+                suggestions.append({'image_id': image_id, 'boxes': boxes})
+                counts['labeled' if boxes else 'no_detections'] += 1
+                counts['boxes'] += len(boxes)
+                continue
+            image = session.get(DatasetImage, image_id, with_for_update=True) if image_id in targets else None
+            if image is None or image.revision != targets[image_id] or not autolabel_eligible(image, include):
+                counts['skipped_changed'] += 1
+                continue
+            boxes = clip_auto_boxes(result.boxes, image.width, image.height)
+            if not boxes:
+                counts['no_detections'] += 1  # stays pending, nothing written
+                continue
+            image.boxes, image.status, image.reviewed_empty = boxes, 'in_progress', False
+            image.revision += 1
+            image.updated_at = now
+            counts['labeled'] += 1
+            counts['boxes'] += len(boxes)
+        total = max(1, int(summary.get('total') or len(targets)))
+        summary.update(counts)
+        if not apply:
+            summary['results'] = suggestions
+        job.dataset_summary = summary
+        job.progress = round(min(counts['processed'] / total, 1.0), 4)
+        job.heartbeat_at = now
+        if job.status != 'stopping':
+            job.message = (f"Drafted {counts['labeled']} of {counts['processed']}/{total} images "
+                           f"({counts['boxes']} boxes)")[:256]
+        return summary
 
 
 @router.put('/worker/jobs/{job_id}/artifacts/{name}')
@@ -1405,6 +1700,12 @@ def worker_finish(request: Request, job_id: UUID, body: Finish):
         status, code, error = body.status, body.error_code, body.error
         if status == 'stopped' and (job.monitor or {}).get('protection_stop'):
             code = 'production_protection'
+        if job_kind(job) == 'autolabel':
+            # No model registration, best.pt or evaluation: the counts were accumulated per result batch.
+            TrainingService.close_job(job, status, code, error)
+            if status == 'completed':
+                job.progress = 1.0
+            return job_out(job)
         if job.config.get('kind') == 'deploy':
             result = (body.run_info or {}).get('deployment') or {}
             if status == 'completed' and (result.get('phase') != 'completed' or not result.get('active')):

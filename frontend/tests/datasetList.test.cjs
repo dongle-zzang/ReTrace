@@ -33,14 +33,17 @@ function mount({ width = 1920, page = 1, size = 8, request } = {}) {
     if (url === '/exports') return []
     const query = new URLSearchParams(url.split('?')[1])
     const page = Number(query.get('page')), page_size = Number(query.get('page_size'))
-    return { items: Array.from({ length: page_size }, (_, i) => ({ id: String((page - 1) * page_size + i) })), total: 40, page, page_size }
+    return { items: Array.from({ length: Math.max(0, Math.min(page_size, 40 - (page - 1) * page_size)) }, (_, i) => ({ id: String((page - 1) * page_size + i) })), total: 40, page, page_size }
   }
   const component = evaluate(source, {
-    ...vue, window, URLSearchParams, setInterval: () => 1, clearInterval() {},
-    useHead() {}, useRuntimeConfig: () => ({ public: {} }), useDatasetNavigation: () => navigation,
+    ...vue, window, URLSearchParams, setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
+    useHead() {}, useRoute: () => ({ query: {} }), useRuntimeConfig: () => ({ public: {} }), useDatasetNavigation: () => navigation,
     useConfirmDialog: () => ({ confirm: async () => true }),
     require: name => name === 'vue' ? vue : name.endsWith('/useI18n') ? i18n : name.endsWith('/datasetNavigation') ? helpers
       : name.endsWith('/datasetApi') ? { datasetRequest }
+      : name.endsWith('/datasetAutoLabel') ? { isAutoLabelActive: () => false, autoLabelPercent: () => 0, readAutoLabelSettings: () => null }
+      : name.endsWith('/autolabelDemo') ? { isAutoLabelDemo: () => false, AUTO_LABEL_DEMO_QUERY: {} }
+      : name.endsWith('/trainingApi') ? { trainingRequest: async () => { throw new Error('training API offline') }, useTrainingToken: () => ({ token: vue.ref(''), setToken() {} }) }
       : name.endsWith('/useCameras') ? { useCameras: () => ({ cameras: vue.ref([]) }) }
       : name.endsWith('/useRealtimePreview') ? { useRealtimePreview: () => ({}) }
       : name.endsWith('/types/dataset') ? { DATASET_STATUS_LABELS: { pending: 'Pending' } } : {},
@@ -53,58 +56,65 @@ function mount({ width = 1920, page = 1, size = 8, request } = {}) {
   return { state, calls, navigation, resize(width) { window.innerWidth = width; listeners.get('resize')() }, unmount: () => renderer.render(null, container) }
 }
 
-test('resize, return and filters preserve ordinal positions and request two-row pages', async () => {
-  const ui = mount({ page: 3, size: 8, width: 900 })
+test('infinite scroll restores loaded batches, appends the next one and resets on filters', async () => {
+  const ui = mount({ page: 2, size: 24 })
   try {
     await flush()
-    assert.equal(ui.state.page.value, 5)
-    assert.equal(ui.state.visibleImages.value.length, 4)
-    assert.match(ui.calls[0], /page=5&page_size=4/)
-    ui.resize(390)
-    assert.equal(ui.state.visibleImages.value.length, 2)
-    await flush()
-    assert.equal(ui.state.page.value, 9)
-    assert.equal(ui.state.images.value.items[0].id, '16')
+    assert.deepEqual(ui.calls.filter(url => url.startsWith('/images')), ['/images?page=1&page_size=24', '/images?page=2&page_size=24'])
+    assert.equal(ui.state.visibleImages.value.length, 40)
+    assert.equal(ui.state.hasMore.value, false)
     ui.navigation.listCamera.value = 'parking-camera'
     await flush()
     assert.equal(ui.state.page.value, 1)
-    assert.match(ui.calls.at(-1), /camera_id=parking-camera/)
-    ui.state.page.value = 2
-    ui.navigation.listStatus.value = 'pending'
-    await flush()
-    assert.equal(ui.state.page.value, 1)
-    assert.match(ui.calls.at(-1), /status=pending/)
+    assert.match(ui.calls.at(-1), /page=1&page_size=24&camera_id=parking-camera/)
+    assert.equal(ui.state.visibleImages.value.length, 24)
+    assert.equal(ui.state.hasMore.value, true)
+    await ui.state.loadMore()
+    assert.equal(ui.state.page.value, 2)
+    assert.match(ui.calls.at(-1), /page=2&page_size=24/)
+    assert.equal(ui.state.visibleImages.value.length, 40)
+    assert.equal(ui.state.visibleImages.value.at(-1).id, '39')
   } finally { ui.unmount() }
 })
 
-test('stale responses cannot replace a more recent responsive query', async () => {
+test('a page size stored by older sessions maps to the batch holding the same first image', async () => {
+  const ui = mount({ page: 5, size: 8 })
+  try {
+    await flush()
+    assert.equal(ui.navigation.listPageSize.value, 24)
+    assert.equal(ui.state.page.value, 2)
+  } finally { ui.unmount() }
+})
+
+test('stale responses cannot replace a more recent filtered list', async () => {
   const pending = []
   const ui = mount({ request: url => url === '/exports' ? [] : new Promise(resolve => pending.push({ url, resolve })) })
   try {
-    ui.resize(390)
-    pending[1].resolve({ items: [{ id: 'new' }], total: 1, page: 1, page_size: 2 })
+    ui.navigation.listStatus.value = 'pending'
+    pending[1].resolve({ items: [{ id: 'new' }], total: 1, page: 1, page_size: 24 })
     await flush()
-    pending[0].resolve({ items: [{ id: 'stale' }], total: 30, page: 1, page_size: 8 })
+    pending[0].resolve({ items: [{ id: 'stale' }], total: 30, page: 1, page_size: 24 })
     await flush()
     assert.equal(ui.state.images.value.items[0].id, 'new')
-    assert.equal(ui.state.totalPages.value, 1)
+    assert.equal(ui.state.hasMore.value, false)
   } finally { ui.unmount() }
 })
 
-test('deleting the last image of the last page reloads the previous valid page', async () => {
-  let total = 9
-  const ui = mount({ page: 2, request: (url, options) => {
+test('deleting images drops loaded batches that no longer exist', async () => {
+  let total = 25
+  const ui = mount({ page: 2, size: 24, request: (url, options) => {
     if (options?.method === 'DELETE') { total--; return }
     if (url === '/exports') return []
     const query = new URLSearchParams(url.split('?')[1])
     const page = Number(query.get('page')), page_size = Number(query.get('page_size'))
-    return { items: Array.from({ length: Math.max(0, Math.min(page_size, total - (page - 1) * page_size)) }, (_, i) => ({ id: String(i) })), total, page, page_size }
+    return { items: Array.from({ length: Math.max(0, Math.min(page_size, total - (page - 1) * page_size)) }, (_, i) => ({ id: String((page - 1) * page_size + i) })), total, page, page_size }
   } })
   try {
     await flush()
+    assert.equal(ui.state.visibleImages.value.length, 25)
     await ui.state.remove({ id: 'last' })
     assert.equal(ui.state.page.value, 1)
-    assert.equal(ui.state.visibleImages.value.length, 8)
-    assert.equal(ui.state.totalPages.value, 1)
+    assert.equal(ui.state.visibleImages.value.length, 24)
+    assert.equal(ui.state.hasMore.value, false)
   } finally { ui.unmount() }
 })

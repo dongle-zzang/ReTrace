@@ -653,3 +653,271 @@ def test_single_class_model_from_mixed_vehicle_labels_is_not_deployable(training
     runtime_beat(client)
     rejected = client.post('/api/training/deployments', headers=ADMIN, json={'model_id': model['id']})
     assert rejected.status_code == 422 and 'car-only' in rejected.text
+
+
+# ----- auto labelling -----------------------------------------------------------------------
+PLAN = '/api/training/autolabels/plan'
+
+
+def capture_at(client, state, hours, camera='first'):
+    state['timestamp'] = T0 + timedelta(hours=hours)
+    response = client.post('/api/datasets/capture', json={'camera_id': camera})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def save_boxes(client, image, boxes, status='in_progress', **more):
+    response = client.put(f'/api/datasets/images/{image["id"]}/annotations',
+                          json={'revision': image['revision'], 'boxes': boxes, 'status': status, **more})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def manual_box(**changes):
+    return {'id': str(uuid4()), 'class_id': 0, 'x': 10, 'y': 20, 'width': 40, 'height': 30, 'source': 'manual', **changes}
+
+
+def test_autolabel_plan_counts_targets_and_names_the_blocker(training):
+    client, app, state = training
+    assert client.get('/api/datasets/classes').json()['auto_labels_available'] is True
+    assert client.get(PLAN).status_code == 422  # model_id required
+    plan = client.get(PLAN, params={'model_id': 'nope'}).json()
+    assert plan['ready'] is False and plan['blocker'] == 'No auto-label model is available yet.'
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()
+    assert plan['blocker'] == 'The training worker is offline.' and plan['max_images'] == 500
+    beat(client, started=True)
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()
+    assert plan['blocker'] == 'No unlabeled pending images.' and plan['eligible'] == 0
+    reviewed, drafted, auto, empty, first, second = (capture_at(client, state, h) for h in range(6))
+    other = capture_at(client, state, 9, camera='second')
+    save_boxes(client, reviewed, [manual_box()], status='reviewed')
+    save_boxes(client, drafted, [manual_box()])
+    save_boxes(client, auto, [manual_box(source='auto', score=.5), manual_box(x=60, source='auto', score=.4)])
+    save_boxes(client, empty, [], status='reviewed', reviewed_empty=True)
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()
+    assert plan['ready'] is True and plan['blocker'] is None
+    assert plan['eligible'] == 3 and plan['skipped'] == {'reviewed': 2, 'labeled': 1, 'auto_drafts': 1}
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco', 'include_auto_drafts': 'true'}).json()
+    assert plan['eligible'] == 4 and plan['skipped']['auto_drafts'] == 0
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco', 'camera_id': 'second'}).json()
+    assert plan['eligible'] == 1 and plan['skipped'] == {'reviewed': 0, 'labeled': 0, 'auto_drafts': 0}
+    assert client.get(PLAN, params={'model_id': 'yolo11m-coco', 'camera_id': 'bad cam'}).status_code == 422
+    # A base model whose weights are missing on the host is not usable.
+    client.post('/api/training/worker/heartbeat', headers=WORKER, json={
+        'worker_id': 'w1', 'gpu': GPU_FREE, 'base_weights': {'present': False}, 'disk_free_mib': 50000})
+    assert client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()['blocker'] == 'No auto-label model is available yet.'
+    beat(client)
+    export = make_export(client, state, sessions=2)
+    set_fps(app, {'first': 10.0, 'second': 10.0})
+    assert create(client, export, acknowledge_limits=True).status_code == 201
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()
+    assert plan['blocker'] == 'Another training job is running.' and plan['eligible'] == 3
+
+
+def test_autolabel_job_applies_drafts_only_to_untouched_images(training):
+    client, app, state = training
+    beat(client, started=True)
+    set_fps(app, {'first': 10.0, 'second': 10.0})
+    body = {'model_id': 'yolo11m-coco', 'conf': 0.35}
+    assert client.post('/api/training/autolabels', json=body).status_code == 401
+    assert client.post('/api/training/autolabels', headers=ADMIN, json=body).status_code == 422  # no pending images
+    images = [capture_at(client, state, h) for h in range(3)]
+    edited, untouched, skipped = images
+    reviewed = capture_at(client, state, 5)
+    save_boxes(client, reviewed, [manual_box()], status='reviewed')
+    for bad in ({'conf': 0.05}, {'conf': 0.95}, {'conf': 'x'}, {'camera_id': 'bad cam'}, {'extra': 1}):
+        assert client.post('/api/training/autolabels', headers=ADMIN, json={**body, **bad}).status_code == 422
+    assert client.post('/api/training/autolabels', headers=ADMIN, json={**body, 'model_id': 'nope'}).status_code == 404
+    assert client.post('/api/training/autolabels', headers=ADMIN, json={**body, 'camera_id': 'nope'}).status_code == 404
+    response = client.post('/api/training/autolabels', headers=ADMIN, json=body)
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job['name'] == 'autolabel-YOLO11m COCO (production)' and job['status'] == 'queued' and job['epochs'] == 1
+    assert job['config']['kind'] == 'autolabel' and job['config']['images'] == 3 and 'targets' not in job['config']
+    assert job['config']['conf'] == 0.35 and job['config']['class_mode'] == 'coco80' and job['export_id'] is None
+    assert job['dataset_summary'] == {'kind': 'autolabel', 'apply': True, 'camera_id': None, 'model_label': 'YOLO11m COCO (production)',
+                                      'conf': 0.35, 'include_auto_drafts': False, 'total': 3, 'processed': 0,
+                                      'labeled': 0, 'boxes': 0, 'no_detections': 0, 'skipped_changed': 0}
+    assert client.post('/api/training/autolabels', headers=ADMIN, json=body).status_code == 409  # single slot
+    assert client.get('/api/training/jobs').json() == []  # hidden from the training history
+    assert client.get('/api/training/status').json()['active_job']['id'] == job['id']
+    assert client.get(f'/api/training/jobs/{job["id"]}').json()['config']['images'] == 3
+    spec = client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'}).json()
+    assert spec['id'] == job['id'] and spec['base_model']['kind'] == 'base' and spec['required_free_mib'] == 6000
+    assert [t['id'] for t in spec['config']['targets']] == [i['id'] for i in images]
+    assert all(t['revision'] == 1 for t in spec['config']['targets'])
+
+    image_url = f'/api/training/worker/jobs/{job["id"]}/images/'
+    assert client.get(image_url + untouched['id']).status_code == 401
+    download = client.get(image_url + untouched['id'], headers=WORKER)
+    assert download.status_code == 200 and download.headers['content-type'] == 'image/jpeg'
+    assert download.content.startswith(b'\xff\xd8') and download.headers['cache-control'] == 'no-store'
+    assert client.get(image_url + reviewed['id'], headers=WORKER).status_code == 404  # not a target
+
+    # A person labels one target while the worker runs: its frozen revision no longer matches.
+    save_boxes(client, edited, [manual_box()])
+    results_url = f'/api/training/worker/jobs/{job["id"]}/autolabels'
+    results = [
+        {'image_id': untouched['id'], 'boxes': [
+            {'x': 150, 'y': 80, 'width': 100, 'height': 60, 'score': 0.5},   # clipped to 200x100
+            {'x': 10, 'y': 10, 'width': 1, 'height': 30, 'score': 0.9},      # < 2 px wide: dropped
+            {'x': -5, 'y': 10, 'width': 30.004, 'height': 20, 'score': 0.87}]},
+        {'image_id': skipped['id'], 'boxes': []},
+        {'image_id': edited['id'], 'boxes': [{'x': 1, 'y': 1, 'width': 10, 'height': 10, 'score': 0.8}]},
+        {'image_id': reviewed['id'], 'boxes': [{'x': 1, 'y': 1, 'width': 10, 'height': 10, 'score': 0.8}]},
+    ]
+    assert client.post(results_url, headers=WORKER, json={'worker_id': 'other', 'results': results}).status_code == 409
+    assert client.post(results_url, headers=WORKER, json={'worker_id': 'w1', 'results': [
+        {'image_id': untouched['id'], 'boxes': [{'x': 1, 'y': 1, 'width': 10, 'height': 10, 'score': 1.5}]}]}).status_code == 422
+    summary = client.post(results_url, headers=WORKER, json={'worker_id': 'w1', 'results': results}).json()
+    assert summary == {'kind': 'autolabel', 'apply': True, 'camera_id': None, 'model_label': 'YOLO11m COCO (production)', 'conf': 0.35,
+                       'include_auto_drafts': False, 'total': 3, 'processed': 4, 'labeled': 1, 'boxes': 2,
+                       'no_detections': 1, 'skipped_changed': 2}
+    detail = client.get(f'/api/datasets/images/{untouched["id"]}').json()
+    assert detail['status'] == 'in_progress' and detail['revision'] == 2 and detail['auto_box_count'] == 2
+    assert [b['score'] for b in detail['boxes']] == [0.87, 0.5]
+    assert all(b['source'] == 'auto' and b['class_id'] == 0 and b['id'] for b in detail['boxes'])
+    assert detail['boxes'][0]['x'] == 0 and detail['boxes'][0]['width'] == 25
+    assert detail['boxes'][1] == {**detail['boxes'][1], 'x': 150, 'y': 80, 'width': 50, 'height': 20}
+    assert all(b['x'] + b['width'] <= 200 and b['y'] + b['height'] <= 100 for b in detail['boxes'])
+    pending = client.get(f'/api/datasets/images/{skipped["id"]}').json()
+    assert pending['status'] == 'pending' and pending['revision'] == 1 and pending['boxes'] == []
+    human = client.get(f'/api/datasets/images/{edited["id"]}').json()
+    assert human['revision'] == 2 and human['boxes'][0]['source'] == 'manual' and human['auto_box_count'] == 0
+    assert client.get(f'/api/datasets/images/{reviewed["id"]}').json()['status'] == 'reviewed'
+    # Resending an image is idempotent: its revision moved on, so it is skipped.
+    again = client.post(results_url, headers=WORKER, json={'worker_id': 'w1', 'results': results[:1]}).json()
+    assert again['skipped_changed'] == 3 and again['labeled'] == 1 and again['processed'] == 5
+    assert client.get(f'/api/datasets/images/{untouched["id"]}').json()['revision'] == 2
+    detail = client.get(f'/api/training/jobs/{job["id"]}').json()
+    assert detail['progress'] == 1.0 and detail['dataset_summary']['labeled'] == 1
+    assert detail['message'].startswith('Drafted 1 of 5/3 images')
+    beat(client, job={'id': job['id'], 'phase': 'labeling', 'message': 'Labeling images: 3/3'})
+    detail = client.get(f'/api/training/jobs/{job["id"]}').json()
+    assert detail['progress'] == 1.0 and detail['phase'] == 'labeling'  # heartbeats never reset the count
+    assert detail['monitor']['samples']  # production guard runs while labelling
+
+    finish = client.post(f'/api/training/worker/jobs/{job["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'completed', 'run_info': {'kind': 'autolabel', 'images': 3}})
+    assert finish.status_code == 200, finish.text
+    assert finish.json()['status'] == 'completed' and finish.json()['progress'] == 1.0 and finish.json()['model_id'] is None
+    assert client.post(results_url, headers=WORKER, json={'worker_id': 'w1', 'results': results[:1]}).status_code == 409
+    assert len(client.get('/api/training/models').json()) == 1  # nothing registered
+    assert client.get('/api/training/jobs').json() == []
+    assert client.get('/api/training/status').json()['active_job'] is None
+
+    # The draft stays out of exports until a person reviews it; auto boxes then export like any box.
+    plan = client.get(PLAN, params={'model_id': 'yolo11m-coco'}).json()
+    assert plan['eligible'] == 1 and plan['skipped'] == {'reviewed': 1, 'labeled': 1, 'auto_drafts': 1}
+    assert client.get(PLAN, params={'model_id': 'yolo11m-coco', 'include_auto_drafts': 'true'}).json()['eligible'] == 2
+    draft = client.get(f'/api/datasets/images/{untouched["id"]}').json()
+    kept = [{**draft['boxes'][0]}, {**draft['boxes'][1], 'x': 140, 'source': 'manual'}]
+    kept[1].pop('score')
+    saved = save_boxes(client, draft, kept, status='reviewed')
+    assert saved['auto_box_count'] == 1 and saved['boxes'][0]['score'] == 0.87 and 'score' not in saved['boxes'][1]
+    export = client.post('/api/datasets/exports', json={'seed': 42}).json()
+    for _ in range(200):
+        current = next(e for e in client.get('/api/datasets/exports').json() if e['id'] == export['id'])
+        if current['status'] != 'building':
+            break
+        time.sleep(.02)
+    assert current['status'] == 'ready', current
+    archive = zipfile.ZipFile(io.BytesIO(client.get(f'/api/datasets/exports/{export["id"]}/download').content))
+    label = next(n for n in archive.namelist() if n.endswith(f'{untouched["id"]}.txt'))
+    lines = archive.read(label).decode().splitlines()
+    assert len(lines) == 2 and all(line.startswith('0 ') for line in lines)
+
+
+def test_autolabel_stop_failure_and_worker_loss(training):
+    client, app, state = training
+    beat(client, started=True)
+    set_fps(app, {'first': 10.0, 'second': 10.0})
+    image = capture_at(client, state, 0)
+    job = client.post('/api/training/autolabels', headers=ADMIN, json={'model_id': 'yolo11m-coco', 'include_auto_drafts': True}).json()
+    assert job['config']['include_auto_drafts'] is True
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    stopped = client.post(f'/api/training/jobs/{job["id"]}/stop', headers=ADMIN).json()
+    assert stopped['status'] == 'stopping'
+    # Results that arrive while stopping are still applied (the worker flushes finished batches).
+    summary = client.post(f'/api/training/worker/jobs/{job["id"]}/autolabels', headers=WORKER, json={
+        'worker_id': 'w1', 'results': [{'image_id': image['id'], 'boxes': [{'x': 1, 'y': 1, 'width': 10, 'height': 10, 'score': .6}]}]}).json()
+    assert summary['labeled'] == 1
+    finish = client.post(f'/api/training/worker/jobs/{job["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'stopped', 'error': 'Stopped by the user'}).json()
+    assert finish['status'] == 'stopped' and finish['progress'] == 1.0
+    assert client.get(f'/api/datasets/images/{image["id"]}').json()['status'] == 'in_progress'
+    # Existing untouched drafts are re-labelled only with include_auto_drafts; a failure keeps them.
+    job = client.post('/api/training/autolabels', headers=ADMIN, json={'model_id': 'yolo11m-coco', 'include_auto_drafts': True}).json()
+    assert job['config']['images'] == 1
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    finish = client.post(f'/api/training/worker/jobs/{job["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'failed', 'error_code': 'autolabel_failed', 'error': 'boom'}).json()
+    assert finish['status'] == 'failed' and finish['error_code'] == 'autolabel_failed'
+    assert client.get(f'/api/datasets/images/{image["id"]}').json()['revision'] == 2
+    assert client.post('/api/training/autolabels', headers=ADMIN, json={'model_id': 'yolo11m-coco'}).status_code == 422
+    job = client.post('/api/training/autolabels', headers=ADMIN, json={'model_id': 'yolo11m-coco', 'include_auto_drafts': True}).json()
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    with app.state.sessions.begin() as session:
+        session.get(TrainingJob, job['id']).heartbeat_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    app.state.training.started -= timedelta(hours=1)
+    assert client.get(f'/api/training/jobs/{job["id"]}').json()['error_code'] == 'worker_lost'
+
+
+def test_autolabel_suggestions_for_the_editor_never_touch_the_image(training):
+    client, app, state = training
+    beat(client, started=True)
+    set_fps(app, {'first': 10.0, 'second': 10.0})
+    reviewed, pending = capture_at(client, state, 0), capture_at(client, state, 1)
+    save_boxes(client, reviewed, [manual_box()], status='reviewed')
+    before = client.get(f'/api/datasets/images/{reviewed["id"]}').json()
+    url = '/api/training/autolabels'
+    single = {'model_id': 'yolo11m-coco', 'conf': 0.35, 'image_ids': [reviewed['id']], 'apply': False}
+    assert client.post(url, json=single).status_code == 401
+    for bad in ({'apply': True}, {'apply': None}, {'camera_id': 'first'}, {'include_auto_drafts': True},
+                {'image_ids': []}, {'image_ids': [str(uuid4()) for _ in range(21)]}, {'image_ids': [reviewed['id']] * 2},
+                {'image_ids': ['x']}):
+        assert client.post(url, headers=ADMIN, json={**single, **bad}).status_code == 422, bad
+    assert client.post(url, headers=ADMIN, json={'model_id': 'yolo11m-coco', 'apply': False}).status_code == 422
+    assert client.post(url, headers=ADMIN, json={'model_id': 'yolo11m-coco', 'image_ids': [reviewed['id']]}).status_code == 422
+    assert client.post(url, headers=ADMIN, json={**single, 'image_ids': [reviewed['id'], str(uuid4())]}).status_code == 404
+    response = client.post(url, headers=ADMIN, json={**single, 'image_ids': [reviewed['id'], pending['id']]})
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job['config']['apply'] is False and job['config']['images'] == 2 and 'targets' not in job['config']
+    assert job['dataset_summary']['apply'] is False and job['dataset_summary']['results'] == []
+    assert job['dataset_summary']['total'] == 2
+    assert client.post(url, headers=ADMIN, json={'model_id': 'yolo11m-coco'}).status_code == 409  # slot busy
+    spec = client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'}).json()
+    assert spec['config']['targets'] == [{'id': reviewed['id']}, {'id': pending['id']}]
+    image_url = f'/api/training/worker/jobs/{job["id"]}/images/'
+    assert client.get(image_url + reviewed['id'], headers=WORKER).status_code == 200
+    results_url = f'/api/training/worker/jobs/{job["id"]}/autolabels'
+    summary = client.post(results_url, headers=WORKER, json={'worker_id': 'w1', 'results': [
+        {'image_id': reviewed['id'], 'boxes': [{'x': 150, 'y': 80, 'width': 100, 'height': 60, 'score': 0.5},
+                                               {'x': 10, 'y': 10, 'width': 1, 'height': 30, 'score': 0.9},
+                                               {'x': -5, 'y': 10, 'width': 30, 'height': 20, 'score': 0.87654}]},
+        {'image_id': pending['id'], 'boxes': []},
+        {'image_id': str(uuid4()), 'boxes': []}]}).json()
+    assert {k: summary[k] for k in ('processed', 'labeled', 'boxes', 'no_detections', 'skipped_changed')} == {
+        'processed': 3, 'labeled': 1, 'boxes': 2, 'no_detections': 1, 'skipped_changed': 1}
+    assert summary['results'] == [
+        {'image_id': reviewed['id'], 'boxes': [{'x': 0, 'y': 10, 'width': 25, 'height': 20, 'score': 0.877},
+                                               {'x': 150, 'y': 80, 'width': 50, 'height': 20, 'score': 0.5}]},
+        {'image_id': pending['id'], 'boxes': []}]
+    assert client.get(f'/api/datasets/images/{reviewed["id"]}').json() == before  # nothing written
+    after = client.get(f'/api/datasets/images/{pending["id"]}').json()
+    assert after['status'] == 'pending' and after['revision'] == 1 and after['boxes'] == []
+    finish = client.post(f'/api/training/worker/jobs/{job["id"]}/finish', headers=WORKER,
+                         json={'worker_id': 'w1', 'status': 'completed'}).json()
+    assert finish['status'] == 'completed' and finish['progress'] == 1.0
+    detail = client.get(f'/api/training/jobs/{job["id"]}').json()
+    assert detail['dataset_summary']['results'][0]['boxes'][0]['score'] == 0.877
+    assert client.get(f'/api/datasets/images/{reviewed["id"]}').json() == before
+    # The batch form still drafts into the DB afterwards.
+    batch = client.post(url, headers=ADMIN, json={'model_id': 'yolo11m-coco'}).json()
+    assert batch['config']['apply'] is True and batch['config']['images'] == 1 and 'results' not in batch['dataset_summary']
+    client.post('/api/training/worker/claim', headers=WORKER, json={'worker_id': 'w1'})
+    client.post(f'/api/training/worker/jobs/{batch["id"]}/autolabels', headers=WORKER, json={'worker_id': 'w1', 'results': [
+        {'image_id': pending['id'], 'boxes': [{'x': 1, 'y': 1, 'width': 10, 'height': 10, 'score': .6}]}]})
+    drafted = client.get(f'/api/datasets/images/{pending["id"]}').json()
+    assert drafted['status'] == 'in_progress' and drafted['revision'] == 2 and drafted['auto_box_count'] == 1

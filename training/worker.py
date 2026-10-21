@@ -10,8 +10,11 @@ shared worker token. It never receives a path, a command line or a model file fr
   and checked against its recorded sha256, then extracted with path/size/count limits;
 * base weights are either training/weights/yolo11m.pt or best.pt of an earlier job, both
   verified against the sha256 the Backend registered;
-* train.py/evaluate.py are started with an argument list built from re-validated integers and
-  enums (no shell).
+* train.py/evaluate.py/autolabel.py are started with an argument list built from re-validated
+  integers and enums (no shell).
+* auto-label jobs (config.kind = 'autolabel') download the target JPEGs of the job from the
+  Backend, run autolabel.py on the GPU and post the detections back in batches; the Backend
+  decides per image (row lock + revision) whether a draft may be written.
 
 One job at a time. Before starting it waits until the shared GPU has the free memory the
 Backend asked for (DeepStream keeps its share) and reports GPU samples every few seconds.
@@ -54,6 +57,11 @@ MAX_MEMBER_BYTES = 64 * 2**20
 MAX_TOTAL_BYTES = 40 * 2**30
 MAX_ZIP_BYTES = 40 * 2**30
 MAX_WEIGHTS_BYTES = 1 * 2**30
+# Auto labelling: dataset images are at most 20 MiB (Backend capture limit); results go up 50 per request.
+MAX_IMAGE_BYTES = 20 * 2**20
+AUTOLABEL_MAX_IMAGES = 500
+AUTOLABEL_BATCH = 50
+AUTOLABEL_CLASS_MODES = ("coco80", "vehicle3", "single")
 # Uploaded to the Backend after a run (name -> local path relative to the job directory).
 ARTIFACTS = {
     "best.pt": "train/weights/best.pt", "last.pt": "train/weights/last.pt",
@@ -279,6 +287,18 @@ def classify_failure(log_text, returncode):
     return "training_failed", f"Training exited with code {returncode}. See the log for the cause."
 
 
+def read_lines(path, offset):
+    """Complete new lines of a growing file since `offset` (untruncated, for JSON lines)."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            data = handle.read(64 * 2**20)
+    except OSError:
+        return [], offset
+    cut = data.rfind(b"\n") + 1
+    return [line for line in data[:cut].decode("utf-8", "replace").split("\n") if line], offset + cut
+
+
 def set_parent_death_signal():
     # Linux: the training child receives SIGTERM if this worker dies, so no GPU job runs unmonitored.
     try:
@@ -306,6 +326,22 @@ def validated_config(spec):
                                              or config["imgsz"] != 640):
             raise WorkerError("invalid_config", "Only 640px COCO80 or 1-class car models can be deployed.")
         return {"kind": "deploy", "action": config["action"], "class_mode": config.get("class_mode", "vehicle3")}
+    if config.get("kind") == "autolabel":
+        conf = config.get("conf")
+        if type(conf) not in (int, float) or not 0.1 <= conf <= 0.9:
+            raise WorkerError("invalid_config", "Invalid confidence threshold in the job configuration.")
+        if config["imgsz"] != 640 or config.get("class_mode") not in AUTOLABEL_CLASS_MODES:
+            raise WorkerError("invalid_config", "Invalid image size or class mode in the job configuration.")
+        targets = config.get("targets")
+        if (not isinstance(targets, list) or not 1 <= len(targets) <= AUTOLABEL_MAX_IMAGES
+                or any(not isinstance(t, dict) or not isinstance(t.get("id"), str) or not JOB_ID.fullmatch(t["id"])
+                       for t in targets)):
+            raise WorkerError("invalid_config", "Invalid auto-label image list in the job configuration.")
+        ids = [t["id"] for t in targets]
+        if len(set(ids)) != len(ids):
+            raise WorkerError("invalid_config", "Duplicate auto-label image in the job configuration.")
+        return {"kind": "autolabel", "conf": float(conf), "imgsz": 640, "class_mode": config["class_mode"],
+                "targets": ids}
     if config.get("kind", "train") == "evaluate":
         ids = config.get("eval_image_ids")
         if (not isinstance(ids, list) or not 1 <= len(ids) <= 5000
@@ -443,8 +479,13 @@ class Worker:
             time.sleep(self.args.poll)
             waited += self.args.poll
 
-    def run_child(self, cmd, job_dir, job, phase, progress_file=None, stop_file=None, grace=None):
-        """Run train.py/evaluate.py, heartbeat with progress, honour stop requests."""
+    def run_child(self, cmd, job_dir, job, phase, progress_file=None, stop_file=None, grace=None, on_tick=None,
+                  message=None):
+        """Run train.py/evaluate.py/autolabel.py, heartbeat with progress, honour stop requests.
+
+        on_tick(progress) runs once per poll (before the heartbeat) and after the child exits; it may
+        return a message for the heartbeat (auto labelling uploads finished batches there).
+        """
         log_path = job_dir / "train.log"
         with open(log_path, "ab") as log:
             log.write(f"\n$ {' '.join(Path(c).name if i < 2 else str(c) for i, c in enumerate(cmd))}\n".encode())
@@ -468,7 +509,8 @@ class Worker:
                     progress = json.loads(progress_file.read_text())
                 except ValueError:
                     progress = {}
-            update = {**job, "phase": phase, "message": stop_reason and f"Stopping: {stop_reason}",
+            note = on_tick(progress) if on_tick else None
+            update = {**job, "phase": phase, "message": (stop_reason and f"Stopping: {stop_reason}") or note or message,
                       "progress": progress, "metrics_rows": rows[sent_rows:], "metrics_offset": sent_rows,
                       "log_lines": lines, "elapsed": round(time.time() - started)}
             reply = self.heartbeat(update, child_pids={proc.pid} if proc.poll() is None else ())
@@ -537,6 +579,8 @@ class Worker:
                 result = run_deployment(self, spec, job_dir, job, WorkerError)
             elif config["kind"] == "evaluate":
                 result = self.run_evaluation(spec, config, job_dir, job)
+            elif config["kind"] == "autolabel":
+                result = self.run_autolabel(spec, config, job_dir, job)
             else:
                 result = self.run_training(spec, config, job_dir, job)
             self.heartbeat({**job, "phase": "saving", "message": "Uploading results"})
@@ -629,6 +673,97 @@ class Worker:
                     "error": message if code != "training_failed" else "evaluate.py failed; see the log."}
         return {**result, "status": "completed",
                 "evaluation": {"status": "completed", "metrics": json.loads((out / "metrics.json").read_text())}}
+
+    # ----- auto labelling ----------------------------------------------------------------
+    def download_images(self, spec, config, job_dir, job):
+        """Target JPEGs -> job_dir/images/<id>.jpg; images deleted meanwhile are skipped, not fatal."""
+        images_dir = job_dir / "images"
+        images_dir.mkdir(exist_ok=True)
+        present, missing = [], []
+        for number, image_id in enumerate(config["targets"], 1):
+            target = images_dir / f"{image_id}.jpg"
+            if not target.is_file():
+                try:
+                    self.backend.download(f"/api/training/worker/jobs/{spec['id']}/images/{image_id}", target,
+                                          MAX_IMAGE_BYTES)
+                except WorkerError as error:
+                    if error.code not in ("download_failed", "dataset_too_large"):
+                        raise
+                    missing.append(image_id)
+                    continue
+            present.append(target)
+            if number % 25 == 0:
+                self.check_stop(job, "preparing", f"Downloading images {number}/{len(config['targets'])}")
+        if not present:
+            raise WorkerError("download_failed", "None of the target images could be downloaded from the Backend.")
+        return present, missing
+
+    def upload_autolabels(self, job_id, results):
+        """POST detections in batches of AUTOLABEL_BATCH; returns the Backend's latest summary."""
+        summary = None
+        for start in range(0, len(results), AUTOLABEL_BATCH):
+            batch = results[start:start + AUTOLABEL_BATCH]
+            try:
+                status, data = self.backend.request("POST", f"/api/training/worker/jobs/{job_id}/autolabels",
+                                                    {"worker_id": self.worker_id, "results": batch}, timeout=60)
+            except (OSError, urllib.error.URLError, ValueError):
+                raise WorkerError("artifact_upload_failed", "Could not reach the Backend to store auto labels.") from None
+            if status != 200:
+                raise WorkerError("artifact_upload_failed", f"Backend refused the auto-label results (HTTP {status}).")
+            summary = data
+        return summary
+
+    def run_autolabel(self, spec, config, job_dir, job):
+        """Auto-label job: draft boxes on the job's target images with the selected model."""
+        weights = self.resolve_weights(spec, job_dir)
+        self.check_stop(job, "preparing", "Downloading dataset images")
+        images, missing = self.download_images(spec, config, job_dir, job)
+        gpu_before = self.wait_for_gpu(spec, job)
+        list_file, out_file, progress_file = job_dir / "images.txt", job_dir / "autolabels.jsonl", job_dir / "progress.json"
+        list_file.write_text("\n".join(str(path) for path in images) + "\n")
+        out_file.unlink(missing_ok=True)
+        cmd = [sys.executable, str(ROOT / "autolabel.py"), "--weights", str(weights), "--images", str(list_file),
+               "--out", str(out_file), "--imgsz", str(config["imgsz"]), "--conf", f"{config['conf']:.3f}",
+               "--device", str(self.args.gpu), "--class-mode", config["class_mode"], "--progress-file", str(progress_file)]
+        state = {"offset": 0, "pending": [], "sent": 0, "summary": None, "total": len(images)}
+
+        def flush(force=False):
+            while state["pending"] and (force or len(state["pending"]) >= AUTOLABEL_BATCH):
+                batch, state["pending"] = state["pending"][:AUTOLABEL_BATCH], state["pending"][AUTOLABEL_BATCH:]
+                state["summary"] = self.upload_autolabels(spec["id"], batch)
+                state["sent"] += len(batch)
+
+        def on_tick(progress):
+            lines, state["offset"] = read_lines(out_file, state["offset"])
+            for line in lines:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(item, dict) and JOB_ID.fullmatch(str(item.get("image_id", ""))):
+                    state["pending"].append({"image_id": item["image_id"], "boxes": list(item.get("boxes") or [])[:300]})
+            flush()
+            return f"Labeling images: {progress.get('done', state['sent'])}/{state['total']} inferred, {state['sent']} stored"
+
+        returncode, stop_reason = self.run_child(cmd, job_dir, job, "labeling", progress_file, grace=30, on_tick=on_tick,
+                                                 message=f"Labeling {len(images)} images")
+        on_tick({})
+        flush(force=True)
+        result = {"gpu_before": gpu_before,
+                  "run_info": {"kind": "autolabel", "images": len(images), "missing_images": len(missing),
+                               "inferred": state["sent"], "conf": config["conf"], "class_mode": config["class_mode"],
+                               "weights": weights.name, "summary": state["summary"]}}
+        if stop_reason:
+            return {**result, "status": "stopped", "error": stop_reason}
+        if returncode != 0:
+            log_text = (job_dir / "train.log").read_text("utf-8", "replace")[-200_000:]
+            code, message = classify_failure(log_text, returncode)
+            return {**result, "status": "failed", "error_code": "autolabel_failed" if code == "training_failed" else code,
+                    "error": message if code != "training_failed" else "autolabel.py failed; see the log."}
+        if state["sent"] < len(images):
+            return {**result, "status": "failed", "error_code": "autolabel_failed",
+                    "error": f"autolabel.py produced results for {state['sent']} of {len(images)} images."}
+        return {**result, "status": "completed"}
 
     def evaluate(self, spec, config, job_dir, job, root, best, weights):
         if not BASE_WEIGHTS.is_file():

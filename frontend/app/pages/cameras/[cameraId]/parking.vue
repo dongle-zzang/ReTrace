@@ -304,7 +304,7 @@ onUnmounted(() => {
 
 <template>
   <main class="flex min-h-0 flex-1 flex-col text-foreground">
-    <header class="flex min-h-16 shrink-0 items-center gap-3 px-4 py-3 sm:px-6">
+    <header class="flex min-h-16 shrink-0 items-center gap-3 px-5 py-3 sm:px-8 lg:px-10">
       <Button as-child variant="ghost" size="icon-sm" :aria-label="t('Back to Parking')"><NuxtLink to="/parking"><ArrowLeft /></NuxtLink></Button>
       <SquareParking class="hidden size-4 shrink-0 text-muted-foreground sm:block" />
       <h1 class="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight sm:text-base">
@@ -322,7 +322,7 @@ onUnmounted(() => {
       </EmptyHeader>
       <EmptyContent><Button as-child variant="outline"><NuxtLink to="/parking">{{ t('Back to Parking') }}</NuxtLink></Button></EmptyContent>
     </Empty>
-    <div v-else class="flex min-h-0 flex-1 flex-col px-3 pb-4 sm:px-6">
+    <div v-else class="flex min-h-0 flex-1 flex-col px-5 pb-4 sm:px-8 lg:px-10">
       <div ref="viewerElement" class="flex min-h-0 flex-1 flex-col gap-2" :aria-label="t('Parking zone workspace')">
         <div class="flex shrink-0 items-center justify-between gap-3">
         <div class="editor-tools flex shrink-0 flex-wrap items-center" role="toolbar" :aria-label="t('Zone tools')" :title="t('Zone tools')">

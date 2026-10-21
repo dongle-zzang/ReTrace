@@ -86,7 +86,8 @@ class BackendAPIProxy:
         if path in ('/api/datasets/capture', '/api/datasets/exports'):
             return ('GET', 'HEAD', 'POST')
         # Training control; the Backend additionally requires TRAINING_ADMIN_TOKEN (Authorization).
-        if path in ('/api/training/jobs', '/api/training/auth', '/api/training/evaluations', '/api/training/deployments'):
+        if path in ('/api/training/jobs', '/api/training/auth', '/api/training/evaluations', '/api/training/deployments',
+                    '/api/training/autolabels'):
             return ('GET', 'HEAD', 'POST')
         if re.fullmatch('/api/training/jobs/' + dataset_id + '/stop', path):
             return ('POST',)
