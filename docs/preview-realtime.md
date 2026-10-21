@@ -38,8 +38,8 @@ dev proxy에서 `/ws` upgrade를 전달한다. Backend의 CORS 설정과 별개�
 
 - 연결 직후에는 모든 카메라의 metadata/status만 전송하고 영상은 보내지 않는다.
 - `subscribe`가 metadata 대상과 영상 요청을 함께 바꾼다. 빈 배열은 구독 해제다.
-- `video`(기본 `false`)가 `true`이면 `cameraIds`의 JPEG를 보낸다. `videoFps`는 카메라당 최대 전송률이며
-  기본 10, 범위 1~30이다. 원본 FPS보다 높게 보내지 않는다.
+- `video`(기본 `false`)가 `true`이면 `cameraIds`의 JPEG를 보낸다. `videoFps`는 카메라당 **평균** 전송률 상한이며
+  기본 10, 범위 1~30이다. 원본 FPS보다 높게 보내지 않는다. 제품 프론트와 `/diagnostics`는 30을 요청한다.
 - 응답은 `{"type": "subscribed", "cameraIds": [...], "video": true, "videoFps": 10}`이다. 잘못된 값이나
   지원하지 않는 command는 `{"type": "error", "code": "command_failed"}`다.
 
@@ -53,8 +53,11 @@ dev proxy에서 `/ws` upgrade를 전달한다. Backend의 CORS 설정과 별개�
 | 2+N | 4 | frame sequence, uint32 big-endian (카메라별 증가, wrap 가능) |
 | 6+N | 나머지 | JPEG (`image/jpeg`) |
 
-서버는 카메라별 **최신 JPEG만** 보낸다. 같은 JPEG를 다시 보내지 않고, 전송 간격이 `1/videoFps`보다 짧으면
-건너뛴다. 느린 client는 queue가 쌓이지 않고 프레임을 잃는다. 한 프레임 write가 5초 이상 막히면 연결을
+서버는 카메라별 **최신 JPEG만** 보낸다. 같은 JPEG를 다시 보내지 않는다. 전송률은 token bucket으로 제한한다:
+카메라별 credit이 `videoFps`장/초로 차오르고(최대 `VIDEO_BURST_FRAMES`=8), credit이 1 미만이면 건너뛴다.
+따라서 카메라가 16~22 ms 간격 burst 뒤 0.5 s 쉬는 패턴이어도 burst 8장까지는 모두 전달되고 평균만 `videoFps`
+이하로 유지된다(고정 `1/videoFps` 간격 규칙은 9 fps 카메라에서도 25~50%를 버렸다, 2026-10-20 측정).
+영상 구독 중에는 loop 주기가 10 ms다(20 ms는 30 fps 카메라를 ~25 fps로 양자화). 느린 client는 queue가 쌓이지 않고 프레임을 잃는다. 한 프레임 write가 5초 이상 막히면 연결을
 종료한다. 카메라가 offline이 되어 JPEG가 지워지면 프레임을 보내지 않으므로, 화면은 `camera_status`로
 상태를 표시한다. 텍스트 응답(`subscribed` 등)은 같은 loop의 영상보다 먼저 보낸다.
 

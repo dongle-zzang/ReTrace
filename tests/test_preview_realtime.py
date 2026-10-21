@@ -17,7 +17,7 @@ from wsproto.events import Request, AcceptConnection, TextMessage, BytesMessage,
 
 from person_metadata import BoundingBox, FrameMetadata, VehicleMetadata
 from preview_mjpeg import FrameStore
-from preview_socket import RealtimeHub, detection_message, video_frame
+from preview_socket import RealtimeHub, detection_message, video_frame, VIDEO_BURST_FRAMES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,12 +164,17 @@ class SocketTests(unittest.TestCase):
     def test_rate_limit_invalid_requests_and_removed_signaling(self):
         self.send(type="subscribe", cameraIds=["first"], video=True, videoFps=2)
         self.until(lambda: any(m["type"] == "subscribed" for m in self.messages))
-        for number in range(10):
+        # A camera burst (frames 25 ms apart) passes up to VIDEO_BURST_FRAMES; the rest is limited to the
+        # 2 fps average, so ~1.2 s of 48 frames yields at most 8 (burst) + ~3 (refill) frames.
+        for number in range(48):
             self.stores[0].put(b"frame-%d" % number)
-            time.sleep(0.04)
-        self.until(lambda: len(self.videos) >= 1)
+            time.sleep(0.025)
+        self.until(lambda: len(self.videos) >= VIDEO_BURST_FRAMES)
         time.sleep(0.1)
-        self.assertLessEqual(len(self.videos), 2)  # About 0.5 s at 2 fps, latest frame wins.
+        self.assertLessEqual(len(self.videos), VIDEO_BURST_FRAMES + 4)
+        self.assertEqual([v[1] for v in self.videos[:VIDEO_BURST_FRAMES]], ["first"] * VIDEO_BURST_FRAMES)
+        self.assertEqual([v[3] for v in self.videos[:VIDEO_BURST_FRAMES]],
+                         [b"frame-%d" % n for n in range(VIDEO_BURST_FRAMES)])  # Burst frames are not dropped.
         for message in ({"type": "subscribe", "cameraIds": ["first"], "video": True, "videoFps": 0},
                         {"type": "subscribe", "cameraIds": ["first"], "video": "yes"},
                         {"type": "subscribe", "cameraIds": ["missing"]},

@@ -24,6 +24,10 @@ from person_metadata import utc_timestamp
 VIDEO_FRAME_VERSION = 1
 DEFAULT_VIDEO_FPS = 10
 MAX_VIDEO_FPS = 30
+# videoFps is an average cap enforced by a token bucket: a camera may deliver up to VIDEO_BURST_FRAMES
+# back-to-back frames (cameras emit 16-22 ms bursts between ~0.5 s gaps; a fixed 1/videoFps spacing
+# dropped 25-50% of a 9 fps camera even at videoFps 30; docs/report_20261020.md section 4).
+VIDEO_BURST_FRAMES = 8
 
 
 def video_frame(camera_id, sequence, jpeg):
@@ -135,7 +139,7 @@ class RealtimeHub:
         outbox = (outgoing, overflow, subscription)
         previous_frames, previous_status = {}, {}
         video_interval = None  # None = metadata only.
-        sent_video = {}  # camera_id -> (store sequence, monotonic send time)
+        sent_video = {}  # camera_id -> (store sequence, remaining burst credit, monotonic send time)
         # Cameras are fixed for the process lifetime.
         video_stores = [(stream["camera_id"], self.stores[stream["id"]]) for stream in self.stream_snapshot()
                         if stream["id"] in self.stores]
@@ -199,7 +203,8 @@ class RealtimeHub:
             wire(TextMessage(data=json.dumps({"version": 1, "type": "hello", "metadataHz": 10})))
             last_metadata = last_ping = last_pong = time.monotonic()
             while not self.shutdown.is_set() and not overflow.is_set():
-                ready, _, _ = select.select([handler.connection], [], [], 0.02)
+                # 20 ms polling quantizes a 30 fps camera to ~25 fps, so poll faster while sending video.
+                ready, _, _ = select.select([handler.connection], [], [], 0.01 if video_interval is not None else 0.02)
                 if ready:
                     data = handler.connection.recv(65536)
                     if not data:
@@ -283,11 +288,17 @@ class RealtimeHub:
                             continue
                         sequence, jpeg = store.latest()
                         last = sent_video.get(camera_id)
-                        if jpeg is None or (last is not None and (last[0] == sequence or now - last[1] < video_interval)):
+                        if jpeg is None or (last is not None and last[0] == sequence):
                             continue
+                        if last is None:
+                            credit = VIDEO_BURST_FRAMES
+                        else:
+                            credit = min(VIDEO_BURST_FRAMES, last[1] + (now - last[2]) / video_interval)
+                        if credit < 1:
+                            continue  # Average above videoFps: skip; the latest frame is sent once credit refills.
                         # Replies above precede frames; large frames get longer to drain on slow links.
                         wire(BytesMessage(data=video_frame(camera_id, sequence, jpeg)), timeout=5.0)
-                        sent_video[camera_id] = (sequence, now)
+                        sent_video[camera_id] = (sequence, credit - 1, now)
                     now = time.monotonic()
                 if now - last_ping >= 15:
                     wire(Ping(payload=b"preview"))

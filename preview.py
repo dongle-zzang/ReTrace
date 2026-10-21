@@ -293,7 +293,10 @@ def create_preview_source_bin(index, uri, latency, fail, drop_on_latency=True, r
         if decoder.find_property(name) is None:
             raise RuntimeError(f"nvurisrcbin missing required property: {name}")
         decoder.set_property(name, value)
-    for name, value in (("drop-on-latency", drop_on_latency), ("disable-audio", True)):
+    # low-latency-mode: decoder output is not held back for reordering (~170 ms -> ~3 ms measured
+    # 2026-10-20, same fps/p95 on IPPP H.264 cameras; see docs/report_20261020.md section 3).
+    for name, value in (("drop-on-latency", drop_on_latency), ("disable-audio", True),
+                        ("low-latency-mode", True)):
         if decoder.find_property(name) is not None:
             decoder.set_property(name, value)
 
@@ -780,7 +783,9 @@ def run_shared_pipeline(args, metadata_store, stores, manager, shutdown):
         mux.set_property("live-source", bool(args.mux_live_source))
         mux.set_property("width", 1920)
         mux.set_property("height", 1080)
-        mux.set_property("batched-push-timeout", 40000)
+        # 33333 us: a 40 ms timeout capped partial batches at ~25 fps, cutting 30 fps cameras to
+        # ~24 fps (measured 24.8 -> 29.7 fps, docs/report_20261020.md section 3). 9 fps cameras unaffected.
+        mux.set_property("batched-push-timeout", 33333)
         mux.set_property("gpu-id", 0)
         mux.set_property("nvbuf-memory-type", 0)  # Existing platform-default NVMM memory.
         mux.set_property("sync-inputs", False)  # Partial batches must not wait for offline cameras.

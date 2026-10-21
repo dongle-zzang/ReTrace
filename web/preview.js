@@ -2,7 +2,7 @@
 
 // One WebSocket carries every camera's latest JPEG and status, so the browser's
 // per-origin HTTP connection limit (6 for HTTP/1.1) no longer caps the camera count.
-const VIDEO_FPS = 10;
+const VIDEO_FPS = 30;  // Average cap; the server passes camera bursts, so this stops dropping frames.
 const STATES = { connecting: "카메라 연결 중", reconnecting: "카메라 재연결 중",
   offline: "카메라 오프라인", degraded: "영상 수신 지연", online: "재생 중" };
 const cards = new Map();

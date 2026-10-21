@@ -145,6 +145,7 @@ class SharedTests(unittest.TestCase):
         self.assertTrue(decoder.props['async-handling'])
         self.assertTrue(decoder.props['disable-audio'])
         self.assertTrue(decoder.props['drop-on-latency'])
+        self.assertTrue(decoder.props['low-latency-mode'])
         self.assertEqual(decoder.props['latency'], 1000)
         self.assertEqual(decoder.props['num-extra-surfaces'], 4)
         self.assertNotIn('child-added', decoder.callbacks)
@@ -352,7 +353,7 @@ class SharedTests(unittest.TestCase):
         else:
             self.assertIn(('stream-muxer', 'src', 'vehicle-tracker', 'sink'), links)
             self.assertIn('vehicle cameras=0 vehicle batch-size=0', captured.getvalue())
-        self.assertEqual(mux.props['batched-push-timeout'], 40000)
+        self.assertEqual(mux.props['batched-push-timeout'], 33333)
         self.assertFalse(mux.props['sync-inputs'])
         self.assertEqual(mux.requests, [f'sink_{i}' for i in range(count)])
         self.assertEqual(demux.requests, [f'src_{i}' for i in range(count)])

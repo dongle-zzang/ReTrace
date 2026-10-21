@@ -195,7 +195,7 @@ last_error는 마지막 장애 이력으로 복구 후에도 유지됩니다. la
 last_frame_age/output_frame_age는 monotonic 시간 기반 경과 초입니다.
 
 재연결은 DeepStream 7.0 `nvurisrcbin`의 `rtsp-reconnect-interval`(offline 기준 초, 최소 1초),
-`rtsp-reconnect-attempts=-1`과 `async-handling=true`를 사용합니다. TCP, latency 1000ms/drop-on-latency=true,
+`rtsp-reconnect-attempts=-1`과 `async-handling=true`를 사용합니다. TCP, latency 1000ms/drop-on-latency=true, decoder low-latency-mode=true(디코더 보류 약 170 ms 제거),
 추가 decoder surface 4개를 nvurisrcbin 속성으로 설정합니다. 내부 child 속성을 재설정하지 않으며,
 child-added는 diagnostics/probe 관측 시에만 연결합니다. 지연 초과 드롭을 끄려면
 `--no-rtsp-drop-on-latency`를 사용합니다. source별 decoder는 필요하지만 inference/tracker는 각각 하나입니다.
@@ -219,7 +219,7 @@ source 번호별 CameraRuntime이 등록되므로 별도 소비자는 snapshot()
 `--diagnostics`는 5초마다 카메라별 상태/FPS/프레임 age/안전한 error/reconnect_count를 요약합니다.
 기존 단계별 timing과 inference/confidence 진단도 유지합니다.
 
-공유 pipeline의 legacy mux는 live-source=1, batched-push-timeout=40000µs,
+공유 pipeline의 legacy mux는 live-source=1, batched-push-timeout=33333µs(40000은 partial batch를 ~25 fps로 제한해 30 fps 카메라를 깎음),
 sync-inputs=false, gpu-id=0, nvbuf-memory-type=0을 사용합니다. frame이 있는 source로 partial batch를
 내보내므로 offline source를 무한히 기다리지 않습니다. 모든 source가 offline이면 내보낼 frame도 없습니다.
 차량 detector config와 runtime property의 batch는 선택된 주차장 카메라 수이며 interval=0과 모델 threshold는 유지합니다.

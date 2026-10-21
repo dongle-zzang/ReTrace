@@ -62,7 +62,7 @@ test("21 cameras share one WebSocket, decode newest frames, reconnect and releas
   assert.equal(sockets[0].binaryType, "arraybuffer");
   sockets[0].onopen();
   assert.deepEqual(sockets[0].sent, [{ version: 1, type: "subscribe", cameraIds: sources.map(s => s.camera_id),
-    video: true, videoFps: 10 }]);
+    video: true, videoFps: 30 }]);
 
   const image = cards[20].children[1];
   sockets[0].onmessage({ data: frame("cam-20", 1, "jpeg-1") });

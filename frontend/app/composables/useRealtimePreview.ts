@@ -8,7 +8,7 @@ const STATUS_FLUSH_MS = 500
 
 function clampFps(value: unknown) {
   const fps = Math.round(Number(value))
-  return Number.isFinite(fps) ? Math.min(30, Math.max(1, fps)) : 10
+  return Number.isFinite(fps) ? Math.min(30, Math.max(1, fps)) : 30
 }
 
 /**

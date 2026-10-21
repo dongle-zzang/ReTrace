@@ -9,7 +9,7 @@ Node.js 22.12 이상과 npm이 필요합니다. `.env`(Git 제외)에 ReTrace �
 ```dotenv
 NUXT_PUBLIC_BACKEND_BASE_URL=http://<서버 호스트>:40225
 # 선택: 카메라당 최대 영상 전송률(1~30, 기본 10)
-# NUXT_PUBLIC_PREVIEW_VIDEO_FPS=10
+# NUXT_PUBLIC_PREVIEW_VIDEO_FPS=30
 # 선택: 주차 판정 기본값 detection(차량 탐지) | color(색상), 기본 detection
 # NUXT_PUBLIC_PARKING_OCCUPANCY=detection
 ```
@@ -31,11 +31,11 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 - 첫 화면은 `/parking`입니다. `/`는 `/parking`으로 이동하고, CCTV 모니터링은 `/monitoring`입니다.
 - `GET /api/cameras`는 10초마다 카메라 목록과 상태를 갱신합니다.
 - 페이지당 WebSocket `/ws` 하나(`useRealtimePreview.ts` → `realtimePreviewClient.ts`)로 모든 카메라의 영상·상태를 받습니다. 카메라마다 `<img src=/mjpeg/...>`를 쓰면 브라우저의 origin당 HTTP/1.1 연결 6개 제한에 걸리므로 사용하지 않습니다.
-- 화면에 보이는(IntersectionObserver, 120px 여유) 카드 또는 전체 화면 카드만 `subscribe`합니다. 필터·검색·스크롤로 카드가 바뀌면 구독 목록 전체를 다시 보냅니다: `{"version":1,"type":"subscribe","cameraIds":[...],"video":true,"videoFps":10}`.
+- 화면에 보이는(IntersectionObserver, 120px 여유) 카드 또는 전체 화면 카드만 `subscribe`합니다. 필터·검색·스크롤로 카드가 바뀌면 구독 목록 전체를 다시 보냅니다: `{"version":1,"type":"subscribe","cameraIds":[...],"video":true,"videoFps":30}`.
 - 영상은 binary 메시지(`u8 version`, `u8 id 길이`, cameraId, `u32 BE sequence`, JPEG)입니다. `CameraVideo.vue`는 `JpegFrameView`로 Blob → object URL → `<img>`를 한 장씩 decode하고, decode 중 도착한 프레임은 대기 슬롯 하나에 덮어씁니다. 이전 URL은 새 이미지 load 뒤, 나머지는 unmount·구독 해제·연결 단절 시 revoke합니다.
 - `camera_status`가 있으면 카드 상태/FPS는 API 스냅샷 대신 실시간 값을 표시합니다. 연결이 끊기면 "서버 연결 중"을 표시하고 2초 뒤 재접속해 구독을 다시 보냅니다. unmount·`pagehide`에서는 소켓을 닫고 재접속하지 않습니다(bfcache 복원 시 다시 연결).
 - 차량 bbox는 서버가 주차장 카메라 JPEG에 그려 보내므로(사람 검출은 서버에서 제거) `detections`로 클라이언트 박스를 다시 그리지 않습니다. `CameraOverlay.vue`는 선·영역 표시용으로 남아 있습니다.
-- 대역폭은 대략 `보이는 카메라 수 × videoFps × 약 127KB`입니다(21대 × 10fps ≈ 130Mbps). 필요하면 `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`를 낮춥니다.
+- `videoFps`는 카메라당 평균 상한이고 서버는 카메라 burst를 그대로 통과시키므로 기본 30이면 카메라 원본 fps(9~30)를 모두 받습니다. 대역폭은 대략 `보이는 카메라 수 × 실제 fps × 약 100KB`입니다(운영 14대 videoFps 30 측정 약 78Mbps). Tailscale 등 느린 회선에서는 `NUXT_PUBLIC_PREVIEW_VIDEO_FPS`를 낮춥니다.
 
 서버 계약은 서버 저장소의 `docs/preview-realtime.md`와 참조 구현 `web/preview.js`를 따릅니다.
 

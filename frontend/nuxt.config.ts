@@ -67,8 +67,9 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     public: {
-      // Per-camera JPEG rate requested over /ws (1-30). Override with NUXT_PUBLIC_PREVIEW_VIDEO_FPS.
-      previewVideoFps: 10,
+      // Per-camera average JPEG rate requested over /ws (1-30). 30 = pass every camera frame (cameras run
+      // 9-30 fps); lower it on slow links (Tailscale) with NUXT_PUBLIC_PREVIEW_VIDEO_FPS.
+      previewVideoFps: 30,
       // Parking data source: 'http' (server /api/parking/spaces, /zones, /status) or 'mock' (browser-local). NUXT_PUBLIC_PARKING_API.
       parkingApi: 'http',
       // Parking occupancy: 'detection' (vehicle boxes over the zone, decided in the browser) or 'color'
