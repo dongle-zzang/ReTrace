@@ -284,7 +284,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
 </script>
 
 <template>
-  <main class="relative mx-auto max-w-[1600px] space-y-8 px-3 py-6 break-keep sm:px-6">
+  <main class="relative mx-auto max-w-[1500px] space-y-8 px-5 py-6 break-keep sm:px-8 lg:px-10">
     <h1 class="sr-only">{{ t('AI training') }}</h1>
     <div v-if="error" class="flex flex-wrap items-center gap-3 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-sm text-red-300" role="alert"><span class="min-w-0 flex-1">{{ t(error) }}</span><Button size="sm" variant="ghost" @click="refreshAll"><RefreshCw /> {{ t('Retry') }}</Button></div>
 
