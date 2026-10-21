@@ -91,7 +91,7 @@ async function start() {
         </dl>
         <ul v-if="plan.errors.length" class="space-y-1.5 text-sm text-red-300"><li v-for="item in plan.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-4 shrink-0" />{{ t(item) }}</li></ul>
         <ul v-if="plan.limits.length" class="space-y-1.5 text-sm text-amber-200"><li v-for="item in plan.limits" :key="item" class="flex gap-2"><AlertTriangle class="mt-0.5 size-4 shrink-0" />{{ t(item) }}</li></ul>
-        <label v-if="plan.readiness === 'limited'" class="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm leading-relaxed text-amber-100"><input v-model="acknowledge" type="checkbox" class="mt-1 size-4 shrink-0 accent-amber-300"> {{ t('I understand these limitations. The result is a first check, not a confirmed improvement.') }}</label>
+        <label v-if="plan.readiness === 'limited'" class="flex items-start gap-2 text-sm leading-relaxed text-amber-100"><input v-model="acknowledge" type="checkbox" class="mt-1 size-4 shrink-0 accent-amber-300"> {{ t('I understand these limitations. The result is a first check, not a confirmed improvement.') }}</label>
       </template>
       <div class="flex flex-wrap items-center gap-3">
         <Button :disabled="!canStart" @click="start"><LoaderCircle v-if="starting" class="animate-spin" /><Play v-else /> {{ t('Start evaluation') }}</Button>

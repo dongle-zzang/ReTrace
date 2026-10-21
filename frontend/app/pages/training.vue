@@ -333,11 +333,11 @@ async function evaluationCreated(job: TrainingJobDetail) {
     </section>
 
     <Tabs v-model="tab" class="flex-col gap-6">
-      <TabsList variant="line" class="h-auto w-full justify-start gap-1 overflow-x-auto rounded-none p-0 sm:gap-3" :aria-label="t('Training sections')">
-        <TabsTrigger value="train" class="h-10 flex-none px-1.5 text-[0.9375rem] font-medium sm:px-3 sm:text-base data-active:bg-transparent data-active:text-primary dark:data-active:border-transparent dark:data-active:bg-transparent dark:data-active:text-primary">{{ t('New training') }}</TabsTrigger>
-        <TabsTrigger value="progress" class="h-10 flex-none px-1.5 text-[0.9375rem] font-medium sm:px-3 sm:text-base data-active:bg-transparent data-active:text-primary dark:data-active:border-transparent dark:data-active:bg-transparent dark:data-active:text-primary">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
-        <TabsTrigger value="evaluate" class="h-10 flex-none px-1.5 text-[0.9375rem] font-medium sm:px-3 sm:text-base data-active:bg-transparent data-active:text-primary dark:data-active:border-transparent dark:data-active:bg-transparent dark:data-active:text-primary">{{ t('New-image check') }}</TabsTrigger>
-        <TabsTrigger value="history" class="h-10 flex-none px-1.5 text-[0.9375rem] font-medium sm:px-3 sm:text-base data-active:bg-transparent data-active:text-primary dark:data-active:border-transparent dark:data-active:bg-transparent dark:data-active:text-primary">{{ t('History & models') }}<span class="hidden text-xs font-normal text-muted-foreground tabular-nums sm:inline">{{ jobs.length }}</span></TabsTrigger>
+      <TabsList class="grid h-auto w-full grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:inline-flex sm:w-fit sm:justify-start" :aria-label="t('Training sections')">
+        <TabsTrigger value="train" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('New training') }}</TabsTrigger>
+        <TabsTrigger value="progress" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
+        <TabsTrigger value="evaluate" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('New-image check') }}</TabsTrigger>
+        <TabsTrigger value="history" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('History & models') }}<span class="text-xs font-normal text-muted-foreground tabular-nums">{{ jobs.length }}</span></TabsTrigger>
       </TabsList>
 
       <TabsContent value="train" class="space-y-6">
@@ -359,7 +359,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
               <ul v-if="check.errors.length" class="space-y-1.5 text-sm text-red-300"><li v-for="item in check.errors" :key="item" class="flex gap-2"><Ban class="mt-0.5 size-4 shrink-0" />{{ t(item) }}</li></ul>
               <div v-if="check.limits.length" class="flex gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm leading-relaxed text-amber-200"><AlertTriangle class="mt-0.5 size-4 shrink-0" /><p><template v-for="(item, index) in check.limits" :key="item"><br v-if="index">{{ t(item) }}</template></p></div>
               <ul v-if="check.notes.length" class="space-y-1 text-sm leading-relaxed text-muted-foreground"><li v-for="item in check.notes" :key="item">{{ t(item) }}</li></ul>
-              <label v-if="check.readiness === 'limited'" class="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm leading-relaxed text-amber-100"><input v-model="form.acknowledge" type="checkbox" class="mt-1 size-4 shrink-0 accent-amber-300"> {{ t('I understand these limitations. Results from this dataset are a trial run and will not be shown as a confirmed improvement.') }}</label>
+              <label v-if="check.readiness === 'limited'" class="flex items-start gap-2 text-sm leading-relaxed text-amber-100"><input v-model="form.acknowledge" type="checkbox" class="mt-1 size-4 shrink-0 accent-amber-300"> {{ t('I understand these limitations. Results from this dataset are a trial run and will not be shown as a confirmed improvement.') }}</label>
               <p v-if="trainAll" class="rounded-xl border border-sky-400/20 bg-sky-400/5 p-3 text-sm leading-relaxed text-sky-200">{{ t('Train All: all {total} images (train {train}, val {val}, test {test}) train the weights. A separate training copy is made; the export and its split assignment stay unchanged.', { total: check.counts?.total ?? 0, train: check.counts?.train ?? 0, val: check.counts?.val ?? 0, test: check.counts?.test ?? 0 }) }}</p>
               <p class="text-xs leading-relaxed text-muted-foreground">{{ t('Training uses a frozen copy of this export (sha256 recorded with the job), so later labeling does not change the run.') }}</p>
             </template>
