@@ -285,10 +285,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
 
 <template>
   <main class="relative mx-auto max-w-[1600px] space-y-8 px-3 py-6 break-keep sm:px-6">
-    <header class="flex flex-wrap items-end gap-4">
-      <div class="mr-auto space-y-2"><p class="text-xs font-semibold uppercase tracking-[0.2em] text-primary">{{ t('AI training workspace') }}</p><h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">{{ t('Fine-tune. Compare. Version.') }}</h1><p class="max-w-4xl text-sm leading-relaxed text-muted-foreground sm:text-base">{{ t('Fine-tune YOLO11m on a reviewed dataset on the GPU server. Production models are never replaced automatically.') }}</p></div>
-      <Button variant="ghost" size="sm" :disabled="loading" @click="refreshAll"><RefreshCw :class="loading ? 'animate-spin' : ''" /> {{ t('Refresh') }}</Button>
-    </header>
+    <h1 class="sr-only">{{ t('AI training') }}</h1>
     <div v-if="error" class="flex flex-wrap items-center gap-3 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-sm text-red-300" role="alert"><span class="min-w-0 flex-1">{{ t(error) }}</span><Button size="sm" variant="ghost" @click="refreshAll"><RefreshCw /> {{ t('Retry') }}</Button></div>
 
     <!-- GPU / worker / production / active job -->
@@ -333,12 +330,15 @@ async function evaluationCreated(job: TrainingJobDetail) {
     </section>
 
     <Tabs v-model="tab" class="flex-col gap-6">
-      <TabsList class="grid h-auto w-full grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:inline-flex sm:w-fit sm:justify-start" :aria-label="t('Training sections')">
-        <TabsTrigger value="train" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('New training') }}</TabsTrigger>
-        <TabsTrigger value="progress" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
-        <TabsTrigger value="evaluate" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('New-image check') }}</TabsTrigger>
-        <TabsTrigger value="history" class="h-9 flex-none px-4 data-active:bg-white/10">{{ t('History & models') }}<span class="text-xs font-normal text-muted-foreground tabular-nums">{{ jobs.length }}</span></TabsTrigger>
-      </TabsList>
+      <div class="flex flex-wrap items-center gap-3">
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:inline-flex sm:w-fit sm:justify-start" :aria-label="t('Training sections')">
+          <TabsTrigger value="train" class="h-9 flex-none cursor-pointer px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New training') }}</TabsTrigger>
+          <TabsTrigger value="progress" class="h-9 flex-none cursor-pointer px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
+          <TabsTrigger value="evaluate" class="h-9 flex-none cursor-pointer px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New-image check') }}</TabsTrigger>
+          <TabsTrigger value="history" class="h-9 flex-none cursor-pointer px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('History & models') }}<span class="text-xs font-normal text-muted-foreground tabular-nums">{{ jobs.length }}</span></TabsTrigger>
+        </TabsList>
+        <Button variant="ghost" size="sm" class="ml-auto" :disabled="loading" @click="refreshAll"><RefreshCw :class="loading ? 'animate-spin' : ''" /> {{ t('Refresh') }}</Button>
+      </div>
 
       <TabsContent value="train" class="space-y-6">
         <div class="grid gap-4 lg:grid-cols-2">
