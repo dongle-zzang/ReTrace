@@ -121,7 +121,7 @@ onUnmounted(() => { version++; window.removeEventListener('beforeunload', before
 </script>
 
 <template>
-  <main class="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3 sm:px-6">
+  <main class="flex min-h-0 flex-1 flex-col gap-3 px-5 py-3 sm:px-8 lg:px-10">
     <header class="flex shrink-0 flex-wrap items-center gap-3"><Button as-child size="icon-sm" variant="ghost" :aria-label="t('Back to datasets')"><NuxtLink :to="demo ? { path: '/datasets', query: AUTO_LABEL_DEMO_QUERY } : '/datasets'"><ArrowLeft /></NuxtLink></Button><div class="min-w-0 flex-1"><h1 class="text-base font-semibold">{{ t('Label vehicles') }}</h1><p v-if="image" class="truncate text-xs text-muted-foreground">{{ image.camera_id }} · {{ new Date(image.captured_at).toLocaleString(dateLocale) }} · {{ image.width }} × {{ image.height }}</p></div></header>
     <p v-if="error" class="shrink-0 rounded-lg bg-red-400/10 px-3 py-2 text-sm text-red-300" role="alert">{{ t(error) }} <Button v-if="!image" size="sm" variant="ghost" @click="load">{{ t('Retry') }}</Button></p>
     <p class="h-5 shrink-0 truncate text-xs text-primary" role="status">{{ autoMessage || (!dirty && message ? t(message) : '') }}</p>
@@ -138,7 +138,7 @@ onUnmounted(() => { version++; window.removeEventListener('beforeunload', before
             <Button size="icon" variant="ghost" :aria-label="t('Zoom in')" :title="t('Zoom in')" :disabled="zoom >= 3" @click="zoom = Math.min(3, zoom + .25)"><ZoomIn /></Button>
           </div>
           <div class="editor-tools flex items-center gap-1 justify-self-end">
-            <Button size="sm" variant="outline" class="w-auto! gap-1.5 px-2.5!" :title="t('Auto-label this image')" :disabled="saving || !ready || autoLabeling" @click="autoLabelImage"><LoaderCircle v-if="autoLabeling" class="animate-spin" /><Sparkles v-else /><span class="max-sm:sr-only">{{ autoLabeling ? t('Finding vehicles…') : t('Auto-label') }}</span></Button>
+            <Button size="icon" variant="outline" :title="t('Auto-label this image')" :disabled="saving || !ready || autoLabeling" @click="autoLabelImage"><LoaderCircle v-if="autoLabeling" class="animate-spin" /><Sparkles v-else /><span class="sr-only">{{ autoLabeling ? t('Finding vehicles…') : t('Auto-label this image') }}</span></Button>
             <Button :title="t('Save labels')" size="icon" :disabled="saving || !ready || (!boxes.length && !reviewedEmpty)" @click="save()"><Check /><span class="sr-only">{{ saving ? t('Saving…') : t('Save labels') }}</span></Button>
           </div>
         </div>

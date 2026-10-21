@@ -99,7 +99,7 @@ watch([modelId, scope, redoAuto], () => { void loadPlan() })
 
 <template>
   <Dialog :open="open" @update:open="!starting && emit('update:open', $event)">
-    <DialogContent :show-close-button="!starting" class="border border-white/10 bg-popover/95 shadow-xl backdrop-blur-xl sm:max-w-lg">
+    <DialogContent :show-close-button="!starting" class="gap-5 border border-white/10 bg-popover/95 p-6 shadow-xl backdrop-blur-xl sm:max-w-lg">
       <DialogHeader>
         <DialogTitle class="flex items-center gap-2"><Sparkles class="size-4 text-primary" /> {{ single ? t('Auto-label this image') : t('Auto-label with a model') }}</DialogTitle>
         <DialogDescription>{{ single ? t('The model adds draft boxes to this image. Boxes already here are kept; check the drafts, then save.') : t('The model draws draft boxes on unlabeled images. Drafts are not exported until you check and save each image.') }}</DialogDescription>
@@ -128,7 +128,7 @@ watch([modelId, scope, redoAuto], () => { void loadPlan() })
         <p class="text-[11px] leading-relaxed text-muted-foreground">{{ t('These settings are remembered: next time the auto-label button starts right away.') }}</p>
         <p v-if="error" class="text-sm text-red-300" role="alert">{{ t(error) }}</p>
       </div>
-      <DialogFooter>
+      <DialogFooter class="-mx-6 -mb-6 px-6">
         <Button variant="outline" :disabled="starting" @click="emit('update:open', false)">{{ t('Cancel') }}</Button>
         <Button :disabled="!canStart" @click="start"><LoaderCircle v-if="starting" class="animate-spin" /><Sparkles v-else /> {{ single ? t('Auto-label this image') : t('Start auto-labeling') }}</Button>
       </DialogFooter>
