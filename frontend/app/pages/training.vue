@@ -29,6 +29,12 @@ const tab = computed<TrainingTab>({
   get: () => TABS.find(item => item === route.query.tab) ?? 'train',
   set: value => { void router.replace({ query: { ...route.query, tab: value === 'train' ? undefined : value } }) },
 })
+// Panels slide in from the side of the tab that was picked (left tab -> from the left).
+const tabMotion = ref('')
+watch(tab, (next, previous) => {
+  const forward = TABS.indexOf(next) > TABS.indexOf(previous)
+  tabMotion.value = `motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-300 ${forward ? 'motion-safe:slide-in-from-right-4' : 'motion-safe:slide-in-from-left-4'}`
+})
 
 const options = ref<TrainingOptions | null>(null)
 const status = ref<TrainingStatus | null>(null)
@@ -340,7 +346,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
         <Button variant="ghost" size="sm" class="ml-auto" :disabled="loading" @click="refreshAll"><RefreshCw :class="loading ? 'animate-spin' : ''" /> {{ t('Refresh') }}</Button>
       </div>
 
-      <TabsContent value="train" class="space-y-6">
+      <TabsContent value="train" :class="['space-y-6', tabMotion]">
         <div class="grid gap-4 lg:grid-cols-2">
           <!-- Dataset -->
           <section class="relative min-w-0 space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :inert="!unlocked" :aria-label="t('Dataset')">
@@ -420,7 +426,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </section>
       </TabsContent>
 
-      <TabsContent value="progress">
+      <TabsContent value="progress" :class="[tabMotion]">
         <!-- Progress / results of the selected job -->
         <section class="space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Training progress')">
           <h2 class="text-base font-semibold">{{ t('Progress and results') }}</h2>
@@ -430,12 +436,12 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </section>
       </TabsContent>
 
-      <TabsContent value="evaluate">
+      <TabsContent value="evaluate" :class="[tabMotion]">
         <!-- Independent check on new CCTV images (required after Train All) -->
         <TrainingNewImageEval v-model:model-id="evalModelId" :models="models" :datasets="datasets" :can-control="unlocked" :busy="!!activeJob" :gpu-ready="!!status?.gpu_ready" @created="evaluationCreated" />
       </TabsContent>
 
-      <TabsContent value="history" class="space-y-6">
+      <TabsContent value="history" :class="['space-y-6', tabMotion]">
         <!-- History -->
         <section class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Training history')">
           <h2 class="text-base font-semibold">{{ t('Training history') }} <span class="ml-1 font-normal text-muted-foreground">{{ jobs.length }}</span></h2>
