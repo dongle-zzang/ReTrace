@@ -11,7 +11,8 @@ import type { EvaluationPlan, TrainingDataset, TrainingJobDetail, TrainingModel 
 // Scores a registered model on newly captured CCTV images. The Backend leaves out every image the
 // model (or its base) trained on and every frame from those capture sessions, so the result is an
 // independent check, which a Train All run cannot give itself.
-const props = defineProps<{ models: TrainingModel[]; datasets: TrainingDataset[]; canControl: boolean; busy: boolean; gpuReady: boolean }>()
+// restoring: the page is still checking a saved token, so the lock overlay waits instead of flashing.
+const props = defineProps<{ models: TrainingModel[]; datasets: TrainingDataset[]; canControl: boolean; restoring?: boolean; busy: boolean; gpuReady: boolean }>()
 const modelId = defineModel<string>('modelId', { default: '' })
 const emit = defineEmits<{ created: [job: TrainingJobDetail] }>()
 
@@ -69,7 +70,7 @@ async function start() {
 
 <template>
   <section class="relative space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :inert="!canControl" :aria-label="t('Evaluate on new CCTV images')">
-    <LockedOverlay v-if="!canControl" />
+    <LockedOverlay v-if="!canControl && !restoring" />
     <div class="space-y-1">
       <h2 class="text-base font-semibold">{{ t('Evaluate on new CCTV images') }}</h2>
       <p class="max-w-3xl text-sm leading-relaxed text-muted-foreground">{{ t('Capture and label new images in AI Datasets, then create a new export. Images the model trained on, and frames from the same capture sessions, are left out automatically, so the score is independent.') }}</p>

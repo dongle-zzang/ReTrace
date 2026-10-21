@@ -29,12 +29,10 @@ const tab = computed<TrainingTab>({
   get: () => TABS.find(item => item === route.query.tab) ?? 'train',
   set: value => { void router.replace({ query: { ...route.query, tab: value === 'train' ? undefined : value } }) },
 })
-// Panels slide in from the side of the tab that was picked (left tab -> from the left).
-const tabMotion = ref('')
-watch(tab, (next, previous) => {
-  const forward = TABS.indexOf(next) > TABS.indexOf(previous)
-  tabMotion.value = `motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-300 ${forward ? 'motion-safe:slide-in-from-right-4' : 'motion-safe:slide-in-from-left-4'}`
-})
+// Same staggered fade-up entrance as the monitoring page; a tab panel replays it each time it opens.
+function enterDelay(index: number, step = 70, base = 0) {
+  return { animationDelay: `${base + Math.min(index, 12) * step}ms` }
+}
 
 const options = ref<TrainingOptions | null>(null)
 const status = ref<TrainingStatus | null>(null)
@@ -97,6 +95,8 @@ const tokenInput = ref('')
 const unlocked = ref(false)
 const unlocking = ref(false)
 const authError = ref<string | null>(null)
+const restoringAccess = ref(true)
+const showLock = computed(() => !unlocked.value && !restoringAccess.value)
 async function verifyToken(value: string) {
   if (!value) return
   unlocking.value = true; authError.value = null
@@ -172,9 +172,11 @@ watch(() => activeJob.value?.id, (id, previous) => {
 onMounted(async () => {
   try { options.value = await trainingRequest<TrainingOptions>('/options') } catch (cause) { error.value = (cause as Error).message }
   if (options.value) Object.assign(form, { epochs: options.value.defaults.epochs, imgsz: options.value.defaults.imgsz, batch: options.value.defaults.batch, seed: options.value.defaults.seed, patience: options.value.defaults.patience })
+  // Check a token saved in this tab before showing the lock, so the token form doesn't flash on reload.
+  const restore = token.value && options.value?.control_enabled ? verifyToken(token.value) : Promise.resolve()
+  void restore.finally(() => { restoringAccess.value = false })
   await refreshAll()
   loading.value = false
-  if (token.value && options.value?.control_enabled) void verifyToken(token.value)
 })
 
 // ----- form & pre-start checks ------------------------------------------------------------
@@ -296,26 +298,26 @@ async function evaluationCreated(job: TrainingJobDetail) {
 
     <!-- GPU / worker / production / active job -->
     <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" :aria-label="t('Training resources')">
-      <article class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4">
+      <article :style="enterDelay(0)" class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4 motion-safe:animate-fade-up">
         <h2 class="text-sm font-medium text-muted-foreground">{{ t('GPU worker') }}</h2>
         <p v-if="!status" class="text-sm text-muted-foreground">{{ t('Loading…') }}</p>
         <template v-else><p class="flex items-center gap-2 text-base font-semibold"><span :class="['size-2.5 rounded-full', status.worker.online ? 'bg-primary' : 'bg-red-400']" />{{ status.worker.online ? t('Online') : t('Offline') }}</p>
           <p class="text-sm leading-relaxed text-muted-foreground">{{ status.worker.online ? t('Last report {seconds}s ago', { seconds: status.worker.age_seconds ?? '–' }) : t('Start training/worker.py on the GPU server.') }}</p>
           <p v-if="status.worker.online && !status.worker.base_weights?.present" class="text-sm text-red-300">{{ t('training/weights/yolo11m.pt is missing.') }}</p></template>
       </article>
-      <article class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4">
+      <article :style="enterDelay(1)" class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4 motion-safe:animate-fade-up">
         <h2 class="text-sm font-medium text-muted-foreground">GPU {{ gpu?.name ? `· ${gpu.name}` : '' }}</h2>
         <template v-if="gpu?.available"><p class="font-mono text-base font-semibold tabular-nums">{{ formatMib(gpu.used_mib) }} / {{ formatMib(gpu.total_mib) }} · {{ gpu.util }}%</p>
           <div class="h-2 overflow-hidden rounded-full bg-white/10"><div :class="['h-full rounded-full', gpuPercent > 85 ? 'bg-red-400' : gpuPercent > 65 ? 'bg-amber-300' : 'bg-primary']" :style="{ width: `${gpuPercent}%` }" /></div>
           <p class="text-sm leading-relaxed text-muted-foreground">{{ t('{free} free · DeepStream reserve {reserve}', { free: formatMib(gpu.free_mib), reserve: formatMib(options?.gpu_policy.reserve_mib) }) }}</p></template>
         <p v-else class="text-sm text-muted-foreground">{{ gpu?.error ?? t('No GPU report') }}</p>
       </article>
-      <article class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4">
+      <article :style="enterDelay(2)" class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4 motion-safe:animate-fade-up">
         <h2 class="text-sm font-medium text-muted-foreground">{{ t('Production inference') }}</h2>
         <template v-if="status"><p class="flex items-center gap-2 text-base font-semibold"><span :class="['size-2.5 rounded-full', status.production.preview === 'reachable' ? 'bg-primary' : 'bg-red-400']" />{{ t('Preview {state}', { state: t(status.production.preview) }) }}</p>
           <p class="text-sm leading-relaxed text-muted-foreground">{{ t('{online}/{enabled} cameras online · {fps} fps · parking {parking} cams {parkingFps} fps', { online: status.production.cameras_online, enabled: status.production.cameras_enabled, fps: status.production.total_fps, parking: status.production.parking_cameras_online, parkingFps: status.production.parking_fps }) }}</p></template>
       </article>
-      <article class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4">
+      <article :style="enterDelay(3)" class="space-y-2 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-4 motion-safe:animate-fade-up">
         <h2 class="text-sm font-medium text-muted-foreground">{{ t('Running job') }}</h2>
         <template v-if="activeJob"><button type="button" class="block text-left text-base font-semibold hover:text-primary" @click="openJob(activeJob.id)">{{ activeJob.name }} · {{ t(JOB_STATUS_LABELS[activeJob.status]) }}</button>
           <p class="text-sm leading-relaxed text-muted-foreground">{{ t('Epoch') }} {{ activeJob.epoch }}/{{ activeJob.epochs }} · {{ Math.round(activeJob.progress * 100) }}% · {{ formatDuration(activeJob.elapsed_seconds) }}</p></template>
@@ -324,8 +326,9 @@ async function evaluationCreated(job: TrainingJobDetail) {
     </section>
 
     <!-- Access -->
-    <section class="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] px-4 py-3" :aria-label="t('Training access')">
-      <template v-if="options && !options.control_enabled"><p class="text-sm text-muted-foreground">{{ t('Training control is disabled on the server (TRAINING_ADMIN_TOKEN is not set). Status and results stay visible.') }}</p></template>
+    <section :style="enterDelay(4)" class="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] px-4 py-3 motion-safe:animate-fade-up" :aria-label="t('Training access')">
+      <p v-if="restoringAccess" class="flex items-center gap-2 text-sm text-muted-foreground" role="status"><LoaderCircle class="size-4 animate-spin" />{{ t('Loading…') }}</p>
+      <template v-else-if="options && !options.control_enabled"><p class="text-sm text-muted-foreground">{{ t('Training control is disabled on the server (TRAINING_ADMIN_TOKEN is not set). Status and results stay visible.') }}</p></template>
       <template v-else-if="unlocked"><p class="mr-auto text-sm">{{ t('Training control unlocked for this browser tab.') }}</p><Button size="sm" variant="ghost" @click="lock"><Lock /> {{ t('Lock') }}</Button></template>
       <form v-else class="flex min-w-0 flex-1 flex-wrap items-center gap-2" @submit.prevent="verifyToken(tokenInput)">
         <label for="training-token" class="mr-auto text-sm text-muted-foreground">{{ t('Starting, stopping and downloading need the training admin token.') }}</label>
@@ -338,19 +341,19 @@ async function evaluationCreated(job: TrainingJobDetail) {
     <Tabs v-model="tab" class="flex-col gap-6">
       <div class="flex flex-wrap items-center gap-3">
         <TabsList class="grid h-auto w-full grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1 sm:inline-flex sm:w-fit sm:justify-start" :aria-label="t('Training sections')">
-          <TabsTrigger value="train" class="h-9 flex-none cursor-pointer rounded-lg px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New training') }}</TabsTrigger>
-          <TabsTrigger value="progress" class="h-9 flex-none cursor-pointer rounded-lg px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
-          <TabsTrigger value="evaluate" class="h-9 flex-none cursor-pointer rounded-lg px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New-image check') }}</TabsTrigger>
-          <TabsTrigger value="history" class="h-9 flex-none cursor-pointer rounded-lg px-4 data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('History & models') }}<span class="text-xs font-normal text-muted-foreground tabular-nums">{{ jobs.length }}</span></TabsTrigger>
+          <TabsTrigger value="train" :style="enterDelay(0, 50, 320)" class="h-9 flex-none cursor-pointer rounded-lg px-4 motion-safe:animate-fade-up data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New training') }}</TabsTrigger>
+          <TabsTrigger value="progress" :style="enterDelay(1, 50, 320)" class="h-9 flex-none cursor-pointer rounded-lg px-4 motion-safe:animate-fade-up data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('Progress & results') }}<span v-if="activeJob" class="size-2 animate-pulse rounded-full bg-sky-400" aria-hidden="true" /></TabsTrigger>
+          <TabsTrigger value="evaluate" :style="enterDelay(2, 50, 320)" class="h-9 flex-none cursor-pointer rounded-lg px-4 motion-safe:animate-fade-up data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('New-image check') }}</TabsTrigger>
+          <TabsTrigger value="history" :style="enterDelay(3, 50, 320)" class="h-9 flex-none cursor-pointer rounded-lg px-4 motion-safe:animate-fade-up data-active:bg-primary/15 data-active:text-primary dark:data-active:border-primary/30 dark:data-active:bg-primary/15 dark:data-active:text-primary">{{ t('History & models') }}<span class="text-xs font-normal text-muted-foreground tabular-nums">{{ jobs.length }}</span></TabsTrigger>
         </TabsList>
-        <Button variant="ghost" size="sm" class="ml-auto" :disabled="loading" @click="refreshAll"><RefreshCw :class="loading ? 'animate-spin' : ''" /> {{ t('Refresh') }}</Button>
+        <Button variant="ghost" size="sm" :style="enterDelay(4, 50, 320)" class="ml-auto motion-safe:animate-fade-up" :disabled="loading" @click="refreshAll"><RefreshCw :class="loading ? 'animate-spin' : ''" /> {{ t('Refresh') }}</Button>
       </div>
 
-      <TabsContent value="train" :class="['space-y-6', tabMotion]">
+      <TabsContent value="train" class="space-y-6">
         <div class="grid gap-4 lg:grid-cols-2">
           <!-- Dataset -->
-          <section class="relative min-w-0 space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :inert="!unlocked" :aria-label="t('Dataset')">
-            <LockedOverlay v-if="!unlocked" />
+          <section :style="enterDelay(0)" class="relative min-w-0 space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6 motion-safe:animate-fade-up" :inert="!unlocked" :aria-label="t('Dataset')">
+            <LockedOverlay v-if="showLock" />
             <div class="flex flex-wrap items-center justify-between gap-3"><h2 class="flex items-center gap-2.5 text-base font-semibold"><span class="inline-grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-xs font-semibold text-primary" aria-hidden="true">1</span>{{ t('Dataset') }}</h2>
               <DatasetSelect v-model="form.exportId" :options="datasetOptions" :label="t('Dataset to train on')" class="w-full sm:w-72" :placeholder="loading ? t('Loading datasets…') : t('No dataset exports')" :disabled="!datasets.length" /></div>
             <p v-if="!loading && !datasets.length" class="rounded-xl border border-dashed border-white/15 py-8 text-center text-sm text-muted-foreground">{{ t('No dataset export yet.') }} <NuxtLink to="/datasets" class="text-primary underline underline-offset-4">{{ t('Create one in AI Datasets') }}</NuxtLink></p>
@@ -372,8 +375,8 @@ async function evaluationCreated(job: TrainingJobDetail) {
           </section>
 
           <!-- Settings -->
-          <section class="relative min-w-0 space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :inert="!unlocked" :aria-label="t('Fine-tuning settings')">
-            <LockedOverlay v-if="!unlocked" />
+          <section :style="enterDelay(1)" class="relative min-w-0 space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6 motion-safe:animate-fade-up" :inert="!unlocked" :aria-label="t('Fine-tuning settings')">
+            <LockedOverlay v-if="showLock" />
             <h2 class="flex items-center gap-2.5 text-base font-semibold"><span class="inline-grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-xs font-semibold text-primary" aria-hidden="true">2</span>{{ t('Fine-tuning settings') }}</h2>
             <fieldset class="space-y-2"><legend class="mb-2 text-sm font-medium text-foreground/90">{{ t('Training mode') }}</legend>
               <div class="grid gap-2 sm:grid-cols-2">
@@ -411,8 +414,8 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </div>
 
         <!-- Start -->
-        <section class="relative space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :inert="!unlocked" :aria-label="t('Start training')">
-          <LockedOverlay v-if="!unlocked" />
+        <section :style="enterDelay(2)" class="relative space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6 motion-safe:animate-fade-up" :inert="!unlocked" :aria-label="t('Start training')">
+          <LockedOverlay v-if="showLock" />
           <h2 class="flex items-center gap-2.5 text-base font-semibold"><span class="inline-grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-xs font-semibold text-primary" aria-hidden="true">3</span>{{ t('Checks before training') }}</h2>
           <ul class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             <li v-for="item in checks" :key="item.key" class="flex gap-2.5 rounded-xl border border-white/10 bg-black/10 p-3 text-sm"><component :is="stateIcon[item.state]" :class="['mt-0.5 size-4 shrink-0', stateClass[item.state], item.state === 'pending' ? 'animate-pulse' : '']" /><span class="min-w-0"><span class="block font-medium text-foreground">{{ item.label }}</span><span class="mt-0.5 block text-[0.8125rem] leading-snug text-muted-foreground">{{ item.detail }}</span></span></li>
@@ -426,7 +429,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </section>
       </TabsContent>
 
-      <TabsContent value="progress" :class="[tabMotion]">
+      <TabsContent value="progress" class="motion-safe:animate-fade-up">
         <!-- Progress / results of the selected job -->
         <section class="space-y-4 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Training progress')">
           <h2 class="text-base font-semibold">{{ t('Progress and results') }}</h2>
@@ -436,14 +439,14 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </section>
       </TabsContent>
 
-      <TabsContent value="evaluate" :class="[tabMotion]">
+      <TabsContent value="evaluate" class="motion-safe:animate-fade-up">
         <!-- Independent check on new CCTV images (required after Train All) -->
-        <TrainingNewImageEval v-model:model-id="evalModelId" :models="models" :datasets="datasets" :can-control="unlocked" :busy="!!activeJob" :gpu-ready="!!status?.gpu_ready" @created="evaluationCreated" />
+        <TrainingNewImageEval v-model:model-id="evalModelId" :models="models" :datasets="datasets" :can-control="unlocked" :restoring="restoringAccess" :busy="!!activeJob" :gpu-ready="!!status?.gpu_ready" @created="evaluationCreated" />
       </TabsContent>
 
-      <TabsContent value="history" :class="['grid items-start gap-6 xl:grid-cols-2', tabMotion]">
+      <TabsContent value="history" class="grid items-start gap-6 xl:grid-cols-2">
         <!-- History -->
-        <section class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Training history')">
+        <section :style="enterDelay(0)" class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6 motion-safe:animate-fade-up" :aria-label="t('Training history')">
           <h2 class="text-base font-semibold">{{ t('Training history') }} <span class="ml-1 font-normal text-muted-foreground">{{ jobs.length }}</span></h2>
           <p v-if="!jobs.length" class="py-6 text-center text-sm text-muted-foreground">{{ t('No jobs yet.') }}</p>
           <div v-else class="overflow-x-auto"><table class="w-full min-w-[38rem] text-left text-sm">
@@ -456,7 +459,7 @@ async function evaluationCreated(job: TrainingJobDetail) {
         </section>
 
         <!-- Models -->
-        <section class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6" :aria-label="t('Models')">
+        <section :style="enterDelay(1)" class="min-w-0 space-y-3 rounded-2xl border border-white/[0.12] bg-white/[0.04] p-5 sm:p-6 motion-safe:animate-fade-up" :aria-label="t('Models')">
           <h2 class="text-base font-semibold">{{ t('Models') }}</h2>
           <p class="max-w-3xl text-sm leading-relaxed text-muted-foreground">{{ t('Deploy a compatible trained model after export and engine validation. Failed verification restores the previous model. Training data and older models are retained.') }}</p>
           <div class="space-y-2 border-t border-white/10 pt-4 text-sm" role="status" aria-live="polite">
