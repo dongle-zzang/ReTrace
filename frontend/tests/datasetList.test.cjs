@@ -36,11 +36,14 @@ function mount({ width = 1920, page = 1, size = 8, request } = {}) {
     return { items: Array.from({ length: page_size }, (_, i) => ({ id: String((page - 1) * page_size + i) })), total: 40, page, page_size }
   }
   const component = evaluate(source, {
-    ...vue, window, URLSearchParams, setInterval: () => 1, clearInterval() {},
-    useHead() {}, useRuntimeConfig: () => ({ public: {} }), useDatasetNavigation: () => navigation,
+    ...vue, window, URLSearchParams, setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
+    useHead() {}, useRoute: () => ({ query: {} }), useRuntimeConfig: () => ({ public: {} }), useDatasetNavigation: () => navigation,
     useConfirmDialog: () => ({ confirm: async () => true }),
     require: name => name === 'vue' ? vue : name.endsWith('/useI18n') ? i18n : name.endsWith('/datasetNavigation') ? helpers
       : name.endsWith('/datasetApi') ? { datasetRequest }
+      : name.endsWith('/datasetAutoLabel') ? { isAutoLabelActive: () => false, autoLabelPercent: () => 0, readAutoLabelSettings: () => null }
+      : name.endsWith('/autolabelDemo') ? { isAutoLabelDemo: () => false, AUTO_LABEL_DEMO_QUERY: {} }
+      : name.endsWith('/trainingApi') ? { trainingRequest: async () => { throw new Error('training API offline') }, useTrainingToken: () => ({ token: vue.ref(''), setToken() {} }) }
       : name.endsWith('/useCameras') ? { useCameras: () => ({ cameras: vue.ref([]) }) }
       : name.endsWith('/useRealtimePreview') ? { useRealtimePreview: () => ({}) }
       : name.endsWith('/types/dataset') ? { DATASET_STATUS_LABELS: { pending: 'Pending' } } : {},

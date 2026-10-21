@@ -5,6 +5,7 @@ import { clientToNormalized } from '~/lib/videoGeometry'
 import { createDatasetBoxId } from '~/lib/datasetBoxId'
 import { useVideoStage } from '~/composables/useVideoStage'
 import { useI18n } from '~/composables/useI18n'
+import { formatScore } from '~/lib/datasetAutoLabel'
 
 const props = defineProps<{
   imageUrl: string; width: number; height: number; boxes: VehicleBox[]
@@ -99,8 +100,8 @@ function imageLoaded() { loaded.value = true; loadError.value = false; emit('rea
           <line x1="0" :y1="cursor.y" :x2="width" :y2="cursor.y" vector-effect="non-scaling-stroke" />
         </g>
         <g v-for="(box, index) in boxes" :key="box.id" :style="{ color: colors[box.class_id] }" @pointerdown.stop.prevent="grab(box, 'move', $event)">
-          <rect :x="box.x" :y="box.y" :width="box.width" :height="box.height" fill="currentColor" :fill-opacity="box.id === selectedId ? 0.16 : 0.05" stroke="currentColor" :stroke-width="box.id === selectedId ? 2.5 : 1.5" vector-effect="non-scaling-stroke" :class="tool === 'select' ? 'cursor-move' : ''" />
-          <text :x="box.x + handleSize" :y="box.y + handleSize * 3.5" :font-size="handleSize * 2.5" fill="white" stroke="#071116" :stroke-width="handleSize * 0.7" paint-order="stroke" class="pointer-events-none">{{ DATASET_CLASSES[box.class_id] }} {{ index + 1 }}</text>
+          <rect :x="box.x" :y="box.y" :width="box.width" :height="box.height" fill="currentColor" :fill-opacity="box.id === selectedId ? 0.16 : 0.05" stroke="currentColor" :stroke-width="box.id === selectedId ? 2.5 : 1.5" :stroke-dasharray="box.source === 'auto' ? '7 4' : undefined" vector-effect="non-scaling-stroke" :class="tool === 'select' ? 'cursor-move' : ''" />
+          <text :x="box.x + handleSize" :y="box.y + handleSize * 3.5" :font-size="handleSize * 2.5" fill="white" stroke="#071116" :stroke-width="handleSize * 0.7" paint-order="stroke" class="pointer-events-none">{{ DATASET_CLASSES[box.class_id] }} {{ index + 1 }}<template v-if="box.source === 'auto'"> · AI {{ formatScore(box.score) }}</template></text>
         </g>
         <g v-if="selected && tool === 'select'">
           <rect v-for="corner in corners" :key="corner" :x="selected.x + (corner.includes('e') ? selected.width : 0) - handleSize" :y="selected.y + (corner.includes('s') ? selected.height : 0) - handleSize" :width="handleSize * 2" :height="handleSize * 2" rx="1" fill="white" stroke="var(--primary)" stroke-width="1.5" vector-effect="non-scaling-stroke" :style="{ cursor: corner === 'nw' || corner === 'se' ? 'nwse-resize' : 'nesw-resize' }" @pointerdown.stop.prevent="grab(selected, corner, $event)" />

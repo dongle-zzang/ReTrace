@@ -26,7 +26,7 @@ watch(cacheKey, async (key) => {
   <div class="relative aspect-video w-full overflow-hidden bg-black/30">
     <img :src="image.thumbnail_url" :alt="alt" loading="lazy" class="absolute inset-0 h-full w-full object-cover">
     <svg v-if="boxes.length" class="pointer-events-none absolute inset-0 h-full w-full" :viewBox="`0 0 ${image.width} ${image.height}`" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-      <rect v-for="box in boxes" :key="box.id" :x="box.x" :y="box.y" :width="box.width" :height="box.height" :style="{ color: colors[box.class_id] }" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+      <rect v-for="box in boxes" :key="box.id" :x="box.x" :y="box.y" :width="box.width" :height="box.height" :style="{ color: colors[box.class_id] }" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" :stroke-dasharray="box.source === 'auto' ? '6 4' : undefined" vector-effect="non-scaling-stroke" />
     </svg>
   </div>
 </template>
