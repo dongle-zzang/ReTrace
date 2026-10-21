@@ -8,8 +8,11 @@ import type { ConnectionState } from '~/composables/realtimePreviewClient'
 import { compareLabels, countStatuses, findSpaceByLabel, isNewerState, statusReportFromMessage, summarizeSpaces } from '~/lib/parking'
 import { ParkingApiError, useParkingApi } from '~/composables/parkingApi'
 import { isParkingReportFresh } from '~/lib/parkingOperations'
+import { createVehicleOccupancy, type OccupancyMode, type ZoneThresholds } from '~/lib/vehicleOccupancy'
 
 const STATUS_REFRESH_MS = 10_000
+// The server's vehicle poller observes every 2 s; polling faster only repeats the same frame.
+const VEHICLE_POLL_MS = 2_000
 
 /** The page's existing /ws connection (from useRealtimePreview); parking never opens its own. */
 export interface ParkingRealtime {
@@ -21,6 +24,10 @@ export interface UseParkingOptions {
   realtime?: ParkingRealtime
   /** Cameras whose zones this page needs. Cameras that report zone status are loaded too. */
   cameraIds?: Ref<string[]>
+  /** How occupancy is decided (useParkingOccupancyMode). Without it the server's color status is used. */
+  mode?: Readonly<Ref<OccupancyMode>>
+  /** Per-zone "occupied from" overlap for detection mode (useParkingThresholds). */
+  thresholds?: Readonly<Ref<ZoneThresholds>>
 }
 
 const errorMessage = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message : fallback
@@ -29,6 +36,9 @@ const errorMessage = (cause: unknown, fallback: string) => cause instanceof Erro
  * Parking spaces (labels), zones per camera and their status. Status comes from REST (on mount,
  * every 10 s and whenever /ws (re)connects) and from /ws `parking.status_updated`; REST covers
  * cameras the page is not subscribed to. Older zone reports never overwrite newer ones.
+ * In 'detection' mode the status is decided here instead, from each zone camera's latest vehicle
+ * boxes (polled every 2 s, lib/vehicleOccupancy); the color status is then only used to notice
+ * zones edited elsewhere.
  * The editor works on its own draft, so status and zone reloads never touch an edit in progress.
  */
 export function useParking(options: UseParkingOptions = {}) {
@@ -45,13 +55,22 @@ export function useParking(options: UseParkingOptions = {}) {
   const reportReady = ref(!options.realtime)
   const receivedAt = shallowRef<Record<string, number>>({})
   let clock: ReturnType<typeof setInterval> | undefined
-  const disconnected = computed(() => api.kind === 'http' && !!options.realtime && options.realtime.connection.value !== 'open')
+  const mode = computed<OccupancyMode>(() => options.mode?.value ?? 'color')
+  const detecting = computed(() => mode.value === 'detection')
+  const occupancy = createVehicleOccupancy()
+  /** Zone cameras whose vehicle detector is off, in detection mode. */
+  const detectorOffCameraIds = shallowRef<Set<string>>(new Set())
+  // Vehicle polling doesn't use /ws, so only the color status depends on the socket.
+  const disconnected = computed(() => api.kind === 'http' && !!options.realtime && !detecting.value && options.realtime.connection.value !== 'open')
   const delayed = computed(() => api.kind === 'http' && (!reportReady.value || !!statusError.value || !isParkingReportFresh(lastReportAt.value ?? undefined, now.value)))
   const staleZoneIds = computed(() => new Set(Object.keys(zoneStates.value).filter(id => !isParkingReportFresh(receivedAt.value[id], now.value))))
   const zonesLoading = new Map<string, Promise<void>>()
   let spacesLoading: Promise<void> | null = null
   let statusRequest = 0
+  let vehicleRequest = 0
+  let vehiclesPolling = false
   let intervalId: ReturnType<typeof setInterval> | undefined
+  let vehicleIntervalId: ReturnType<typeof setInterval> | undefined
   let stopMessages: (() => void) | undefined
 
   const sortedSpaces = computed(() => [...spaces.value].sort((a, b) => compareLabels(a.label, b.label)))
@@ -197,7 +216,52 @@ export function useParking(options: UseParkingOptions = {}) {
     if (!spacesLoading && report.zones.some((state) => state.parkingSpaceId && !known.has(state.parkingSpaceId))) void loadSpaces()
   }
 
+  /** Detection mode: one reading of every camera that has zones. */
+  async function pollVehicles() {
+    if (vehiclesPolling) return
+    vehiclesPolling = true
+    const request = ++vehicleRequest
+    try {
+      const cameras = Object.entries(zones.value).filter(([, list]) => list.length)
+      const results = await Promise.allSettled(cameras.map(([cameraId]) => api.getVehicles(cameraId)))
+      if (request !== vehicleRequest || !detecting.value) return
+      const states: ParkingZoneState[] = []
+      const off = new Set<string>()
+      let failure: unknown = null
+      results.forEach((result, index) => {
+        const [cameraId] = cameras[index]!
+        if (result.status === 'rejected') { failure = result.reason; return }
+        if (!result.value.detectionEnabled) off.add(cameraId)
+        // Zones may have been reloaded while the request ran; read against the current ones.
+        states.push(...occupancy.observe(result.value, zones.value[cameraId] ?? [], options.thresholds?.value))
+      })
+      detectorOffCameraIds.value = off
+      if (cameras.length && failure && !states.length) {
+        statusError.value = errorMessage(failure, "Couldn't load vehicle detections.")
+        return
+      }
+      statusError.value = null
+      reportReady.value = true
+      mergeReport({ zones: states, spaces: [] })
+    } finally {
+      vehiclesPolling = false
+    }
+  }
+
   async function loadStatus() {
+    if (detecting.value) {
+      // The color status only tells us about zones added or removed elsewhere; detections decide.
+      const request = ++statusRequest
+      void pollVehicles()
+      if (api.kind !== 'http') return
+      try {
+        const report = await api.getStatus()
+        if (request === statusRequest && detecting.value && !loading.value) syncWithReport(report)
+      } catch {
+        // Not needed for the detection reading; zones are re-read on reload.
+      }
+      return
+    }
     const request = ++statusRequest
     try {
       const report = await api.getStatus()
@@ -291,7 +355,7 @@ export function useParking(options: UseParkingOptions = {}) {
     stopMessages = options.realtime.onMessage((message) => {
       const update = statusReportFromMessage(message)
       if (!update) return
-      mergeReport(update.report)
+      if (!detecting.value) mergeReport(update.report)
       // A zone was deleted (possibly elsewhere): don't guess what else changed, re-read REST.
       if (update.empty && update.cameraId) {
         if (zones.value[update.cameraId]) void loadZones(update.cameraId)
@@ -300,10 +364,26 @@ export function useParking(options: UseParkingOptions = {}) {
     })
     // First connect and every reconnect: messages may have been missed, so resync from REST.
     watch(options.realtime.connection, (state, previous) => {
+      if (detecting.value) return
       if (state !== 'open') { reportReady.value = false; statusRequest++ }
       if (state === 'open' && previous !== 'open') void loadStatus()
     })
   }
+
+  // Switching method: readings of the other method say nothing about this one.
+  watch(mode, () => {
+    statusRequest++
+    vehicleRequest++
+    occupancy.forget()
+    zoneStates.value = {}
+    verdicts.value = {}
+    receivedAt.value = {}
+    detectorOffCameraIds.value = new Set()
+    statusError.value = null
+    reportReady.value = !options.realtime && !detecting.value
+    lastReportAt.value = null
+    if (!loading.value) void loadStatus()
+  })
 
   if (options.cameraIds) {
     watch(options.cameraIds, (ids) => {
@@ -317,10 +397,12 @@ export function useParking(options: UseParkingOptions = {}) {
     // The relay emits only state/topology changes, not a heartbeat. REST confirms
     // unchanged readings too, so quiet cameras are not mistaken for expired data.
     intervalId = setInterval(() => { if (!disconnected.value) void loadStatus() }, STATUS_REFRESH_MS)
+    vehicleIntervalId = setInterval(() => { if (detecting.value && !loading.value) void pollVehicles() }, VEHICLE_POLL_MS)
   })
 
   onUnmounted(() => {
     if (intervalId) clearInterval(intervalId)
+    if (vehicleIntervalId) clearInterval(vehicleIntervalId)
     if (clock) clearInterval(clock)
     stopMessages?.()
   })
@@ -328,7 +410,7 @@ export function useParking(options: UseParkingOptions = {}) {
   return {
     api, spaces: sortedSpaces, spaceLabels, zones, zoneStates, zoneStatuses, summaries, summaryBySpace, totals,
     loading, error, statusError, calibrated, cameraCounts, applyZones, createSpace, calibrate, loadSpaces, ensureCameras, reload,
-    now, lastReportAt, disconnected, delayed, staleZoneIds, renameSpace, deleteSpace,
+    now, lastReportAt, disconnected, delayed, staleZoneIds, renameSpace, deleteSpace, mode, detecting, detectorOffCameraIds,
   }
 }
 

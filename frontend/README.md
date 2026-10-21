@@ -10,6 +10,8 @@ Node.js 22.12 이상과 npm이 필요합니다. `.env`(Git 제외)에 ReTrace �
 NUXT_PUBLIC_BACKEND_BASE_URL=http://<서버 호스트>:40225
 # 선택: 카메라당 최대 영상 전송률(1~30, 기본 10)
 # NUXT_PUBLIC_PREVIEW_VIDEO_FPS=10
+# 선택: 주차 판정 기본값 detection(차량 탐지) | color(색상), 기본 detection
+# NUXT_PUBLIC_PARKING_OCCUPANCY=detection
 ```
 
 ```powershell
@@ -67,6 +69,16 @@ origin에는 `/api`나 `/ws`를 붙이지 않습니다. 실제 주소와 credent
 실시간 상태는 영상과 같은 `/ws`의 `parking.status_updated`(`data`가 위 status 응답과 같은 모양)로 받습니다. 이벤트는 상태/연결 구조 변화에만 발행되므로 REST `/api/parking/status`는 처음 진입·재연결과 연결 중 10초마다 확인합니다. 서버 연결이 끊기거나 조회가 실패하면 모두 판정 불가로 표시하고, 개별 영역의 새 관측을 15초 동안 확인하지 못하면 해당 판정을 만료시킵니다. 일부 영역만 만료된 자리는 Empty로 표시하지 않습니다. 이전 polygon `revision`이나 더 오래된 관측 시각의 상태는 버립니다. 편집은 별도 초안에서 하므로 상태 갱신·다른 브라우저의 변경 반영이 편집 중인 폴리곤을 바꾸지 않습니다.
 
 주차 운영 도구: 상단 합계 클릭/Spaces 검색·상태·미사용·기준 미등록 필터, Unknown 사유, 라벨 클릭 시 관련 카메라 비교(동일 라벨 영역 강조)를 제공합니다. Empty baselines에서 카메라별 기준 상태를 확인하고 비어 있는 것을 직접 확인한 영역만 개별 등록합니다. Manage labels는 연결된 카메라를 보여 주고 이름을 전체 카메라에 함께 적용하며, 미사용 라벨만 확인 모달 후 삭제합니다. 라벨 변경/삭제는 새 `PATCH|DELETE /api/parking/spaces/{id}`와 Preview 프록시 배포가 필요합니다. 카메라 비교·관리 모달은 기존 WebSocket 클라이언트를 공유합니다.
+
+### 주차 판정 방식 (차량 탐지 / 색상)
+
+`/parking` 상단 `Occupancy method` 카드에서 고릅니다. 기본은 **차량 탐지**이며 빌드 기본값은 `NUXT_PUBLIC_PARKING_OCCUPANCY`(`detection` | `color`, generate 시점 값), 화면에서 고른 값은 이 브라우저의 `localStorage` `retrace.parking.occupancy`에 남고 편집 화면에도 적용됩니다. 라벨·영역(`/api/parking/spaces`, `/api/parking/zones`)은 두 방식이 같은 것을 씁니다.
+
+- **차량 탐지** (`app/lib/vehicleOccupancy.ts`): 영역이 있는 카메라마다 `GET /api/cameras/{id}/vehicles`(서버 차량 detector의 최신 bbox, 서버 poller 주기 2초)를 2초마다 읽어 **브라우저에서** 판정합니다. 차량 bbox 아래쪽 25%(좌우 10% 제외)를 지면 footprint로 보고, footprint의 55% 이상이 영역 안(점유 유지는 35%)이고 footprint 중앙점이 영역 안이며(박스 하단 모서리는 비스듬한 카메라에서 주차선을 넘거나 화면 끝에서 잘리므로 쓰지 않음) 영역 면적의 10% 이상을 덮으면 주차 후보입니다. 차량 하나는 가장 많이 겹치는 영역 하나에만 셉니다. 새 프레임 2번 연속 주차 후보면 Occupied, 3번 연속 비어 있으면 Empty입니다. 신뢰도 0.4 미만이거나 신뢰도 없는(tracker-only) 차량이 겹치면 Empty로 바꾸지 않고 현재 상태를 유지하며, 그런 차량만으로는 Occupied가 되지 않습니다. detector 꺼짐·추론 미완료·프레임 없음은 Unknown, polygon `revision`이 바뀌면 다시 확인합니다. 점수는 footprint 겹침 비율입니다. 기준값은 서버 차량 점유 policy(서버 저장소 `docs/parking-occupancy.md` "좌표와 판정")의 기본값을 따르며 `DEFAULT_OCCUPANCY_POLICY`에서 바꿉니다. 이 방식은 `/ws`가 끊겨도 동작하고, 색상 `/api/parking/status`는 다른 곳에서 바뀐 영역을 알아채는 데만 씁니다. 빈자리 기준(캘리브레이션) UI와 `No baseline` 필터는 숨깁니다.
+- 자리별 기준: 편집 화면에서 구역을 선택하면 `주차 판정 기준` 슬라이더(10~95%, 기본 55%)로 그 구역만 기준을 바꿀 수 있고 현재 겹침 비율이 함께 보입니다. 주차 유지 기준은 설정값보다 20%p 낮습니다. 값은 이 브라우저의 `localStorage` `retrace.parking.thresholds`에 저장되며 다른 브라우저와 공유되지 않습니다(서버 저장은 백엔드 변경 필요).
+- 편집 화면 상단 오른쪽 이미지 버튼으로 이 카메라의 AI 데이터셋 이미지(라벨된 차량 없는 이미지 우선)를 골라 실시간 영상 대신 그 위에 구역을 그릴 수 있습니다. 좌표는 같은 0~1 정규화라 실시간 영상과 그대로 맞습니다. 고른 이미지는 카메라별로 `localStorage` `retrace.parking.backdrop.<cameraId>`에 남고, 영상 버튼으로 실시간 영상에 돌아갑니다.
+- 한계: 판정은 화면을 연 브라우저마다 따로 계산되며 저장·이벤트 기록이 없습니다. 서버 정차 시간·출차 추적 규칙(`stationary_seconds`, `validated_cameras` 등)은 적용하지 않습니다. 실영상 기준값 검증은 아직 하지 않았습니다.
+- **색상**: 기존 서버 색상/빈자리 기준 판정(`/api/parking/status`, `/ws` `parking.status_updated`) 그대로입니다.
 
 서버 계약 원문은 서버 저장소의 `docs/color-parking.md`입니다. `/ws` `parking.status_updated`는 카메라별로 그 카메라에 연결된 공간들의 전체 상태를 보내며 `parkingSpaceId`로 덮어씁니다. 영역 삭제 후 오는 `spaces: []`에는 해당 카메라 영역과 상태를 REST로 다시 읽습니다. 서버는 라벨 대소문자를 구분하지만 프론트는 `A-01`/`a-01`을 같은 라벨로 보고 새로 만들지 않습니다.
 

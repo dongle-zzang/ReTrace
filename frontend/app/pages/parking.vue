@@ -17,6 +17,8 @@ import { Skeleton } from '~/components/ui/skeleton'
 import { useCameras } from '~/composables/useCameras'
 import { useI18n } from '~/composables/useI18n'
 import { useParking } from '~/composables/useParking'
+import { useParkingOccupancyMode } from '~/composables/useParkingOccupancyMode'
+import { useParkingThresholds } from '~/composables/useParkingThresholds'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { compareCameras } from '~/lib/cameraSort'
 import { isParkingCamera } from '~/lib/parking'
@@ -28,7 +30,12 @@ const config = useRuntimeConfig()
 const { cameras, loading, refreshing, error, refresh } = useCameras()
 const { client: realtimeClient, connection, statuses, onMessage } = useRealtimePreview(config.public.previewVideoFps)
 const namedParkingCameraIds = computed(() => cameras.value.filter((camera) => isParkingCamera(camera.name)).map((camera) => camera.camera_id))
-const parking = useParking({ realtime: { connection, onMessage }, cameraIds: namedParkingCameraIds })
+const { mode: occupancyMode, setMode: setOccupancyMode } = useParkingOccupancyMode()
+const { thresholds } = useParkingThresholds()
+const parking = useParking({ realtime: { connection, onMessage }, cameraIds: namedParkingCameraIds, mode: occupancyMode, thresholds })
+const occupancyOptions = [['detection', 'Vehicle detection'], ['color', 'Color']] as const
+const filterOptions = computed(() => ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)
+  .filter(option => option[0] !== 'uncalibrated' || !parking.detecting.value))
 
 // Parking cameras are named '…주차장…'; a camera that already has zones is listed too.
 const parkingCameras = computed(() => cameras.value
@@ -39,10 +46,11 @@ const cameraNames = computed(() => Object.fromEntries(cameras.value.map((camera)
 const conflictSummaries = computed(() => parking.summaries.value.filter((summary) => summary.conflict))
 const conflictSpaceIds = computed(() => conflictSummaries.value.flatMap((summary) => summary.spaceIds))
 const filter = ref<SpaceFilter>('all'), search = ref('')
+watch(parking.detecting, (detecting) => { if (detecting && filter.value === 'uncalibrated') filter.value = 'all' })
 const allZones = computed(() => Object.values(parking.zones.value).flat())
 const boardSummaries = computed(() => filterParkingSpaces(parking.summaries.value, search.value, filter.value, allZones.value))
 const offlineCameraIds = computed(() => new Set(cameras.value.filter(camera => !camera.enabled || !['online', 'degraded'].includes(String(statuses.value[camera.camera_id]?.state ?? camera.status.state)) || (!statuses.value[camera.camera_id] && camera.status.stale)).map(camera => camera.camera_id)))
-const reasons = computed(() => Object.fromEntries(parking.summaries.value.map(row => [row.space.id, unknownReason(row, parking.disconnected.value, parking.delayed.value || row.zones.some(zone => parking.staleZoneIds.value.has(zone.zoneId)), offlineCameraIds.value)])))
+const reasons = computed(() => Object.fromEntries(parking.summaries.value.map(row => [row.space.id, unknownReason(row, parking.disconnected.value, parking.delayed.value || row.zones.some(zone => parking.staleZoneIds.value.has(zone.zoneId)), offlineCameraIds.value, parking.detectorOffCameraIds.value)])))
 const comparisonOpen = ref(false), labelManagerOpen = ref(false), calibrationOpen = ref(false)
 const selectedSpaceId = ref<string | null>(null)
 const selectedSummary = computed(() => selectedSpaceId.value ? parking.summaryBySpace.value[selectedSpaceId.value] ?? null : null)
@@ -50,7 +58,7 @@ function compare(id: string) { selectedSpaceId.value = id; comparisonOpen.value 
 const missingBaselines = computed(() => allZones.value.filter(zone => zone.calibrated !== true).length)
 const freshnessText = computed(() => {
   if (parking.disconnected.value) return t('Server disconnected · readings unavailable')
-  if (parking.delayed.value) return t('Waiting for fresh parking status')
+  if (parking.delayed.value) return t(parking.detecting.value ? 'Waiting for vehicle detections' : 'Waiting for fresh parking status')
   return parking.lastReportAt.value ? t('Status received {seconds}s ago', { seconds: Math.max(0, Math.floor((parking.now.value - parking.lastReportAt.value) / 1000)) }) : t('Waiting for parking status')
 })
 
@@ -68,7 +76,7 @@ function enterDelay(index: number, step = 70, base = 0) {
 
     <section :aria-label="t('Parking')" class="mx-auto max-w-[1500px] px-5 pt-2 pb-16 sm:px-8 lg:px-10">
       <!-- Operations: status feed, empty baselines, labels (same card look as AI Training). -->
-      <div class="mb-6 grid gap-2 sm:grid-cols-3" :aria-label="t('Parking operations')" role="group">
+      <div class="mb-6 grid gap-2" :class="parking.detecting.value ? 'sm:grid-cols-3' : 'sm:grid-cols-2 lg:grid-cols-4'" :aria-label="t('Parking operations')" role="group">
         <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <div class="flex items-center justify-between gap-2">
             <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Status updates') }}</h2>
@@ -78,7 +86,14 @@ function enterDelay(index: number, step = 70, base = 0) {
           </div>
           <p class="text-sm font-medium" :class="parking.disconnected.value || parking.delayed.value ? 'text-amber-300' : ''" role="status">{{ freshnessText }}</p>
         </article>
-        <button type="button" class="cursor-pointer space-y-2 text-left transition-colors hover:border-white/20 rounded-2xl border border-white/10 bg-white/[0.03] p-4" @click="calibrationOpen = true">
+        <article class="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <h2 id="occupancy-method" class="text-xs font-semibold text-muted-foreground">{{ t('Occupancy method') }}</h2>
+          <div class="flex flex-wrap gap-1.5" role="group" aria-labelledby="occupancy-method">
+            <Button v-for="option in occupancyOptions" :key="option[0]" size="sm" :variant="occupancyMode === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="occupancyMode === option[0]" @click="setOccupancyMode(option[0])">{{ t(option[1]) }}</Button>
+          </div>
+          <p class="text-xs text-muted-foreground">{{ t(parking.detecting.value ? 'Occupied while a detected vehicle sits on the zone.' : 'Compares each zone with its empty baseline.') }}</p>
+        </article>
+        <button v-if="!parking.detecting.value" type="button" class="cursor-pointer space-y-2 text-left transition-colors hover:border-white/20 rounded-2xl border border-white/10 bg-white/[0.03] p-4" @click="calibrationOpen = true">
           <h2 class="text-xs font-semibold text-muted-foreground">{{ t('Empty baselines') }}</h2>
           <p class="text-sm font-medium" :class="missingBaselines ? 'text-amber-300' : ''">{{ missingBaselines ? t('{count} zones without a baseline', { count: missingBaselines }) : t('All zones have a baseline') }}</p>
         </button>
@@ -181,7 +196,7 @@ function enterDelay(index: number, step = 70, base = 0) {
           <ParkingSummary :counts="parking.totals.value" compact class="-mt-2 mb-3" />
           <div class="mb-3 space-y-2">
             <Input v-model="search" type="search" :aria-label="t('Search parking labels')" :placeholder="t('Search labels')" />
-            <div class="flex flex-wrap gap-1.5"><Button v-for="option in ([['all', 'All'], ['occupied', 'Occupied'], ['empty', 'Empty'], ['unknown', 'Unknown'], ['unused', 'Unused'], ['uncalibrated', 'No baseline']] as const)" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ t(option[1]) }}</Button></div>
+            <div class="flex flex-wrap gap-1.5"><Button v-for="option in filterOptions" :key="option[0]" size="sm" :variant="filter === option[0] ? 'secondary' : 'ghost'" class="h-7 px-2 text-xs" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ t(option[1]) }}</Button></div>
             <p class="text-xs text-muted-foreground">{{ t('{shown} of {total} spaces', { shown: boardSummaries.length, total: parking.summaries.value.length }) }}</p>
           </div>
           <div v-if="parking.loading.value" class="space-y-2">

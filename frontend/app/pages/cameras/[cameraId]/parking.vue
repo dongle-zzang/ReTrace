@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ArrowLeft, Check, CircleAlert, PanelRight, Pencil, Plus, SquareParking, Undo2, X, Trash2 } from '@lucide/vue'
+import { ArrowLeft, Check, CircleAlert, ImageIcon, PanelRight, Pencil, Plus, SquareParking, Undo2, Video, X, Trash2 } from '@lucide/vue'
 import CameraVideo from '~/components/CameraVideo.vue'
+import ParkingBackdropPicker from '~/components/ParkingBackdropPicker.vue'
 import ParkingCalibrationPanel from '~/components/ParkingCalibrationPanel.vue'
 import ParkingZoneInspector from '~/components/ParkingZoneInspector.vue'
 import ParkingStatusBadge from '~/components/ParkingStatusBadge.vue'
@@ -12,15 +13,19 @@ import { Button } from '~/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '~/components/ui/empty'
 import { Skeleton } from '~/components/ui/skeleton'
 import { ParkingApiError } from '~/composables/parkingApi'
+import { datasetRequest } from '~/composables/datasetApi'
 import { useCameras } from '~/composables/useCameras'
 import { useParking } from '~/composables/useParking'
 import { useParkingEditor } from '~/composables/useParkingEditor'
+import { useParkingOccupancyMode } from '~/composables/useParkingOccupancyMode'
+import { useParkingThresholds } from '~/composables/useParkingThresholds'
 import { useRealtimePreview } from '~/composables/useRealtimePreview'
 import { useVideoStage } from '~/composables/useVideoStage'
 import { useI18n } from '~/composables/useI18n'
 import { floorLabel } from '~/lib/cameraSort'
 import { compareLabels, countStatuses } from '~/lib/parking'
 import type { TransportState } from '~/composables/realtimePreviewClient'
+import type { DatasetImage } from '~/types/dataset'
 
 // Let the layout reserve the actual navigation and footer heights.
 definePageMeta({ viewportWorkspace: true })
@@ -32,7 +37,9 @@ const cameraId = computed(() => String(route.params.cameraId ?? ''))
 const config = useRuntimeConfig()
 const { cameras, loading: camerasLoading } = useCameras()
 const { client: realtimeClient, connection, statuses: liveStatuses, onMessage } = useRealtimePreview(config.public.previewVideoFps)
-const parking = useParking({ realtime: { connection, onMessage }, cameraIds: computed(() => [cameraId.value]) })
+const { mode: occupancyMode } = useParkingOccupancyMode()
+const { thresholds, setThreshold, defaultThreshold } = useParkingThresholds()
+const parking = useParking({ realtime: { connection, onMessage }, cameraIds: computed(() => [cameraId.value]), mode: occupancyMode, thresholds })
 const editor = useParkingEditor(cameraId, parking.spaces)
 
 const camera = computed(() => cameras.value.find((item) => item.camera_id === cameraId.value) ?? null)
@@ -54,6 +61,55 @@ const stageElement = ref<HTMLElement | null>(null)
 const mediaSize = ref({ width: 1280, height: 720 })
 // Keep editing controls above the video and measure overlays against its content rect.
 const { content, contentStyle } = useVideoStage(stageElement, mediaSize, 'contain', viewerElement)
+
+// ---- Backdrop: draw on a saved dataset frame (e.g. the empty lot) instead of the live view ----
+
+const BACKDROP_KEY = 'retrace.parking.backdrop.'
+const backdrop = shallowRef<DatasetImage | null>(null)
+const backdropLoaded = ref(false)
+const backdropError = ref<string | null>(null)
+const backdropPickerOpen = ref(false)
+const stageReady = computed(() => backdrop.value ? backdropLoaded.value : videoTransport.value === 'connected')
+
+function rememberBackdrop(id: string | null) {
+  try {
+    if (id) localStorage.setItem(BACKDROP_KEY + cameraId.value, id)
+    else localStorage.removeItem(BACKDROP_KEY + cameraId.value)
+  } catch {
+    // Blocked storage: the backdrop lasts for this visit only.
+  }
+}
+
+function useBackdrop(image: DatasetImage | null) {
+  backdropError.value = null
+  backdropLoaded.value = false
+  backdrop.value = image
+  if (image) mediaSize.value = { width: image.width, height: image.height }
+  rememberBackdrop(image?.id ?? null)
+}
+
+// The decoded size wins over the stored one, so zones line up with what is actually shown.
+function onBackdropLoad(event: Event) {
+  const image = event.target as HTMLImageElement
+  if (image.naturalWidth && image.naturalHeight) mediaSize.value = { width: image.naturalWidth, height: image.naturalHeight }
+  backdropLoaded.value = true
+}
+
+async function restoreBackdrop() {
+  backdrop.value = null
+  backdropLoaded.value = false
+  let id: string | null = null
+  try { id = localStorage.getItem(BACKDROP_KEY + cameraId.value) } catch { id = null }
+  if (!id) return
+  const forCamera = cameraId.value
+  try {
+    const image = await datasetRequest<DatasetImage>('/images/' + encodeURIComponent(id))
+    if (forCamera === cameraId.value && image.camera_id === forCamera) useBackdrop(image)
+  } catch {
+    // Deleted or unreachable: fall back to the live view and forget it.
+    if (forCamera === cameraId.value) rememberBackdrop(null)
+  }
+}
 
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -227,6 +283,7 @@ onBeforeRouteLeave(() => !saving.value && confirmDiscard())
 onBeforeRouteUpdate(() => !saving.value && confirmDiscard())
 
 watch(cameraId, () => {
+  void restoreBackdrop()
   focusedZoneId.value = null
   zonesOpen.value = false
   editor.end()
@@ -234,6 +291,7 @@ watch(cameraId, () => {
 })
 
 onMounted(() => {
+  void restoreBackdrop()
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('beforeunload', onBeforeUnload)
 })
@@ -284,6 +342,8 @@ onUnmounted(() => {
           <Button v-if="selectedZone && editor.editing.value && !editor.drawing.value" size="icon" variant="destructive" :disabled="saving" :aria-label="t('Delete selected zone')" :title="t('Delete selected zone')" @click="removeZone(selectedZone.id)"><Trash2 /></Button>
         </div>
         <div class="editor-tools flex shrink-0 items-center">
+        <Button v-if="backdrop" :title="t('Back to live view')" size="icon" variant="ghost" :disabled="!!editor.drawing.value" @click="useBackdrop(null)"><Video /><span class="sr-only">{{ t('Back to live view') }}</span></Button>
+        <Button :title="t('Draw on a dataset image')" size="icon" :variant="backdrop ? 'secondary' : 'ghost'" :aria-pressed="!!backdrop" :disabled="!!editor.drawing.value" @click="backdropPickerOpen = true"><ImageIcon /><span class="sr-only">{{ t('Draw on a dataset image') }}</span></Button>
         <Button :title="t('Zones')" as-child size="icon" :variant="zonesOpen ? 'secondary' : 'ghost'" :disabled="!!editor.drawing.value">
           <button ref="zonesButton" type="button" :aria-expanded="zonesOpen" :aria-pressed="zonesOpen" aria-controls="camera-zone-panel" @click="zonesOpen = !zonesOpen"><PanelRight /><span class="sr-only">{{ t('Zones') }} {{ zones.length }}</span></button>
         </Button>
@@ -300,8 +360,20 @@ onUnmounted(() => {
             ref="stageElement"
             :class="['relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl bg-black ring-1 ring-white/[0.08]', zonesOpen ? 'hidden sm:block' : '']"
           >
+            <template v-if="backdrop">
+              <img
+                :key="backdrop.id"
+                :src="backdrop.image_url"
+                :alt="t('Dataset image of {camera}', { camera: camera?.name ?? cameraId })"
+                class="absolute inset-0 h-full w-full object-contain"
+                @load="onBackdropLoad"
+                @error="backdropError = 'Couldn\'t load the dataset image.'"
+              >
+              <span class="pointer-events-none absolute top-2 left-2 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-amber-200">{{ t('Dataset image · {time}', { time: new Date(backdrop.captured_at).toLocaleString() }) }}</span>
+              <p v-if="backdropError" class="absolute inset-0 grid place-items-center text-sm text-red-300" role="alert">{{ t(backdropError) }}</p>
+            </template>
             <CameraVideo
-              v-if="camera"
+              v-else-if="camera"
               :camera="camera"
               :realtime-client="realtimeClient"
               :connection="connection"
@@ -311,7 +383,7 @@ onUnmounted(() => {
               @transport="videoTransport = $event"
             />
             <ParkingOverlay
-              v-if="videoTransport === 'connected'"
+              v-if="stageReady"
               class="absolute z-10"
               :style="contentStyle"
               :width="content.width"
@@ -402,6 +474,10 @@ onUnmounted(() => {
                   :score="zoneScores[focusedZone.id] ?? null"
                   :calibrated="parking.calibrated.value[focusedZone.id] ?? null"
                   :calibrate="(register) => parking.calibrate(focusedZone!.id, register)"
+                  :baseline="!parking.detecting.value"
+                  :threshold="thresholds[focusedZone.id] ?? null"
+                  :default-threshold="defaultThreshold"
+                  @update:threshold="(value) => setThreshold(focusedZone!.id, value)"
                   @close="focusedZoneId = null"
                 />
                 <ParkingSpaceBoard v-if="focusedSummary && focusedSummary.zones.length > 1" :summaries="[focusedSummary]" :camera-names="cameraNames" />
@@ -411,6 +487,7 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    <ParkingBackdropPicker v-if="camera" v-model:open="backdropPickerOpen" :camera-id="cameraId" :camera-name="camera.name" :selected-id="backdrop?.id ?? null" @select="useBackdrop" />
   </main>
 </template>
 

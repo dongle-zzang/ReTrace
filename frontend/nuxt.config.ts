@@ -71,6 +71,9 @@ export default defineNuxtConfig({
       previewVideoFps: 10,
       // Parking data source: 'http' (server /api/parking/spaces, /zones, /status) or 'mock' (browser-local). NUXT_PUBLIC_PARKING_API.
       parkingApi: 'http',
+      // Parking occupancy: 'detection' (vehicle boxes over the zone, decided in the browser) or 'color'
+      // (server color/baseline status). Viewers can switch on the Parking page. NUXT_PUBLIC_PARKING_OCCUPANCY.
+      parkingOccupancy: 'detection',
     },
   },
   nitro: {
