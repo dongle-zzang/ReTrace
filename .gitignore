@@ -76,3 +76,10 @@ compose.override.yml
 /training/weights/
 /training/runs/
 /training/*.zip
+
+# AI agent instructions and handoff notes stay local
+.ai/
+AGENTS.md
+CLAUDE.md
+.claude/
+/docs/agent/

@@ -229,8 +229,6 @@ cd frontend && npm test && npm run typecheck                  # 프론트 로직
 
 `tests/test_preview.py`처럼 DeepStream(GI/PyDS)이 필요한 테스트는 GPU 서버 컨테이너에서 실행합니다.
 
-환경 준비와 범위별 테스트 선택은 [testing 문서](docs/agent/testing.md)를 따릅니다.
-
 <br>
 
 ## 상세 문서
@@ -246,4 +244,3 @@ cd frontend && npm test && npm run typecheck                  # 프론트 로직
 | [학습 환경](training/README.md) | 학습 스크립트, GPU 측정값, 클래스 전략 |
 | [Backend](backend/README.md) | API, 데이터 흐름, 저장 정책 |
 | [Frontend](frontend/README.md) | 화면 구조, 실시간 연결, 주차 편집 |
-| [아키텍처 요약](docs/agent/architecture.md) | 모듈별 책임과 경계 |

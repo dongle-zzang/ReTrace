@@ -212,7 +212,7 @@ TensorRT 8.6은 opset 17과 Volta를 지원한다. 다만 Docker 권한이 없�
 4. 적용: private `.env`의 `VEHICLE_INFER_CONFIG`만 새 config로 바꾸고 retrace만 재생성한다
    (`sudo docker compose up -d --no-deps --no-build --force-recreate retrace`). 롤백은 값을 되돌리고 재생성한다.
 5. 적용 후: 로그의 engine build/deserialize, `/api/cameras/<camera>/vehicles`, 주차 점유, 전체 카메라 FPS/VRAM,
-   PeopleNet 사람 검출 회귀를 적용 전과 비교한다. `.ai/WORK.md`의 기존 P1 미검출 원인(비-antialias GPU 축소)은
+   PeopleNet 사람 검출 회귀를 적용 전과 비교한다. 기존 P1 미검출 원인(비-antialias GPU 축소)은
    모델 교체로 해결되지 않을 수 있으므로 같은 장면에서 따로 확인한다.
 
 ## 검증

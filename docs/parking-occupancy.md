@@ -443,8 +443,7 @@ curl -s http://127.0.0.1:8000/api/status | python3 -c "import sys,json;d=json.lo
 - 테스트: `backend/tests/test_backend.py`, `test_parking.py`, `test_occupancy.py`,
   `tests/test_vehicle_detection.py`, `test_parking_relay.py`, `test_camera_metadata.py`,
   `test_camera_shared_pipeline.py`, `test_preview_realtime.py`.
-- 문서: 이 문서, `backend/README.md`, `docs/agent/architecture.md`, `backend.md`,
-  `testing.md`, `docs/preview-realtime.md`, `.ai/WORK.md`.
+- 문서: 이 문서, `backend/README.md`, `docs/preview-realtime.md`.
 
 CPU 결과: Backend 전체 103개, 카메라 회귀 65개, 차량 adapter 4개, relay 3개,
 WebSocket 8개, HTTP 4개, engine cache 10개, CLI 8개, canonical startup 3개 통과.

@@ -41,7 +41,7 @@ MJPEG는 source별 최신 프레임만 보관합니다. 느린 클라이언트�
 
 `http://<서버 IP>:40225/`는 업로드한 CSR 프론트를 제공하며 `/api/*`는 Backend API를 호출합니다.
 제품 Frontend는 로컬 PC에서 빌드한 산출물을 `frontend-dist/`에 업로드합니다(`frontend/`는 소스). 서버에 Node runtime은 필요 없습니다.
-[프론트 배포 안내](agent/frontend-deployment.md)를 따르며 `/diagnostics`에서 기본 확인 페이지를
+[프론트 정적 배포](../frontend/README.md#정적-배포)를 따르며 `/diagnostics`에서 기본 확인 페이지를
 항상 사용할 수 있습니다. 빌드(`frontend-dist/index.html`)가 없으면 `/`는 404입니다.
 기존 HLS 출력물을 사용하거나 새로운 영상 파일을 저장하지 않습니다.
 

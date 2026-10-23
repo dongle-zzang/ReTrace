@@ -97,7 +97,7 @@ WebSocket 하나로 받는 경로다. Backend는 영상을 relay하지 않는다
 `BACKEND_PREVIEW_URL`(기본 `http://retrace:40225`)이다.
 배포한 CSR 프론트는 40225에서 정적 제공하며 API도 같은 origin의 `/api/*`로 호출한다.
 Preview HTTP request thread가 내부 Backend로 전달하므로 브라우저에 8000 주소를
-지정할 필요 없다. 업로드·적용 절차는 [프론트 배포 안내](../docs/agent/frontend-deployment.md)를 따른다.
+지정할 필요 없다. 업로드·적용 절차는 [프론트 정적 배포](../frontend/README.md#정적-배포)를 따른다.
 로그인은 아직 없으므로 Backend host binding은 기본 loopback이다.
 
 ### 주차면 계약과 저장
